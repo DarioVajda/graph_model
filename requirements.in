@@ -1,0 +1,15 @@
+# Core ML Frameworks
+torch>=2.0.0
+transformers
+accelerate
+huggingface_hub[cli]==0.27.1
+
+# Graph Processing
+torch-geometric
+networkx
+scipy
+
+# Utilities & Visualization
+numpy
+matplotlib
+tqdm
