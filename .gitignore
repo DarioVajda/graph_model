@@ -1,2 +1,6 @@
 .venv
 **/__pycache__
+hf_token.txt
+**/*.pth
+.graph_llama_report.jsonl
+*llama_report.jsonl

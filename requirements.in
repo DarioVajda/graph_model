@@ -1,8 +1,12 @@
 # Core ML Frameworks
 torch>=2.0.0
-transformers
+transformers==4.50.3
 accelerate
 huggingface_hub[cli]==0.27.1
+
+# Tokenizers
+sentencepiece
+protobuf
 
 # Graph Processing
 torch-geometric
@@ -13,3 +17,6 @@ scipy
 numpy
 matplotlib
 tqdm
+
+# Interpretability
+seaborn
