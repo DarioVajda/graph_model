@@ -65,10 +65,8 @@ class LlamaGraphTextEmbedding(LlamaRotaryEmbedding):
         self.spectral_dims = spectral_dims
         head_dim = config.hidden_size // config.num_attention_heads # = d = d_model / num_heads
         freq_count = head_dim // 2 # = d/2
-        self.spectral_freqs = nn.Parameter(torch.randn(freq_count, spectral_dims) * 0) # [d/2, spectral_dims]
+        self.spectral_freqs = nn.Parameter(torch.randn(freq_count, spectral_dims) * 0.05) # [d/2, spectral_dims]
         
-        print("Initialized spectral frequencies to:", self.spectral_freqs)
-
         print("LlamaGraphTextEmbedding initialized.")
         # print(json.dumps(config.to_dict(), indent=4))
 

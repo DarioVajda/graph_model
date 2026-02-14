@@ -393,7 +393,7 @@ def evaluate_model(model_name, model_type, model_path, test_set, batch_size=8, s
 
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B"
-EPOCHS = 10
+EPOCHS = 5
 # DATASET_NAME = "processed_dataset.pt"
 DATASET_NAME = "processed_easy_dataset.pt"
 
@@ -409,10 +409,10 @@ if __name__ == "__main__":
     print(f"Dataset split into {len(train_set)} training and {len(val_set)} validation examples.")
 
     # Train the GraphLlama model on the training set and evaluate on the validation set
-    train_model("graph_llama", MODEL_NAME, train_set, val_set, parameters, epochs=EPOCHS, batch_size=16, eval_every=10)
+    train_model("graph_llama", MODEL_NAME, train_set, val_set, parameters, epochs=EPOCHS, batch_size=4, eval_every=50)
 
     # Train the simple Llama model on the training set and evaluate on the validation set
-    train_model("llama", MODEL_NAME, train_set, val_set, parameters, epochs=EPOCHS, batch_size=16, eval_every=10)
+    train_model("llama", MODEL_NAME, train_set, val_set, parameters, epochs=EPOCHS, batch_size=4, eval_every=50)
 
     # Evaluate the model on the test set
     evaluate_model(MODEL_NAME, "graph_llama", "easy_graph_llama_model.pth", val_set, spectral_dims=parameters['spectral_dims'], report_file="easy_graph_llama_report.jsonl")
