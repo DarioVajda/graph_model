@@ -3,61 +3,6 @@ import numpy as np
 from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigh
 
-def get_spectral_coordinates_old(G, m, random_sign_flips=False):
-    """
-    Computes m-dimensional spectral coordinates for nodes in G.
-    Handles small graphs (N <= m) via zero-padding and large graphs 
-    via a sparse hybrid solver.
-    
-    Args:
-        G (nx.Graph): The input networkx graph.
-        m (int): The target number of spectral dimensions (radial dimensions).
-        random_sign_flips (bool): If True, randomly flip signs of eigenvectors to address sign ambiguity.
-        
-    Returns:
-        dict: Node labels mapped to a numpy array of size (m,).
-    """
-    N = G.number_of_nodes()
-    node_list = list(G.nodes())
-    
-    # edge case when graph has only one node
-    if N <= 1:
-        return {node: np.zeros(m) for node in node_list}
-
-    # We skip the first eigenvector (lambda=0), so we can get at most N-1 features.
-    k_available = min(m, N - 1)
-    
-    # 1. normalized laplacian matrix
-    L = nx.normalized_laplacian_matrix(G).astype(float)
-    
-    # 2. compute eigenvalues and eigenvectors
-    if (m + 1) >= N:
-        eigenvalues, eigenvectors = eigh(L.toarray())
-        available_features = eigenvectors[:, 1:k_available + 1]
-    else:
-        eigenvalues, eigenvectors = eigsh(L, k=k_available + 1, which='SM')
-        available_features = eigenvectors[:, 1:]
-
-    # --- SIGN FLIP LOGIC ---
-    if random_sign_flips:
-        # 1. Generate one sign per dimension (column), not per node (row)
-        # signs shape: (1, k_available)
-        signs = np.random.choice([-1, 1], size=(1, k_available))
-        
-        # 2. Multiply the entire matrix by the signs across columns
-        # This flips the entire eigenvector for all nodes simultaneously
-        available_features = available_features * signs
-    # ---------------------------------
-
-    # 3. padding logic
-    if k_available < m:
-        padding = np.zeros((N, m - k_available))
-        final_features = np.hstack([available_features, padding])
-    else:
-        final_features = available_features
-
-    return {node: final_features[i] for i, node in enumerate(node_list)}
-
 def get_spectral_coordinates(G, m, random_sign_flips=False):
     N = G.number_of_nodes()
     node_list = list(G.nodes())
@@ -103,105 +48,6 @@ def get_spectral_coordinates(G, m, random_sign_flips=False):
     final_features = final_features * np.sqrt(N)
 
     return {node: final_features[i] for i, node in enumerate(node_list)}
-
-def fit_transformations_single_ls(x1, x2):
-    """
-    Given two sets of points x1 and x2 (numpy arrays of shape [num_nodes, m]), fit a linear transformation A*x2+b = x1.
-
-    Args:
-        x1 (np.ndarray): set of target points of shape [num_nodes, m]
-        x2 (np.ndarray): set of original points of shape [num_nodes, m]
-    Returns:
-        tuple: (A, b) where A is the linear transformation matrix of shape m x
-                m, and b is the translation vector of shape m x 1.
-    """
-    assert x1.shape == x2.shape, "Input point sets must have the same shape."
-    num_nodes, m = x1.shape
-
-    # 1. Augment x2 with a column of ones to handle the translation (b)
-    # x2_augmented shape: [num_nodes, m + 1]
-    ones = np.ones((num_nodes, 1))
-    x2_augmented = np.hstack([x2, ones])
-
-    # 2. Solve the linear least squares problem: x2_augmented @ W = x1
-    # W will have shape [m + 1, m]
-    # W[:m, :] will be A.T (transpose of transformation matrix)
-    # W[m, :]  will be b (translation vector)
-    W, residuals, rank, s = np.linalg.lstsq(x2_augmented, x1, rcond=None)
-
-    # 3. Extract A and b
-    # Since we solved x2 @ A.T + b = x1, we transpose back for the return
-    A = W[:m, :].T
-    b = W[m, :]
-
-    return A, b
-
-def fit_transformations_single(x1, x2):
-    """
-    Fits A*x2 + b = x1 using a robust Procrustes-style approach.
-    Prevents dimensional collapse by centering and using SVD.
-    """
-    assert x1.shape == x2.shape, "Input point sets must have the same shape."
-    num_nodes, m = x1.shape
-
-    # 1. Center the points to handle translation (b) separately
-    mu1 = x1.mean(axis=0)
-    mu2 = x2.mean(axis=0)
-    
-    x1_centered = x1 - mu1
-    x2_centered = x2 - mu2
-
-    # 2. Use SVD to find the best rotation/scaling matrix A
-    # This solves the 'Orthogonal Procrustes Problem'
-    # It finds the A that minimizes ||A*x2_centered - x1_centered||
-    H = x2_centered.T @ x1_centered
-    U, S, Vt = np.linalg.svd(H)
-    
-    # A is the rotation/reflection matrix
-    A = (U @ Vt).T
-
-    # 3. Handle Scaling (Optional but recommended for your m=2 vs N case)
-    # If the variance is very different, we scale A
-    # var1 = np.sum(np.square(x1_centered))
-    # var2 = np.sum(np.square(x2_centered))
-    # if var2 > 1e-9:
-    #     scale = np.sqrt(var1 / var2)
-    #     A = A * scale
-
-    # 4. Calculate translation b
-    # b = x1_mean - A * x2_mean
-    b = mu1 - (A @ mu2)
-
-    return A, b
-
-def fit_transformations(spectral_coords_list):
-    """
-    Given a list of spectral coordinates lists (one per graph), fit a linear transformation (scaling + translation) to align them such that the previous nodes map to similar coordinates.
-
-    Args:
-        spectral_coords_list (list): List of lists of spectral coordinates of shapes [ [1], [2],... [num_graphs] ]
-
-    Returns:
-        list: List of num_graphs-1 transformation matrices A_{i->i+1} (i=0,...num_graphs-1) of shape m x m, where A_{i->i+1} maps spectral coordinates from nodes {0,...,i-1} from graphs G_i to G_{i+1}
-    """
-    transformations = []
-    num_graphs = len(spectral_coords_list)
-
-    for i in range(num_graphs - 1):
-        print("Fitting transformation from graph", i+1, "to graph", i, end=' ')
-        spec_coords_i = np.array(list(spectral_coords_list[i].values()))
-        spec_coords_next = np.array(list(spectral_coords_list[i+1].values())[:-1]) # exclude the last node, as it doesn't exist in graph i
-
-        transformation = fit_transformations_single(spec_coords_i, spec_coords_next)
-        transformations.append(transformation)
-
-        # test the transformation by applying it to graph i+1's spectral coordinates and computing mse
-        A, b = transformation
-        transformed_coords = (A @ spec_coords_next.T).T + b
-        mse = np.mean((transformed_coords - spec_coords_i)**2)
-        print("--> Mean Squared Error after transformation:", mse)
-    
-    return transformations
 
 # --- Test ---
 def plot_spectral_coordinates_progression(m=4):
@@ -368,37 +214,6 @@ def plot_spectral_coordinates_progression(m=4):
     plt.savefig("plots/spectral_coords_progression.png")
     print("Saved spectral coordinates progression to 'plots/spectral_coords_progression.png'")
 
-def test_transformation_estimation():
-    # test the transformation from graph 3 to graph 4
-    spec_coords_graph3 = np.array([
-        [0.81649658, 0., 0., 0.],
-        [-0.40824829, -0.70710678, 0., 0.],
-        [-0.40824829, 0.70710678, 0., 0.]
-    ])
-    spec_coords_graph4 = np.array([
-        [0.43620995, 0.70710678, 0.24437856, 0.],
-        [0.43620995, -0.70710678, 0.24437856, 0.],
-        [-0.28986734, -7.43764502e-16, -0.735511335, 0.],
-        [-0.73172309, 3.04752249e-16, 0.582736062, 0.]
-    ])
-
-    A, b = fit_transformations_single(spec_coords_graph3, spec_coords_graph4[:-1,:])  # exclude last node of graph 4
-    print("Estimated transformation from Graph 3 to Graph 4:")
-    print("A:\n", A)
-    print("b:\n", b)
-
-    # check the transformation by applying it to graph 4's spectral coordinates
-    transformed_coords = (A @ spec_coords_graph4.T).T + b
-
-    print("Transformed Spectral Coordinates of Graph 4:")
-    print(transformed_coords)
-    print("Original Spectral Coordinates of Graph 3 (excluding last node):")
-    print(spec_coords_graph3)
-
-    # calculate mse
-    mse = np.mean((transformed_coords[:-1,:] - spec_coords_graph3)**2)
-    print("Mean Squared Error between transformed Graph 4 coords and Graph 3 coords:", mse)
-
 def test_disconnected_graph():
     # create a disconnected graph with 5 nodes: two components (0-1-2) and (3-4)
     G = nx.Graph()
@@ -448,6 +263,5 @@ def test_disconnected_graph():
 
 if __name__ == "__main__":
     # plot_spectral_coordinates_progression(m=4)
-    # test_transformation_estimation()
     test_disconnected_graph()
     pass
