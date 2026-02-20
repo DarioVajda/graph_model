@@ -28,8 +28,14 @@ def get_spectral_coordinates(G, m, random_sign_flips=False):
     eigenvalues = eigenvalues[sorted_indices]
     eigenvectors = eigenvectors[:, sorted_indices]
     
-    # 4. Filter features
+    # 4. Filter and Scale features (THIS IS THE FIX)
     available_features = eigenvectors[:, 1 : num_eigenvectors_to_compute]
+    available_eigenvalues = eigenvalues[1 : num_eigenvectors_to_compute]
+    
+    # Scale by inverse square root of eigenvalues to capture topology
+    # np.maximum prevents division by zero in case of disconnected graph components
+    scaling_factors = 1.0 / np.sqrt(np.maximum(available_eigenvalues, 1e-8))
+    available_features = available_features * scaling_factors
     
     # 5. Sign Flips
     if random_sign_flips:
@@ -48,7 +54,6 @@ def get_spectral_coordinates(G, m, random_sign_flips=False):
     final_features = final_features * np.sqrt(N)
 
     return {node: final_features[i] for i, node in enumerate(node_list)}
-
 # --- Test ---
 def plot_spectral_coordinates_progression(m=4):
     # plot the progression graphs and their respective laplacian spectral coordinates as we add nodes one-by-one and save to file "spectral_coords_progression.png"
