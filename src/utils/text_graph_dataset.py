@@ -270,6 +270,20 @@ def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attribute
         if tokenizer is not None:
             ds.tokenize(tokenizer)
     return ds
+
+def prepare_example_labels(graph_dataset):
+    labels = []
+    for i in range(len(graph_dataset)):
+        item = graph_dataset[i]
+        prompt_node = item['prompt_node']
+        if prompt_node == -1:
+            raise ValueError(f"Graph at index {i} does not have a valid prompt node. Cannot prepare labels.")
+        else:
+            prompt_tokens = torch.tensor(item['input_ids'][prompt_node], dtype=torch.long)
+            prompt_tokens[:len(prompt_tokens) // 2] = -100  # Mask out the first half for loss
+            labels.append(prompt_tokens)
+    return labels
+            
 # -----------------------------------------------------------------------------
 # Demonstration
 # -----------------------------------------------------------------------------

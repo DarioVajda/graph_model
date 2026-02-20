@@ -6,7 +6,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.cache_utils import DynamicCache
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
-from ..utils.text_graph_dataset import TextGraphDataset, TextGraph, generate_text_graph_example
+from ..utils.text_graph_dataset import TextGraphDataset, TextGraph, generate_text_graph_example, prepare_example_labels
 
 from transformers.models.llama.modeling_llama import (
     LlamaConfig,
@@ -610,6 +610,10 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             Modified forward method to accept the text attributed graph as input.
 
             Arguments:
+                input_ids          --> None (will be overridden)
+                attention_mask     --> None (will be overridden)
+                position_ids       --> None (will be overridden)
+                labels             --> Labels for calculating the loss on the prompt node tokens only. Shoudl be a list of batch_size elements, each being a tensor of shape (prompt_node_seq_len,) containing the labels for the prompt node tokens in each graph.
                 input_graph_batch  --> A dictionary containing the batched graph information for the current batch, expected to have keys like:
                     'text'                  - the raw text input (not tokenized)        ---> List of batch_size elements, each being a string of the raw text for the graph
                     'num_nodes'             - number of nodes in the graph              ---> Tensor of shape (batch_size,) containing the number of nodes for each graph in the batch
@@ -681,8 +685,21 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
 
         loss = None
         if labels is not None:
-            # TODO: SHOULD PASS ONLY THE LOGITS OF THE PROMPT NODE
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+            if not isinstance(labels, list) or len(labels) != prepared_input_ids.shape[0]:
+                raise ValueError(f"Labels should be a list of length {prepared_input_ids.shape[0]}, where each element is a tensor of shape (prompt_node_seq_len,) containing the labels for the prompt node tokens in each graph.")
+
+            batch_size, max_total_seq_len = prepared_input_ids.shape[0], prepared_input_ids.shape[1]
+            full_labels = torch.full((batch_size, max_total_seq_len), -100, dtype=torch.long, device=prepared_input_ids.device)
+
+            for i in range(batch_size):
+                prompt_len, prefix_len = prompt_lengths[i], prefix_lengths[i]
+
+                if prompt_len != labels[i].shape[0]:
+                    raise ValueError(f"Length of labels for graph {i} does not match the prompt length. Expected {prompt_len}, got {labels[i].shape[0]}.")
+                
+                full_labels[i, prefix_len:prefix_len+prompt_len] = labels[i]
+
+            loss = self.loss_function(logits=logits, labels=full_labels, vocab_size=self.config.vocab_size, **kwargs)
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -703,8 +720,7 @@ if __name__ == "__main__":
         tokenizer=tokenizer, 
         spec_emb_dim=4
     )
-    # graph_dataset_sample = [ graph_dataset_sample[1], graph_dataset_sample[0], graph_dataset_sample[2] ]  # Shuffling the order to test batch processing with different graph structures
-    print(graph_dataset_sample[0]['edges'])
+    example_labels = prepare_example_labels(graph_dataset_sample)
 
     from ..utils.text_graph_collator import GraphCollator
     collator = GraphCollator(tokenizer=tokenizer)
@@ -713,6 +729,6 @@ if __name__ == "__main__":
     model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", bias_type="combined")
     print('=' * 70)
     print('=' * 70)
-    outputs = model(input_graph_batch=input_graph_batch)
+    outputs = model(input_graph_batch=input_graph_batch, labels=example_labels)
 
     # run the model to generate 5 tokens autoregressively
