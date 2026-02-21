@@ -749,3 +749,4 @@ if __name__ == "__main__":
     outputs = model(input_graph_batch=input_graph_batch, labels=example_labels)
 
     # run the model to generate 5 tokens autoregressively
+    # TODO: test once generation is implemented in the model
