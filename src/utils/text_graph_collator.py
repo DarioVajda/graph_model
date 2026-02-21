@@ -1,13 +1,15 @@
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
+from .text_graph_dataset import TextGraph
+
 class GraphCollator:
     def __init__(self, tokenizer=None, ):
         self.tokenizer = tokenizer
 
-    def __call__(self, batch):
+    def __call__(self, batch: list[TextGraph]):
         """
-        Collates a list of TextGraphDataset items into a batch.
+        Collates a list of TextGraph dictionaries into a batch.
         """
 
         sizes = torch.tensor([item['num_nodes'] for item in batch], dtype=torch.long)

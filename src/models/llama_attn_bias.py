@@ -1,3 +1,20 @@
+"""
+This is an implementation of a custom Llama model that incorporates graph-based attention biases.
+There are two types of biases that can be added to the attention scores:
+1. Shortest Path Distance (SPD) Bias
+    - This bias is based on the shortest path distance between nodes in the graph.
+    - It is calculated by this formula:
+        b_ij = spd_weights[d_ij] if d_ij > 0 else 0
+    - Trainable parameters: spd_weights (num_layers * num_heads * max_spd total parameters)
+2. Spectral Bias
+    - This bias is based on the spectral coordinates of the nodes in the graph
+    - It is calculated by this formula:
+        b_ij = w_k * d_ij
+      where d_ij is the L2 distance between the spectral coordinates of nodes i and j
+      (spectral coordinates are the eigenvectors of the graph Laplacian)
+    - Trainable parameters: spectral_weights (num_layers * num_heads total parameters)
+"""
+
 import torch
 from torch import nn
 import torch.nn.functional as F
