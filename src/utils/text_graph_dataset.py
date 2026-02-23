@@ -77,6 +77,7 @@ class TextGraphDataset(Dataset):
          - 'spectral_coords'        ---> Tensor of shape (num_nodes, spectral_dim)
          - 'shortest_path_dists'    ---> Tensor of shape (num_nodes, num_nodes)
          - 'input_ids'              ---> List of num_nodes lists of token ids (tokenized input for each node)
+         - 'labels'                 ---> Tensor of labels for the prompt node
         """
         # 1. Get the base item from Arrow (fast load)
         item = self._hf_dataset[idx]
@@ -109,6 +110,10 @@ class TextGraphDataset(Dataset):
                     item['shortest_path_dists'] = flat_spd.reshape((n, n))
                 else:
                     item['shortest_path_dists'] = torch.zeros((n,n))
+
+        # Handle Labels
+        if 'labels' in item and item['labels'] is not None:
+            item['labels'] = torch.tensor(item['labels'], dtype=torch.long)
 
         return item
 
@@ -200,8 +205,8 @@ class TextGraphDataset(Dataset):
             n = g.number_of_nodes()
             
             # Using int16 to save space (max distance 32,767)
-            # -1 represents unreachable
-            dist_matrix = torch.full((n, n), -1, dtype=torch.int16)
+            # 32_767 represents unreachable
+            dist_matrix = torch.full((n, n), 32_767, dtype=torch.int16)
             dist_matrix.fill_diagonal_(0)
             
             path_gen = nx.shortest_path_length(g, source=None, target=None)
@@ -218,12 +223,63 @@ class TextGraphDataset(Dataset):
             
         self._hf_dataset = self._hf_dataset.add_column("shortest_path_dists", spd_list)
 
+    def compute_labels(self, get_graph_labels):
+        """Computes labels for each graph using the provided function and adds 'labels' column."""
+        print("Computing Labels...")
+        
+        labels_list = []
+        for i in tqdm(range(len(self)), desc="Generating Labels"):
+            item = self[i]
+            
+            if 'input_ids' not in item:
+                raise ValueError("Dataset must be tokenized before computing labels.")
+            
+            prompt_node = item['prompt_node']
+            if prompt_node == -1:
+                raise ValueError(f"Graph at index {i} does not have a valid prompt node. Cannot compute labels.")
+                
+            # Execute the user-provided mapping function
+            label = get_graph_labels(item)
+            
+            # Validate shape matches the prompt node's token_ids
+            expected_length = len(item['input_ids'][prompt_node])
+            if len(label) != expected_length:
+                raise ValueError(f"Label shape mismatch at index {i}. Expected length {expected_length}, got {len(label)}.")
+                
+            # Convert to list for efficient Hugging Face Arrow storage
+            if isinstance(label, torch.Tensor):
+                label = label.tolist()
+            elif hasattr(label, "tolist"):
+                label = label.tolist()
+                
+            labels_list.append(label)
+
+        if "labels" in self._hf_dataset.column_names:
+            self._hf_dataset = self._hf_dataset.remove_columns("labels")
+            
+        self._hf_dataset = self._hf_dataset.add_column("labels", labels_list)
+
     # ------------------------------------------------------------------------
     # Saving and Loading
     # ------------------------------------------------------------------------
 
+    @classmethod
+    def gtds_path(cls, base_path: str) -> str:
+        """Ensures the path ends with .gtds for consistency. (gtds = Graph Text Dataset)"""
+        if base_path.endswith(".gtds") or base_path.endswith(".gtds/"):
+            return base_path
+        else:
+            return base_path + ".gtds"
+
     def save(self, path: str):
-        """Saves features and topology."""
+        """
+        Saves the dataset to disk. The file structure will be:
+        path/
+            features/       <-- Hugging Face Dataset (Arrow format)
+            graphs.pkl      <-- List of NetworkX graphs (raw topology in RAM)
+        """
+        path = self.gtds_path(path)        
+
         if os.path.exists(path):
             print(f"Warning: Directory {path} exists. Overwriting...")
             shutil.rmtree(path)
@@ -240,6 +296,8 @@ class TextGraphDataset(Dataset):
     @classmethod
     def load(cls, path: str) -> 'TextGraphDataset':
         """Loads from disk."""
+        path = cls.gtds_path(path)
+
         features_path = os.path.join(path, "features")
         graphs_path = os.path.join(path, "graphs.pkl")
         
@@ -309,6 +367,16 @@ if __name__ == "__main__":
     print(f"SPD Shape: {item['shortest_path_dists'].shape}")
     print(f"Input IDs: {item['input_ids']}")
     print(f"Type of Input IDs: {type(item['input_ids'])}; Type of input_ids[0]: {type(item['input_ids'][0])}; type of input_ids[0][0]: {type(item['input_ids'][0][0])}")
+
+    # Test the new compute_labels method
+    print("\n--- Testing compute_labels ---")
+    def mock_get_graph_labels(example):
+        prompt_tokens = torch.tensor(example['input_ids'][example['prompt_node']], dtype=torch.long)
+        prompt_tokens[:len(prompt_tokens) // 2] = -100
+        return prompt_tokens
+        
+    ds.compute_labels(mock_get_graph_labels)
+    print(f"Labels Shape for item 0: {ds[0]['labels'].shape}")
 
     # stop program execution to avoid saving files in the environment, remove this to test saving/loading
     exit()

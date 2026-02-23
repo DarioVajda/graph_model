@@ -25,6 +25,8 @@ class GraphCollator:
         else:
             input_ids = None
 
+        labels = [ item['labels'] for item in batch ] if "labels" in batch[0] else None
+
         spectral_coords = [ item['spectral_coords'] for item in batch ] if "spectral_coords" in batch[0] else None
         shortest_path_dists = [ item['shortest_path_dists'] for item in batch ] if "shortest_path_dists" in batch[0] else None
         
@@ -34,6 +36,7 @@ class GraphCollator:
             'prompt_node': prompt_nodes,
             'edges': edges,
             'input_ids': input_ids,
+            'labels': labels,
             'spectral_coords': spectral_coords,
             'shortest_path_dists': shortest_path_dists,
         }

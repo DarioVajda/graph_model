@@ -20,6 +20,11 @@ scipy
 numpy
 matplotlib
 tqdm
+wandb
 
 # Interpretability
 seaborn
+
+# Other
+typing-extensions>=4.8.0
+pydantic

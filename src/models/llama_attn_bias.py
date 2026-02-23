@@ -443,7 +443,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         super().__init__(config)
 
         if bias_type not in ["none", "spd", "laplacian", "combined"]:
-            raise ValueError(f"Invalid bias_type: {bias_type}. Must be one of ['spd', 'laplacian', 'combined']")
+            raise ValueError(f"Invalid bias_type: {bias_type}. Must be one of ['none', 'spd', 'laplacian', 'combined']")
 
         self.bias_type = bias_type
         self._init_requirements(bias_type)

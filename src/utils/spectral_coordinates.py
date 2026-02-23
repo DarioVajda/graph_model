@@ -34,7 +34,7 @@ def get_spectral_coordinates(G, m, random_sign_flips=False):
     
     # Scale by inverse square root of eigenvalues to capture topology
     # np.maximum prevents division by zero in case of disconnected graph components
-    scaling_factors = 1.0 / np.sqrt(np.maximum(available_eigenvalues, 1e-8))
+    scaling_factors = 1.0 / np.sqrt(np.maximum(available_eigenvalues, 1e-2))
     available_features = available_features * scaling_factors
     
     # 5. Sign Flips
@@ -54,6 +54,7 @@ def get_spectral_coordinates(G, m, random_sign_flips=False):
     final_features = final_features * np.sqrt(N)
 
     return {node: final_features[i] for i, node in enumerate(node_list)}
+
 # --- Test ---
 def plot_spectral_coordinates_progression(m=4):
     # plot the progression graphs and their respective laplacian spectral coordinates as we add nodes one-by-one and save to file "spectral_coords_progression.png"

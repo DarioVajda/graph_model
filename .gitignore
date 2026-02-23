@@ -4,3 +4,8 @@ hf_token.txt
 **/*.pth
 .graph_llama_report.jsonl
 *llama_report.jsonl
+
+*.gtds/
+
+wandb_login.sh
+hf_login.sh
