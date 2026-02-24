@@ -183,7 +183,7 @@ def training_run(
 
 
 if __name__ == "__main__":
-    BIAS_TYPE = "spd" # options: "none", "spd", "spectral", "combined"
+    BIAS_TYPE = "combined" # options: "none", "spd", "laplacian", "combined"
     TRAIN_DATASET_SIZE = 10_000
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
