@@ -2,12 +2,14 @@ import torch
 from transformers import Trainer
 
 class GraphTrainer(Trainer):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, custom_prediction_step=None, **kwargs):
         # 1. FORCE KEEP UNUSED COLUMNS
         # We intercept the TrainingArguments during initialization to ensure 
         # the Trainer never deletes our custom 'input_graph_batch' data.
         if "args" in kwargs and kwargs["args"] is not None:
             kwargs["args"].remove_unused_columns = False
+
+        self.custom_prediction_step = custom_prediction_step
             
         super().__init__(*args, **kwargs)
 
@@ -30,6 +32,10 @@ class GraphTrainer(Trainer):
         
         # EXTRACT LOSS
         loss = outputs.get("loss") if isinstance(outputs, dict) else outputs[0]
+
+        # NORMALIZE LOSS BY GRADIENT ACCUMULATION STEPS
+        if self.args.gradient_accumulation_steps > 1 and self.model.training:
+            loss = loss / self.args.gradient_accumulation_steps
         
         return (loss, outputs) if return_outputs else loss
 
@@ -39,6 +45,12 @@ class GraphTrainer(Trainer):
         when trying to call .numel() on our custom graph lists.
         """
         return 0
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if self.custom_prediction_step is not None:
+            return self.custom_prediction_step(super().prediction_step, model, inputs, prediction_loss_only, ignore_keys)
+        else:
+            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
 def set_wandb_project(project_name="GraphLLM"):
     import os
@@ -72,6 +84,7 @@ if __name__ == "__main__":
         report_to="wandb",
         run_name="graph-llama-v1",
         logging_steps=1,
+        gradient_accumulation_steps=4,
         
         # custom schedule via parameters
         optim="adamw_torch",

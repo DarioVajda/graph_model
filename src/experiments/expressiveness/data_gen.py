@@ -95,6 +95,8 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
         # 2. add the prompt node with the "text" field containing the question "Are the nodes X and Y connected? [Yes/No]"
         prompt_node_id = max(G.nodes) + 1
         G.add_node(prompt_node_id, text=f"Are the nodes{G.nodes[x]['text']} and{G.nodes[y]['text']} connected? {'Yes' if label == 1 else 'No'}")
+        G.add_edge(prompt_node_id, x)
+        G.add_edge(prompt_node_id, y)
 
         # 3. set the new node's id as the graph-level attribute "prompt_node"
         G.graph['prompt_node'] = prompt_node_id
@@ -124,7 +126,7 @@ def round_size_str(size):
 
 def dataset_path_and_size(dataset_size):
     size_str, rounded_size, scale = round_size_str(dataset_size)
-    dataset_path = f"./src/experiments/expressiveness/{size_str}_dataset.gtds"
+    dataset_path = f"./src/experiments/expressiveness/new_{size_str}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
 def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name):

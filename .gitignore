@@ -9,3 +9,5 @@ hf_token.txt
 
 wandb_login.sh
 hf_login.sh
+checkpoints
+wandb

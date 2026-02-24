@@ -54,11 +54,11 @@ class LlamaAttentionWithBias(LlamaAttention):
         # Set of lookup embeddings mapping distances {0, 1,... max_spd-1, ≥max_spd} to bias values for each attention head separately
         # Note that we use nn.Parameter, so that the initialisation doesn't get overridden by the HF's _init_weights method
         if self.require_spd:
-            self.spd_weights = nn.Parameter(self._initial_spd_weights(max_spd, config.num_attention_heads))  # This represents distances 1 to max_spd (inclusive)
+            self.spd_weights = nn.Parameter(self._initial_spd_weights(max_spd, config.num_attention_heads, epsilon=0))  # This represents distances 1 to max_spd (inclusive)
         
         # One weight value per attention head to map the spectral coordinate distance d_ij to an attention bias value of b_ij = w_k * d_ij
         if self.require_spectral:
-            self.spectral_weights = nn.Parameter(self._initial_spectral_weights(config.num_attention_heads))
+            self.spectral_weights = nn.Parameter(self._initial_spectral_weights(config.num_attention_heads, epsilon=0))
 
     def _initial_spd_weights(self, max_spd, num_heads, epsilon=1.0):
         """
@@ -159,10 +159,10 @@ class LlamaAttentionWithBias(LlamaAttention):
                     spec_b = spec_dist.unsqueeze(0) * self.spectral_weights.view(-1, 1, 1).to(dtype)
                     node_bias = node_bias + spec_b
 
-                # modify the value of the graph_bias to easier inspect the steps that follow (for debugging)
-                for i in range(node_bias.shape[1]):
-                    for j in range(node_bias.shape[2]):
-                        node_bias[:, i, j] = i+j/10.0 # this will result in outputs i,j
+                # # modify the value of the graph_bias to easier inspect the steps that follow (for debugging)
+                # for i in range(node_bias.shape[1]):
+                #     for j in range(node_bias.shape[2]):
+                #         node_bias[:, i, j] = i+j/10.0 # this will result in outputs i,j
 
                 # 3. Expand Node-level bias to Token-level using advanced indexing
                 if isinstance(node_bias, torch.Tensor):
@@ -635,7 +635,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                     'text'                  - the raw text input (not tokenized)        ---> List of batch_size elements, each being a string of the raw text for the graph
                     'num_nodes'             - number of nodes in the graph              ---> Tensor of shape (batch_size,) containing the number of nodes for each graph in the batch
                     'prompt_node'           - index of the prompt node in the graph     ---> Tensor of shape (batch_size,) containing the index of the prompt node for each graph in the batch
-                    'input_ids'             - tokenized input ids for the text          ---> List of batch_size elements, each being a tensor of shape (num_nodes, seq_len) representing the tokenized input for each node
+                    'input_ids'             - tokenized input ids for the text          ---> List of batch_size elements, each being a list of shape num_nodes elements, each being a tensor of shape (seq_len_i_j) representing the tokenized input for each node
                     'edges'                 - list of edges in the graph                ---> List of batch_size elements, each being a tensor of shape (num_edges, 2) representing the edges between nodes
                     'spectral_coords'       - precomputed spectral coordinates          ---> List of batch_size elements, each being a tensor of shape (num_nodes, spectral_dim)
                     'shortest_path_dists'   - precomputed shortest path distances       ---> List of batch_size elements, each being a tensor of shape (num_nodes, num_nodes) representing the pairwise shortest path distances between nodes
