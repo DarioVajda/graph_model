@@ -40,13 +40,23 @@ from transformers.models.llama.modeling_llama import (
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
 
+import warnings
+
+class GraphLlamaConfig(LlamaConfig):
+    def __init__(self, spd=False, laplacian=False, max_spd=32, **kwargs):
+        super().__init__(**kwargs)
+        self.spd = spd
+        self.laplacian = laplacian
+        self.max_spd = max_spd
+
+
 class LlamaAttentionWithBias(LlamaAttention):
-    def __init__(self, config: LlamaConfig, layer_idx: int, require_spd=False, require_spectral=False, max_spd=20):
+    def __init__(self, config: LlamaConfig, layer_idx: int, require_spd=False, require_laplacian=False, max_spd=20):
         super().__init__(config, layer_idx)
         
         # initialise all additional parameters needed for the attention bias
         self.require_spd = require_spd
-        self.require_spectral = require_spectral
+        self.require_laplacian = require_laplacian
 
         self.num_heads = config.num_attention_heads
         self.max_spd = max_spd
@@ -57,7 +67,7 @@ class LlamaAttentionWithBias(LlamaAttention):
             self.spd_weights = nn.Parameter(self._initial_spd_weights(max_spd, config.num_attention_heads, epsilon=0))  # This represents distances 1 to max_spd (inclusive)
         
         # One weight value per attention head to map the spectral coordinate distance d_ij to an attention bias value of b_ij = w_k * d_ij
-        if self.require_spectral:
+        if self.require_laplacian:
             self.spectral_weights = nn.Parameter(self._initial_spectral_weights(config.num_attention_heads, epsilon=0))
 
     def _initial_spd_weights(self, max_spd, num_heads, epsilon=1.0):
@@ -119,7 +129,7 @@ class LlamaAttentionWithBias(LlamaAttention):
         # print("q_len:", q_len)
         # print("kv_len:", kv_len)
 
-        if (self.require_spd or self.require_spectral) and node_ids is not None:
+        if (self.require_spd or self.require_laplacian) and node_ids is not None:
             device = query_states.device
             dtype = query_states.dtype
             # Initialize empty graph bias tensor: (batch_size, num_heads, q_len, kv_len)
@@ -151,7 +161,7 @@ class LlamaAttentionWithBias(LlamaAttention):
                     node_bias = node_bias + spd_b
 
                 # 2. Calculate Spectral Bias
-                if self.require_spectral and spectral_coordinates is not None:
+                if self.require_laplacian and spectral_coordinates is not None:
                     spec_coords = spectral_coordinates[batch_idx].to(device)
                     # Compute pairwise L2 distance -> (num_nodes, num_nodes)
                     spec_dist = torch.cdist(spec_coords, spec_coords, p=2.0)
@@ -208,14 +218,14 @@ class LlamaAttentionWithBias(LlamaAttention):
 
 
 class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
-    def __init__(self, config: LlamaConfig, layer_idx: int, require_spd=False, require_spectral=False, max_spd=None):
+    def __init__(self, config: LlamaConfig, layer_idx: int, require_spd=False, require_laplacian=False, max_spd=None):
         super().__init__(config, layer_idx)
 
         self.self_attn = LlamaAttentionWithBias(
             config=config, 
             layer_idx=layer_idx, 
             require_spd=require_spd, 
-            require_spectral=require_spectral,
+            require_laplacian=require_laplacian,
             max_spd=max_spd,
         )
 
@@ -274,7 +284,7 @@ class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
 
 
 class LlamaModelWithBias(LlamaModel):
-    def __init__(self, config: LlamaConfig, require_spd=False, require_spectral=False, max_spd=None):
+    def __init__(self, config: LlamaConfig, require_spd=False, require_laplacian=False, max_spd=None):
         super().__init__(config)
         # Re-initialize the layers using the LlamaDecoderLayerWithBias
         self.layers = nn.ModuleList([
@@ -282,7 +292,7 @@ class LlamaModelWithBias(LlamaModel):
                 config, 
                 layer_idx=layer_idx, 
                 require_spd=require_spd, 
-                require_spectral=require_spectral,
+                require_laplacian=require_laplacian,
                 max_spd=max_spd
             )
             for layer_idx in range(config.num_hidden_layers)
@@ -432,28 +442,62 @@ class LlamaModelWithBias(LlamaModel):
 
 
 class GraphLlamaForCausalLM(LlamaForCausalLM):
-    def __init__(self, config, bias_type="combined", max_spd=32):
+    def __init__(
+        self, 
+        config: GraphLlamaConfig,
+        bias_type: Optional[str] = None,
+        max_spd: Optional[int] = None,
+    ):
         """
             Custom LlamaForCausalLM that integrates the LlamaModelWithBias to handle graph-based attention biases.
 
             Arguments:
-                config      --> Standard LlamaConfig
-                bias_type   --> "spd" (shortest path distance), "laplacian" (laplacian spectral coordinates), or "combined" (both)
+                config      --> GraphLlamaConfig object containing the model configuration (from Llama config) and additional parameters related to the attention bias computation
+                bias_type   --> Optional string to specify the type of bias to use. If provided, it will override the corresponding values in the config. Must be one of 'spd', 'laplacian', 'combined' (using those two), 'none', or simply don't specify it and leave as None to use the config values.
+                max_spd     --> Optional int to specify the maximum shortest path distance to consider for the SPD bias. If provided, it will override the max_spd value in the config. This is only relevant if bias_type is 'spd' or 'combined'.
         """
         super().__init__(config)
 
-        if bias_type not in ["none", "spd", "laplacian", "combined"]:
-            raise ValueError(f"Invalid bias_type: {bias_type}. Must be one of ['none', 'spd', 'laplacian', 'combined']")
+        self._init_requirements(config)
+        
+        # keep everything backward compatible with earlier versions by allowing the use of bias_type and max_spd arguments and saving the parameter values in the config
+        if bias_type is not None:
+            # print a warning because the config values will be overridden by the bias_type argument
+            warnings.warn(f"bias_type argument is provided ({bias_type}), which will override the corresponding values in the config. If you want to use the config values instead, simply don't specify bias_type and the parameters will be read from the config as intended. This warning can be removed by removing the bias_type argument and relying solely on the config values.")
+            if bias_type=='spd':
+                self.require_spd = True
+                self.require_laplacian = False
+                config.spd = True
+                config.laplacian = False
+            elif bias_type=='laplacian':
+                self.require_laplacian = True
+                self.require_spd = False
+                config.laplacian = True
+                config.spd = False
+            elif bias_type=='combined':
+                self.require_spd = True
+                self.require_laplacian = True
+                config.spd = True
+                config.laplacian = True
+            elif bias_type=='none':
+                self.require_spd = False
+                self.require_laplacian = False
+                config.spd = False
+                config.laplacian = False
+            else:
+                raise ValueError(f"Invalid bias_type: {bias_type}. Must be one of 'spd', 'laplacian', 'combined', 'none', or simply don't specify it and leave as None to use the config values.")
 
-        self.bias_type = bias_type
-        self._init_requirements(bias_type)
+        if max_spd is not None:
+            warnings.warn(f"max_spd argument is provided ({max_spd}), which will override the max_spd value in the config. If you want to use the config value instead, simply don't specify max_spd and the parameter will be read from the config as intended. This warning can be removed by removing the max_spd argument and relying solely on the config value.")
+            self.max_spd = max_spd
+            config.max_spd = max_spd
 
         # Swap the internal model
         self.model = LlamaModelWithBias(
             config, 
             require_spd=self.require_spd, 
-            require_spectral=self.require_spectral,
-            max_spd=max_spd
+            require_laplacian=self.require_laplacian,
+            max_spd=max_spd if self.require_spd else None,
         )
 
         self.pad_token_id = config.pad_token_id if config.pad_token_id is not None else config.eos_token_id
@@ -461,22 +505,13 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         
         self.post_init()
 
-    def _init_requirements(self, bias_type):
+    def _init_requirements(self, config):
         """
         Set flags for what additional inputs are required based on the bias type.
         """
-        if bias_type == "none":
-            self.require_spd = False
-            self.require_spectral = False
-        elif bias_type == "spd":
-            self.require_spd = True
-            self.require_spectral = False
-        elif bias_type == "laplacian":
-            self.require_spd = False
-            self.require_spectral = True
-        else:
-            self.require_spd = True
-            self.require_spectral = True
+        # check if config has the following attributes, if not set them to False by default
+        self.require_spd = getattr(config, 'spd', False)
+        self.require_laplacian = getattr(config, 'laplacian', False)
 
     def _prepare_inputs(
         self, 
@@ -659,7 +694,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             shortest_path_distances = None
 
         spectral_coordinates = input_graph_batch.get('spectral_coords', None)
-        if self.require_spectral:
+        if self.require_laplacian:
             if spectral_coordinates is None:
                 raise ValueError("Bias type requires spectral coordinates, but 'spectral_coords' is missing in input_graph_batch.")
         else:
