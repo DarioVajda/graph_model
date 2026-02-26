@@ -36,18 +36,12 @@ def plot_graph_attention(
         print("Visualizing the graph structure...")
         visualize_text_graph(
             graph_data=graph_example,
-            output_path=os.path.join(output_path, "graph_structure.png"),
+            output_path=os.path.join(output_path, "graph_structure_landscape.png"),
             max_line_length=30,
             use_spectral_layout=False,
-            figsize=(8, 8)
+            figsize=(9, 4)
         )
-        visualize_text_graph(
-            graph_data=graph_example,
-            output_path=os.path.join(output_path, "graph_structure_spectral.png"),
-            max_line_length=30,
-            use_spectral_layout=True,
-            figsize=(8, 8)
-        )
+        exit()
 
     if not plot_means and not plot_heads:
         print("Both plot_means and plot_heads are False. Nothing to plot.")

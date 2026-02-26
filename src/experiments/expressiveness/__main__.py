@@ -229,9 +229,12 @@ if __name__ == "__main__":
     select_active_params(model, active_params=ACTIVE_PARAMS)
 
     print("List of active parameters (requires_grad=True):")
+    total_trainable_params = 0
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(f" - {name}")
+            total_trainable_params += param.numel()
+    print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable_params}")
     print('-'*50)
 
     print("Example bias parameters before fine-tuning:")
