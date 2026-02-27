@@ -10,7 +10,9 @@
     "spd": true,
     "laplacian": true,
     "max_spd": 16,
-    "rwse": true
+    "rwse": true,
+    "rrwp": true,
+    "max_rw_steps": 4
   },
   "head_dim": 64,
   "hidden_act": "silu",

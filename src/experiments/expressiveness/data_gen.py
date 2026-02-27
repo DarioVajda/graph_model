@@ -131,10 +131,10 @@ def dataset_path_and_size(dataset_size):
     dataset_path = f"./src/experiments/expressiveness/new_{size_str}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
-def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name):
+def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16):
     dataset_path, final_dataset_size = dataset_path_and_size(dataset_size)
 
-    dataset = prepare_dataset(final_dataset_size, min_size=min_nodes, max_size=max_nodes, spectral_dims=spectral_dims, tokenizer_name=model_name)
+    dataset = prepare_dataset(final_dataset_size, min_size=min_nodes, max_size=max_nodes, spectral_dims=spectral_dims, tokenizer_name=model_name, max_rrwp_steps=max_rrwp_steps)
 
     # Save the dataset to disk
     dataset.save(dataset_path)

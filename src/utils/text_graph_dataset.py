@@ -240,7 +240,7 @@ class TextGraphDataset(Dataset):
         """Computes Random Walk Structural Encoding and adds 'rwse' column."""
         print("Computing Random Walk Structural Encoding (RWSE)...")
         rwse_dataset_list = []
-        for g in tqdm(self.graphs, desc="Computing RWSE"):
+        for g in tqdm(self.graphs, desc=f"Computing RWSE (max steps: {max_rwse_steps})"):
             rwse_dict = compute_rwse(g, max_rwse_steps)
             rwse_list = [ rwse_dict[i] for i in range(g.number_of_nodes()) ]
             rwse_dataset_list.append(rwse_list)
@@ -252,7 +252,7 @@ class TextGraphDataset(Dataset):
         """Computes Relative Random Walk Probabilities (RRWP) and adds 'rrwp' column."""
         print("Computing Relative Random Walk Probabilities (RRWP)...")
         rrwp_dataset_list = []
-        for g in tqdm(self.graphs, desc="Computing RRWP"):
+        for g in tqdm(self.graphs, desc=f"Computing RRWP (max steps: {max_rrwp_steps})"):
             rrwp_dict = compute_rrwp(g, max_distance=max_rrwp_steps)
             rrwp_list = [ rrwp_dict[(i,j)] for i in range(g.number_of_nodes()) for j in range(g.number_of_nodes()) ]
             rrwp_dataset_list.append(rrwp_list)
@@ -349,7 +349,7 @@ class TextGraphDataset(Dataset):
         hf_dataset = load_from_disk(features_path)
         return cls(graphs=graphs, _hf_dataset=hf_dataset)
 
-def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attributes=False, tokenizer=None, spec_emb_dim=4, max_rwse_steps=4) -> TextGraphDataset:
+def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attributes=False, tokenizer=None, spec_emb_dim=4, max_rwse_steps=4, max_rrwp_steps=6) -> TextGraphDataset:
     graphs = []
     for i in range(dataset_size):
         # Uses barabasi_albert_graph (safe for all nx versions)
@@ -363,6 +363,7 @@ def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attribute
         ds.compute_spectral_coordinates(embedding_dim=spec_emb_dim)
         ds.compute_shortest_path_distances()
         ds.compute_rwse(max_rwse_steps=max_rwse_steps)
+        ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)
         if tokenizer is not None:
             ds.tokenize(tokenizer)
     return ds

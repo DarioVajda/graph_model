@@ -1,18 +1,35 @@
 """
 This is an implementation of a custom Llama model that incorporates graph-based attention biases.
-There are two types of biases that can be added to the attention scores:
+There are four types of biases that can be added to the attention scores:
+
 1. Shortest Path Distance (SPD) Bias
     - This bias is based on the shortest path distance between nodes in the graph.
     - It is calculated by this formula:
         b_ij = spd_weights[d_ij] if d_ij > 0 else 0
     - Trainable parameters: spd_weights (num_layers * num_heads * max_spd total parameters)
-2. Spectral Bias
-    - This bias is based on the spectral coordinates of the nodes in the graph
+
+2. Spectral (Laplacian) Bias
+    - This bias is based on the spectral coordinates of the nodes in the graph.
     - It is calculated by this formula:
         b_ij = w_k * d_ij
       where d_ij is the L2 distance between the spectral coordinates of nodes i and j
-      (spectral coordinates are the eigenvectors of the graph Laplacian)
+      (spectral coordinates are the eigenvectors of the graph Laplacian).
     - Trainable parameters: laplacian_weights (num_layers * num_heads total parameters)
+
+3. Random Walk Structural Encoding (RWSE) Bias
+    - This bias is based on the random walk structural features of the nodes.
+    - It is calculated by this formula:
+        b_ij = w_k * d_ij
+      where d_ij is the L2 distance between the RWSE feature vectors of nodes i and j.
+    - Trainable parameters: rwse_weights (num_layers * num_heads total parameters)
+
+4. Relative Random Walk Probability (RRWP) Bias
+    - This bias is based on the multi-hop probability of a random walk starting at node i and landing on node j.
+    - It maps the vector of transition probabilities (from 1 to max_rw_steps) into a bias value for each attention head.
+    - It is calculated by this formula:
+        b_ij = MLP(RRWP_ij) if i != j else 0
+      where the MLP is a 2-layer network (Linear -> SiLU -> Linear) mapping the max_rw_steps vector directly to num_heads.
+    - Trainable parameters: rrwp_proj (num_layers * (layer_1_weights + layer_2_weights) total parameters)
 """
 
 import torch
@@ -46,20 +63,25 @@ from transformers import LlamaConfig
 
 import json
 from transformers import LlamaConfig
+from accelerate.utils import send_to_device
 
+#region Graph Llama Config
 class GraphAttnBiasConfig:
-    def __init__(self, spd=False, laplacian=False, max_spd=32, rwse=False):
+    def __init__(self, spd=False, laplacian=False, max_spd=32, rwse=False, rrwp=False, max_rw_steps=8):
         self.spd = spd
         self.laplacian = laplacian
         self.max_spd = max_spd
         self.rwse = rwse
-
+        self.rrwp = rrwp
+        self.max_rw_steps = max_rw_steps
     def to_dict(self):
         return {
             "spd": self.spd,
             "laplacian": self.laplacian,
             "max_spd": self.max_spd,
-            "rwse": self.rwse
+            "rwse": self.rwse,
+            "rrwp": self.rrwp,
+            "max_rw_steps": self.max_rw_steps,
         }
 
     def __str__(self):
@@ -74,6 +96,8 @@ class GraphLlamaConfig(LlamaConfig):
         laplacian=False, 
         max_spd=32, 
         rwse=False, 
+        rrwp=False,
+        max_rw_steps=8,
         graph_attn_bias=None, 
         **kwargs
     ):
@@ -91,7 +115,9 @@ class GraphLlamaConfig(LlamaConfig):
                 spd=spd, 
                 laplacian=laplacian, 
                 max_spd=max_spd, 
-                rwse=rwse
+                rwse=rwse,
+                rrwp=rrwp,
+                max_rw_steps=max_rw_steps
             )
 
     def to_dict(self):
@@ -118,16 +144,20 @@ class GraphLlamaConfig(LlamaConfig):
         laplacian = kwargs.pop("laplacian", graph_saved_data.get("laplacian", None))
         max_spd = kwargs.pop("max_spd", graph_saved_data.get("max_spd", None))
         rwse = kwargs.pop("rwse", graph_saved_data.get("rwse", None))
+        rrwp = kwargs.pop("rrwp", graph_saved_data.get("rrwp", None))
+        max_rw_steps = kwargs.pop("max_rw_steps", graph_saved_data.get("max_rw_steps", None))
 
         # 4. Return the instance
         return cls(
             spd=spd, 
-            laplacian=laplacian, 
             max_spd=max_spd, 
+            laplacian=laplacian, 
             rwse=rwse, 
+            rrwp=rrwp,
+            max_rw_steps=max_rw_steps,
             **config_dict
         )
-
+#endregion
 
 class LlamaAttentionWithBias(LlamaAttention):
     def __init__(self, config: GraphLlamaConfig, layer_idx: int):
@@ -139,9 +169,11 @@ class LlamaAttentionWithBias(LlamaAttention):
             raise ValueError("GraphLlamaConfig must contain a 'graph_attn_bias' attribute with the bias configuration.")
 
         self.require_spd = getattr(graph_attn_bias_config, 'spd', False)
+        self.max_spd = getattr(graph_attn_bias_config, 'max_spd', 32)
         self.require_laplacian = getattr(graph_attn_bias_config, 'laplacian', False)
         self.require_rwse = getattr(graph_attn_bias_config, 'rwse', False)
-        self.max_spd = getattr(graph_attn_bias_config, 'max_spd', 32)
+        self.require_rrwp = getattr(graph_attn_bias_config, 'rrwp', False)
+        self.max_rw_steps = getattr(graph_attn_bias_config, 'max_rw_steps', 8)
 
         self.num_heads = config.num_attention_heads
 
@@ -158,6 +190,23 @@ class LlamaAttentionWithBias(LlamaAttention):
         if self.require_rwse:
             # use the same initialization as the laplacian weights since they serve a similar purpose (mapping a distance to a bias value)
             self.rwse_weights = nn.Parameter(self._initial_laplacian_weights(config.num_attention_heads, epsilon=0))
+
+        # Linear transformation mapping RRWP_ij to Linear(RRWP_ij) (shared between all heads of each layer) + another Linear mapping to b_ij for each head (unique weights for each head) 
+        if self.require_rrwp:
+            hidden_rrwp_dim = 4 * self.max_rw_steps
+            
+            # Use an nn.Sequential block to combine the projections and the activation
+            self.rrwp_proj = nn.Sequential(
+                nn.Linear(self.max_rw_steps, hidden_rrwp_dim, bias=True),
+                nn.SiLU(),
+                # initialise the second layer weights to 0 so that the initial bias is 0 and doesn't interfere with training at the start
+                nn.Linear(hidden_rrwp_dim, config.num_attention_heads, bias=True)
+            )
+            # Initialize the second layer's parameters to 0
+            second_linear = self.rrwp_proj[2]
+            nn.init.zeros_(second_linear.weight)
+            nn.init.zeros_(second_linear.bias)
+            second_linear._is_hf_initialized = True
 
     def _initial_spd_weights(self, max_spd, num_heads, epsilon=1.0):
         """
@@ -185,6 +234,8 @@ class LlamaAttentionWithBias(LlamaAttention):
             raise ValueError("Laplacian bias is required but 'spectral_coords' is missing from input_graph_batch.")
         if self.require_rwse and (input_graph_batch is None or 'rwse' not in input_graph_batch):
             raise ValueError("RWSE bias is required but 'rwse' is missing from input_graph_batch.")
+        if self.require_rrwp and (input_graph_batch is None or 'rrwp' not in input_graph_batch):
+            raise ValueError("RRWP bias is required but 'rrwp' is missing from input_graph_batch.")
 
     def forward(
         self,
@@ -196,7 +247,7 @@ class LlamaAttentionWithBias(LlamaAttention):
 
         # CUSTOM ARGUMENTS
         node_ids: Optional[torch.LongTensor] = None,
-        input_graph_batch: Optional[List[TextGraph]] = None,
+        input_graph_batch: Optional[TextGraph] = None,
         
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
@@ -206,6 +257,7 @@ class LlamaAttentionWithBias(LlamaAttention):
         shortest_path_distances = input_graph_batch.get('shortest_path_dists', None) if self.require_spd else None
         spectral_coordinates = input_graph_batch.get('spectral_coords', None) if self.require_laplacian else None
         rwse_emb = input_graph_batch.get('rwse', None) if self.require_rwse else None
+        rrwp_emb = input_graph_batch.get('rrwp', None) if self.require_rrwp else None
 
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
@@ -233,7 +285,8 @@ class LlamaAttentionWithBias(LlamaAttention):
         # print("q_len:", q_len)
         # print("kv_len:", kv_len)
 
-        if (self.require_spd or self.require_laplacian) and node_ids is not None:
+        using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp
+        if using_graph_bias and node_ids is not None:
             device = query_states.device
             dtype = query_states.dtype
             # Initialize empty graph bias tensor: (batch_size, num_heads, q_len, kv_len)
@@ -248,7 +301,7 @@ class LlamaAttentionWithBias(LlamaAttention):
                 
                 # 1. Calculate SPD Bias
                 if self.require_spd and shortest_path_distances is not None:
-                    spd_mat = shortest_path_distances[batch_idx].to(device)
+                    spd_mat = shortest_path_distances[batch_idx]
                     
                     # Create a mask for where distance is > 0 (False/0 on the diagonal; True/1 elsewhere)
                     non_zero_mask = (spd_mat > 0)
@@ -265,7 +318,7 @@ class LlamaAttentionWithBias(LlamaAttention):
 
                 # 2. Calculate Spectral Bias
                 if self.require_laplacian and spectral_coordinates is not None:
-                    spec_coords = spectral_coordinates[batch_idx].to(device) # (num_nodes, spec_dim)
+                    spec_coords = spectral_coordinates[batch_idx] # (num_nodes, spec_dim)
                     
                     # Compute pairwise L2 distance -> (num_nodes, num_nodes)
                     spec_dist = torch.cdist(spec_coords, spec_coords, p=2.0)
@@ -276,7 +329,7 @@ class LlamaAttentionWithBias(LlamaAttention):
 
                 # 3. Calculate Random Walk Structural Encoding (RWSE) Bias
                 if self.require_rwse and rwse_emb is not None:
-                    rwse = rwse_emb[batch_idx].to(device) # (num_nodes, rwse_dim)
+                    rwse = rwse_emb[batch_idx] # (num_nodes, rwse_dim)
                     
                     # Compute pairwise L2 distance -> (num_nodes, num_nodes)
                     rwse_dist = torch.cdist(rwse, rwse, p=2.0)
@@ -285,7 +338,19 @@ class LlamaAttentionWithBias(LlamaAttention):
                     rwse_b = rwse_dist.unsqueeze(0) * self.rwse_weights.view(-1, 1, 1).to(dtype)
                     node_bias = node_bias + rwse_b
 
-                # 4. Expand Node-level bias to Token-level using advanced indexing
+                # 4. Calculate Relative Random Walk Probability (RRWP) Bias
+                if self.require_rrwp and rrwp_emb is not None:
+                    rrwp_features = rrwp_emb[batch_idx] # (num_nodes, num_nodes, max_rw_steps)
+                    
+                    # Compute the RRWP biases
+                    rrwp_b = self.rrwp_proj(rrwp_features).permute(2, 0, 1) # (num_heads, num_nodes, num_nodes)
+                    
+                    # Zero out the diagonal entries where i=j
+                    diag_mask = torch.eye(rrwp_b.shape[-1], device=device, dtype=torch.bool)
+                    rrwp_b.masked_fill_(diag_mask, 0.0)
+                    node_bias = node_bias + rrwp_b
+
+                # 5. Expand Node-level bias to Token-level using advanced indexing
                 if isinstance(node_bias, torch.Tensor):
                     idx_q = b_node_ids_q.unsqueeze(1)   # Shape: (q_len, 1)
                     idx_kv = b_node_ids_kv.unsqueeze(0) # Shape: (1, kv_len)
@@ -295,7 +360,7 @@ class LlamaAttentionWithBias(LlamaAttention):
 
                     graph_bias[batch_idx] = token_bias
 
-            # 5. Inject our custom graph bias into the existing attention mask
+            # 6. Inject our custom graph bias into the existing attention mask
             if attention_mask is None:
                 attention_mask = graph_bias
             else:
@@ -350,7 +415,7 @@ class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
 
         # CUSTOM ARGUMENT propagated here
         node_ids: Optional[torch.LongTensor] = None,
-        input_graph_batch: Optional[List[TextGraph]] = None,
+        input_graph_batch: Optional[TextGraph] = None,
 
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
@@ -417,7 +482,7 @@ class LlamaModelWithBias(LlamaModel):
         
         # Pass graph information as a custom argument to the model
         node_ids: Optional[torch.LongTensor] = None,
-        input_graph_batch: Optional[List[TextGraph]] = None,
+        input_graph_batch: Optional[TextGraph] = None,
 
         **flash_attn_kwargs,
     ):
@@ -675,8 +740,8 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             # Update attention mask for this graph
             attention_mask[i, 0, :prefix_length, :prefix_length] = 0  # Prefix nodes can attend to each other
             attention_mask[i, 0, prefix_length:prefix_length+prompt_length, :prefix_length] = 0  # Prompt node can attend to prefix nodes
-            attention_mask[i, 0, prefix_length:prefix_length+prompt_length, prefix_length:prefix_length+prompt_length] = torch.full((prompt_length, prompt_length), float('-inf')).triu(diagonal=1)  # Prompt node has causal attention to itself
-            attention_mask[i, 0, prefix_length+prompt_length:, prefix_length+prompt_length:] = torch.full((max_total_seq_len - prefix_length - prompt_length, max_total_seq_len - prefix_length - prompt_length), float('-inf')).fill_diagonal_(0.0)  # Padding tokens can attend only to themselves to avoid NaNs in attention weights
+            attention_mask[i, 0, prefix_length:prefix_length+prompt_length, prefix_length:prefix_length+prompt_length] = torch.full((prompt_length, prompt_length), float('-inf'), device=device).triu(diagonal=1)  # Prompt node has causal attention to itself
+            attention_mask[i, 0, prefix_length+prompt_length:, prefix_length+prompt_length:] = torch.full((max_total_seq_len - prefix_length - prompt_length, max_total_seq_len - prefix_length - prompt_length), float('-inf'), device=device).fill_diagonal_(0.0)  # Padding tokens can attend only to themselves to avoid NaNs in attention weights
 
         prepared_token_ids = torch.full((batch_size, max_total_seq_len), self.pad_token_id, dtype=torch.long, device=device)
         prepared_position_ids = torch.zeros((batch_size, max_total_seq_len), dtype=torch.long, device=device)
@@ -746,7 +811,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         logits_to_keep: Union[int, torch.Tensor] = 0,
 
         # graph-specific inputs
-        input_graph_batch: Optional[List[TextGraph]] = None,
+        input_graph_batch: Optional[TextGraph] = None,
 
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
@@ -768,6 +833,8 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                     'shortest_path_dists'   - precomputed shortest path distances       ---> List of batch_size elements, each being a tensor of shape (num_nodes, num_nodes) representing the pairwise shortest path distances between nodes
                 ...(other arguments are the same as the original forward method)
         """
+        device = next(self.parameters()).device
+        input_graph_batch = send_to_device(input_graph_batch, device)
 
         prompt_node = input_graph_batch.get('prompt_node', None)
         if prompt_node is None:
@@ -849,6 +916,7 @@ if __name__ == "__main__":
         tokenizer=tokenizer, 
         spec_emb_dim=4,
         max_rwse_steps=6,
+        max_rrwp_steps=4,
     )
     example_labels = prepare_example_labels(graph_dataset_sample)
 
@@ -866,6 +934,7 @@ if __name__ == "__main__":
     outputs = model(input_graph_batch=input_graph_batch, labels=example_labels)
     print("Loss:", outputs.loss)
     print("Logits shape:", outputs.logits.shape)
+
 
     # run the model to generate 5 tokens autoregressively
     # TODO: test once generation is implemented in the model

@@ -185,12 +185,12 @@ def training_run(
 
 
 if __name__ == "__main__":
-    # BIAS_TYPE = "combined" # options: "none", "spd", "laplacian", "combined"
-    BIAS_PARAMS = { "spd": True, "max_spd": 4, "laplacian": False, "rwse": True, "rrwp": False } # set the flags for spd, laplacian, rwse, and rrwp
+    # set the flags for spd, laplacian, rwse, and rrwp
+    BIAS_PARAMS = { "spd": False, "max_spd": 4, "laplacian": False, "rwse": False, "rrwp": True, "max_rw_steps": 8 }
     TRAIN_DATASET_SIZE = 10_000
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
-    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_weights"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
+    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
     RUN_NAME = f"new_params_only_{'spd+' if BIAS_PARAMS['spd'] else ''}{'laplacian+' if BIAS_PARAMS['laplacian'] else ''}{'rwse+' if BIAS_PARAMS['rwse'] else ''}{'rrwp+' if BIAS_PARAMS['rrwp'] else ''}"
     # ACTIVE_PARAMS = "all"
     # RUN_NAME = f"all_params_{BIAS_TYPE}"
@@ -206,14 +206,14 @@ if __name__ == "__main__":
     train_dataset_path, _ = dataset_path_and_size(TRAIN_DATASET_SIZE)
     if not os.path.exists(train_dataset_path):
         print(f"Dataset not found at {train_dataset_path}. Creating new dataset...")
-        create_and_save_dataset(dataset_size=TRAIN_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME)
+        create_and_save_dataset(dataset_size=TRAIN_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME, max_rrwp_steps=BIAS_PARAMS["max_rw_steps"])
 
     train_dataset = TextGraphDataset.load(train_dataset_path)
 
     eval_dataset_path, _ = dataset_path_and_size(EVAL_DATASET_SIZE)
     if not os.path.exists(eval_dataset_path):
         print(f"Dataset not found at {eval_dataset_path}. Creating new dataset...")
-        create_and_save_dataset(dataset_size=EVAL_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME)
+        create_and_save_dataset(dataset_size=EVAL_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME, max_rrwp_steps=BIAS_PARAMS["max_rw_steps"])
 
     eval_dataset = TextGraphDataset.load(eval_dataset_path)
     
