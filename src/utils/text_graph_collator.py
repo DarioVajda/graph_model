@@ -29,7 +29,9 @@ class GraphCollator:
 
         spectral_coords = [ item['spectral_coords'] for item in batch ] if "spectral_coords" in batch[0] else None
         shortest_path_dists = [ item['shortest_path_dists'] for item in batch ] if "shortest_path_dists" in batch[0] else None
-        
+        rwse = [ item['rwse'] for item in batch ] if "rwse" in batch[0] else None
+        rrwp = [ item['rrwp'] for item in batch ] if "rrwp" in batch[0] else None
+
         return {
             'num_nodes': sizes,
             'text': texts,
@@ -39,4 +41,6 @@ class GraphCollator:
             'labels': labels,
             'spectral_coords': spectral_coords,
             'shortest_path_dists': shortest_path_dists,
+            'rwse': rwse,
+            'rrwp': rrwp
         }

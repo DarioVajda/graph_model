@@ -12,7 +12,7 @@ There are two types of biases that can be added to the attention scores:
         b_ij = w_k * d_ij
       where d_ij is the L2 distance between the spectral coordinates of nodes i and j
       (spectral coordinates are the eigenvectors of the graph Laplacian)
-    - Trainable parameters: spectral_weights (num_layers * num_heads total parameters)
+    - Trainable parameters: laplacian_weights (num_layers * num_heads total parameters)
 """
 
 import torch
@@ -42,33 +42,122 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 
 import warnings
 
-class GraphLlamaConfig(LlamaConfig):
-    def __init__(self, spd=False, laplacian=False, max_spd=32, **kwargs):
-        super().__init__(**kwargs)
+from transformers import LlamaConfig
+
+import json
+from transformers import LlamaConfig
+
+class GraphAttnBiasConfig:
+    def __init__(self, spd=False, laplacian=False, max_spd=32, rwse=False):
         self.spd = spd
         self.laplacian = laplacian
         self.max_spd = max_spd
+        self.rwse = rwse
+
+    def to_dict(self):
+        return {
+            "spd": self.spd,
+            "laplacian": self.laplacian,
+            "max_spd": self.max_spd,
+            "rwse": self.rwse
+        }
+
+    def __str__(self):
+        return json.dumps(self.to_dict())
+
+class GraphLlamaConfig(LlamaConfig):
+    model_type = "graph_llama"
+
+    def __init__(
+        self, 
+        spd=False, 
+        laplacian=False, 
+        max_spd=32, 
+        rwse=False, 
+        graph_attn_bias=None, 
+        **kwargs
+    ):
+        # 1. Initialize standard Llama parameters
+        super().__init__(**kwargs)
+
+        # 2. Handle reconstruction from JSON
+        # When loaded from JSON, the data comes in as a dict named 'graph_attn_bias'
+        if isinstance(graph_attn_bias, dict):
+            self.graph_attn_bias = GraphAttnBiasConfig(**graph_attn_bias)
+        else:
+            # When initialized manually (e.g. from_pretrained(..., spd=True))
+            # or when 'graph_attn_bias' is missing from JSON
+            self.graph_attn_bias = GraphAttnBiasConfig(
+                spd=spd, 
+                laplacian=laplacian, 
+                max_spd=max_spd, 
+                rwse=rwse
+            )
+
+    def to_dict(self):
+        """Ensures the nested object is serialized as a dict, not a class instance."""
+        output = super().to_dict()
+        if hasattr(self, "graph_attn_bias"):
+            output["graph_attn_bias"] = self.graph_attn_bias.to_dict()
+        return output
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        # 1. Get the dictionary from the local path or Hub
+        config_dict, kwargs = cls.get_config_dict(pretrained_model_name_or_path, **kwargs)
+        
+        # 2. Check if this is one of YOUR models (it will have the graph_attn_bias key)
+        # If it's a standard Llama model, this key won't exist.
+        graph_saved_data = config_dict.get("graph_attn_bias", {})
+
+        # 3. Priority logic: 
+        #    - First: Use values explicitly passed in kwargs (user overrides)
+        #    - Second: Use values saved in the config_dict (saved model settings)
+        #    - Third: Use the default values
+        spd = kwargs.pop("spd", graph_saved_data.get("spd", None))
+        laplacian = kwargs.pop("laplacian", graph_saved_data.get("laplacian", None))
+        max_spd = kwargs.pop("max_spd", graph_saved_data.get("max_spd", None))
+        rwse = kwargs.pop("rwse", graph_saved_data.get("rwse", None))
+
+        # 4. Return the instance
+        return cls(
+            spd=spd, 
+            laplacian=laplacian, 
+            max_spd=max_spd, 
+            rwse=rwse, 
+            **config_dict
+        )
 
 
 class LlamaAttentionWithBias(LlamaAttention):
-    def __init__(self, config: LlamaConfig, layer_idx: int, require_spd=False, require_laplacian=False, max_spd=20):
+    def __init__(self, config: GraphLlamaConfig, layer_idx: int):
         super().__init__(config, layer_idx)
         
         # initialise all additional parameters needed for the attention bias
-        self.require_spd = require_spd
-        self.require_laplacian = require_laplacian
+        graph_attn_bias_config = getattr(config, "graph_attn_bias", None)  # Get the graph_attn_bias config, or use defaults if not present
+        if graph_attn_bias_config is None:
+            raise ValueError("GraphLlamaConfig must contain a 'graph_attn_bias' attribute with the bias configuration.")
+
+        self.require_spd = getattr(graph_attn_bias_config, 'spd', False)
+        self.require_laplacian = getattr(graph_attn_bias_config, 'laplacian', False)
+        self.require_rwse = getattr(graph_attn_bias_config, 'rwse', False)
+        self.max_spd = getattr(graph_attn_bias_config, 'max_spd', 32)
 
         self.num_heads = config.num_attention_heads
-        self.max_spd = max_spd
 
         # Set of lookup embeddings mapping distances {0, 1,... max_spd-1, ≥max_spd} to bias values for each attention head separately
         # Note that we use nn.Parameter, so that the initialisation doesn't get overridden by the HF's _init_weights method
         if self.require_spd:
-            self.spd_weights = nn.Parameter(self._initial_spd_weights(max_spd, config.num_attention_heads, epsilon=0))  # This represents distances 1 to max_spd (inclusive)
+            self.spd_weights = nn.Parameter(self._initial_spd_weights(self.max_spd, config.num_attention_heads, epsilon=0))  # This represents distances 1 to max_spd (inclusive)
         
         # One weight value per attention head to map the spectral coordinate distance d_ij to an attention bias value of b_ij = w_k * d_ij
         if self.require_laplacian:
-            self.spectral_weights = nn.Parameter(self._initial_spectral_weights(config.num_attention_heads, epsilon=0))
+            self.laplacian_weights = nn.Parameter(self._initial_laplacian_weights(config.num_attention_heads, epsilon=0))
+
+        # One weight value per attention head to map the Random Walk Structural Encoding distance to an attention bias value of b_ij = w_k * t_ij
+        if self.require_rwse:
+            # use the same initialization as the laplacian weights since they serve a similar purpose (mapping a distance to a bias value)
+            self.rwse_weights = nn.Parameter(self._initial_laplacian_weights(config.num_attention_heads, epsilon=0))
 
     def _initial_spd_weights(self, max_spd, num_heads, epsilon=1.0):
         """
@@ -82,11 +171,20 @@ class LlamaAttentionWithBias(LlamaAttention):
             spd_weights[dist] = bias_value
         return spd_weights
 
-    def _initial_spectral_weights(self, num_heads, epsilon=0.02):
+    def _initial_laplacian_weights(self, num_heads, epsilon=0.02):
         """
             Initialize the spectral weights to small random values.
         """
         return torch.randn(num_heads) * epsilon
+
+    def _validate_input_graph_batch(self, input_graph_batch):
+        # Validate that input_graph_batch contains the necessary information based on the required bias types
+        if self.require_spd and (input_graph_batch is None or 'shortest_path_dists' not in input_graph_batch):
+            raise ValueError("Shortest Path Distance bias is required but 'shortest_path_dists' is missing from input_graph_batch.")
+        if self.require_laplacian and (input_graph_batch is None or 'spectral_coords' not in input_graph_batch):
+            raise ValueError("Laplacian bias is required but 'spectral_coords' is missing from input_graph_batch.")
+        if self.require_rwse and (input_graph_batch is None or 'rwse' not in input_graph_batch):
+            raise ValueError("RWSE bias is required but 'rwse' is missing from input_graph_batch.")
 
     def forward(
         self,
@@ -98,11 +196,17 @@ class LlamaAttentionWithBias(LlamaAttention):
 
         # CUSTOM ARGUMENTS
         node_ids: Optional[torch.LongTensor] = None,
-        shortest_path_distances: Optional[List[torch.Tensor]] = None,
-        spectral_coordinates: Optional[List[torch.Tensor]] = None,
+        input_graph_batch: Optional[List[TextGraph]] = None,
         
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+
+        # Validate required inputs based on bias type (set to None if not required)
+        self._validate_input_graph_batch(input_graph_batch)
+        shortest_path_distances = input_graph_batch.get('shortest_path_dists', None) if self.require_spd else None
+        spectral_coordinates = input_graph_batch.get('spectral_coords', None) if self.require_laplacian else None
+        rwse_emb = input_graph_batch.get('rwse', None) if self.require_rwse else None
+
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -157,24 +261,31 @@ class LlamaAttentionWithBias(LlamaAttention):
                     
                     # Zero out the entries where distance was originally 0 (non_zero_mask is (N, N), spd_b is (H, N, N))
                     spd_b = spd_b * non_zero_mask.unsqueeze(0)
-                    
                     node_bias = node_bias + spd_b
 
                 # 2. Calculate Spectral Bias
                 if self.require_laplacian and spectral_coordinates is not None:
-                    spec_coords = spectral_coordinates[batch_idx].to(device)
+                    spec_coords = spectral_coordinates[batch_idx].to(device) # (num_nodes, spec_dim)
+                    
                     # Compute pairwise L2 distance -> (num_nodes, num_nodes)
                     spec_dist = torch.cdist(spec_coords, spec_coords, p=2.0)
+                    
                     # Multiply by learned weights per head -> (num_heads, num_nodes, num_nodes)
-                    spec_b = spec_dist.unsqueeze(0) * self.spectral_weights.view(-1, 1, 1).to(dtype)
+                    spec_b = spec_dist.unsqueeze(0) * self.laplacian_weights.view(-1, 1, 1).to(dtype)
                     node_bias = node_bias + spec_b
 
-                # # modify the value of the graph_bias to easier inspect the steps that follow (for debugging)
-                # for i in range(node_bias.shape[1]):
-                #     for j in range(node_bias.shape[2]):
-                #         node_bias[:, i, j] = i+j/10.0 # this will result in outputs i,j
+                # 3. Calculate Random Walk Structural Encoding (RWSE) Bias
+                if self.require_rwse and rwse_emb is not None:
+                    rwse = rwse_emb[batch_idx].to(device) # (num_nodes, rwse_dim)
+                    
+                    # Compute pairwise L2 distance -> (num_nodes, num_nodes)
+                    rwse_dist = torch.cdist(rwse, rwse, p=2.0)
+                    
+                    # Multiply by learned weights per head -> (num_heads, num_nodes, num_nodes)
+                    rwse_b = rwse_dist.unsqueeze(0) * self.rwse_weights.view(-1, 1, 1).to(dtype)
+                    node_bias = node_bias + rwse_b
 
-                # 3. Expand Node-level bias to Token-level using advanced indexing
+                # 4. Expand Node-level bias to Token-level using advanced indexing
                 if isinstance(node_bias, torch.Tensor):
                     idx_q = b_node_ids_q.unsqueeze(1)   # Shape: (q_len, 1)
                     idx_kv = b_node_ids_kv.unsqueeze(0) # Shape: (1, kv_len)
@@ -184,7 +295,7 @@ class LlamaAttentionWithBias(LlamaAttention):
 
                     graph_bias[batch_idx] = token_bias
 
-            # 4. Inject our custom graph bias into the existing attention mask
+            # 5. Inject our custom graph bias into the existing attention mask
             if attention_mask is None:
                 attention_mask = graph_bias
             else:
@@ -218,15 +329,12 @@ class LlamaAttentionWithBias(LlamaAttention):
 
 
 class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
-    def __init__(self, config: LlamaConfig, layer_idx: int, require_spd=False, require_laplacian=False, max_spd=None):
+    def __init__(self, config: GraphLlamaConfig, layer_idx: int):
         super().__init__(config, layer_idx)
 
         self.self_attn = LlamaAttentionWithBias(
             config=config, 
             layer_idx=layer_idx, 
-            require_spd=require_spd, 
-            require_laplacian=require_laplacian,
-            max_spd=max_spd,
         )
 
     def forward(
@@ -242,8 +350,7 @@ class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
 
         # CUSTOM ARGUMENT propagated here
         node_ids: Optional[torch.LongTensor] = None,
-        shortest_path_distances: Optional[List[torch.Tensor]] = None,
-        spectral_coordinates: Optional[List[torch.Tensor]] = None,
+        input_graph_batch: Optional[List[TextGraph]] = None,
 
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
@@ -264,8 +371,7 @@ class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
             
             # CUSTOM ARGUMENTS
             node_ids=node_ids,
-            shortest_path_distances=shortest_path_distances,
-            spectral_coordinates=spectral_coordinates,
+            input_graph_batch=input_graph_batch,
 
             **kwargs,
         )
@@ -284,16 +390,13 @@ class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
 
 
 class LlamaModelWithBias(LlamaModel):
-    def __init__(self, config: LlamaConfig, require_spd=False, require_laplacian=False, max_spd=None):
+    def __init__(self, config: GraphLlamaConfig):
         super().__init__(config)
         # Re-initialize the layers using the LlamaDecoderLayerWithBias
         self.layers = nn.ModuleList([
             LlamaDecoderLayerWithBias(
                 config, 
                 layer_idx=layer_idx, 
-                require_spd=require_spd, 
-                require_laplacian=require_laplacian,
-                max_spd=max_spd
             )
             for layer_idx in range(config.num_hidden_layers)
         ])
@@ -314,8 +417,7 @@ class LlamaModelWithBias(LlamaModel):
         
         # Pass graph information as a custom argument to the model
         node_ids: Optional[torch.LongTensor] = None,
-        shortest_path_distances: Optional[List[torch.Tensor]] = None,
-        spectral_coordinates: Optional[List[torch.Tensor]] = None,
+        input_graph_batch: Optional[List[TextGraph]] = None,
 
         **flash_attn_kwargs,
     ):
@@ -399,8 +501,7 @@ class LlamaModelWithBias(LlamaModel):
 
                     # Graph data used for calculating the attention bias
                     node_ids,
-                    shortest_path_distances,
-                    spectral_coordinates,
+                    input_graph_batch,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -415,8 +516,7 @@ class LlamaModelWithBias(LlamaModel):
 
                     # Graph data used for calculating the attention bias
                     node_ids=node_ids,
-                    shortest_path_distances=shortest_path_distances,
-                    spectral_coordinates=spectral_coordinates,
+                    input_graph_batch=input_graph_batch,
 
                     **flash_attn_kwargs,
                 )
@@ -456,10 +556,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                 bias_type   --> Optional string to specify the type of bias to use. If provided, it will override the corresponding values in the config. Must be one of 'spd', 'laplacian', 'combined' (using those two), 'none', or simply don't specify it and leave as None to use the config values.
                 max_spd     --> Optional int to specify the maximum shortest path distance to consider for the SPD bias. If provided, it will override the max_spd value in the config. This is only relevant if bias_type is 'spd' or 'combined'.
         """
-        super().__init__(config)
-
-        self._init_requirements(config)
-        
         # keep everything backward compatible with earlier versions by allowing the use of bias_type and max_spd arguments and saving the parameter values in the config
         if bias_type is not None:
             # print a warning because the config values will be overridden by the bias_type argument
@@ -486,22 +582,18 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                 config.laplacian = False
             else:
                 raise ValueError(f"Invalid bias_type: {bias_type}. Must be one of 'spd', 'laplacian', 'combined', 'none', or simply don't specify it and leave as None to use the config values.")
-
         if max_spd is not None:
             warnings.warn(f"max_spd argument is provided ({max_spd}), which will override the max_spd value in the config. If you want to use the config value instead, simply don't specify max_spd and the parameter will be read from the config as intended. This warning can be removed by removing the max_spd argument and relying solely on the config value.")
             self.max_spd = max_spd
             config.max_spd = max_spd
 
+        super().__init__(config)
+        self._init_requirements(config)
+
         # Swap the internal model
-        self.model = LlamaModelWithBias(
-            config, 
-            require_spd=self.require_spd, 
-            require_laplacian=self.require_laplacian,
-            max_spd=max_spd if self.require_spd else None,
-        )
+        self.model = LlamaModelWithBias(config)
 
         self.pad_token_id = config.pad_token_id if config.pad_token_id is not None else config.eos_token_id
-        print("Using pad_token_id:", self.pad_token_id)
         
         self.post_init()
 
@@ -654,7 +746,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         logits_to_keep: Union[int, torch.Tensor] = 0,
 
         # graph-specific inputs
-        input_graph_batch: Optional[TextGraph] = None,
+        input_graph_batch: Optional[List[TextGraph]] = None,
 
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
@@ -685,20 +777,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         if input_ids is None:
             raise ValueError("input_graph_batch must contain 'input_ids' key with the tokenized input ids for each node in each graph in the batch.")
 
-        # Validate required inputs based on bias type (set to None if not required)
-        shortest_path_distances = input_graph_batch.get('shortest_path_dists', None)
-        if self.require_spd:
-            if shortest_path_distances is None:
-                raise ValueError("Bias type requires shortest path distances, but 'shortest_path_dists' is missing in input_graph_batch.")
-        else:
-            shortest_path_distances = None
-
-        spectral_coordinates = input_graph_batch.get('spectral_coords', None)
-        if self.require_laplacian:
-            if spectral_coordinates is None:
-                raise ValueError("Bias type requires spectral coordinates, but 'spectral_coords' is missing in input_graph_batch.")
-        else:
-            spectral_coordinates = None
 
         # Prepare the inputs for the forward pass
         prepared_inputs = self._prepare_inputs(input_ids, prompt_node)
@@ -724,8 +802,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             
             # CUSTOM ARGUMENTS
             node_ids=node_ids,                               # <-- node ids indicating which node each token belongs to (used for calculating attention bias)
-            shortest_path_distances=shortest_path_distances, # <-- pass shortest path distances if required
-            spectral_coordinates=spectral_coordinates,       # <-- pass spectral coordinates if required
+            input_graph_batch=input_graph_batch,             # <-- pass the whole graph batch in case it's needed for more complex bias calculations
 
             **kwargs,
         )
@@ -770,7 +847,8 @@ if __name__ == "__main__":
         base_num_nodes=5, 
         calc_attributes=True, 
         tokenizer=tokenizer, 
-        spec_emb_dim=4
+        spec_emb_dim=4,
+        max_rwse_steps=6,
     )
     example_labels = prepare_example_labels(graph_dataset_sample)
 
@@ -778,10 +856,16 @@ if __name__ == "__main__":
     collator = GraphCollator(tokenizer=tokenizer)
     input_graph_batch = collator([ graph_dataset_sample[i] for i in range(len(graph_dataset_sample)) ])
 
-    model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", bias_type="combined")
-    print('=' * 70)
+    # model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", bias_type="combined")
+    # config = GraphLlamaConfig.from_pretrained("meta-llama/Llama-3.2-1B", spd=True, laplacian=True, max_spd=8, rwse=True)
+    config = GraphLlamaConfig.from_pretrained("./src/models/graph_llama1b_config.json")
+    print(config.graph_attn_bias)
+    # model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", config=config)
+    model = GraphLlamaForCausalLM(config=config)
     print('=' * 70)
     outputs = model(input_graph_batch=input_graph_batch, labels=example_labels)
+    print("Loss:", outputs.loss)
+    print("Logits shape:", outputs.logits.shape)
 
     # run the model to generate 5 tokens autoregressively
     # TODO: test once generation is implemented in the model

@@ -77,7 +77,7 @@ def get_prompt_node_labels(example):
     return labels
 
 
-def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None):
+def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16):
     dataset = generate_graph_dataset(num_examples, min_size=min_size, max_size=max_size)
 
     # FOR EACH EXAMPLE:
@@ -105,6 +105,8 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
     ds = TextGraphDataset(graphs)
     ds.compute_spectral_coordinates(embedding_dim=spectral_dims)
     ds.compute_shortest_path_distances()
+    ds.compute_rwse(max_rwse_steps=max_rwse_steps)
+    ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)
 
     if tokenizer_name is None:
         raise ValueError("Tokenizer must be provided to prepare_dataset function.")

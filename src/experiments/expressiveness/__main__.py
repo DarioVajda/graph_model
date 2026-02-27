@@ -1,5 +1,5 @@
 from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.llama_attn_bias import GraphLlamaForCausalLM
+from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
 
 from .data_gen import create_and_save_dataset, dataset_path_and_size
 
@@ -11,8 +11,10 @@ from transformers import TrainingArguments, AutoTokenizer
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def init_model(model_name, device, bias_type, max_spd=32):
-    model = GraphLlamaForCausalLM.from_pretrained(model_name, bias_type=bias_type, max_spd=max_spd, attn_implementation="eager")
+def init_model(model_name, device, bias_params):
+    # model = GraphLlamaForCausalLM.from_pretrained(model_name, bias_type=bias_type, max_spd=max_spd, attn_implementation="eager")
+    config = GraphLlamaConfig.from_pretrained(model_name, **bias_params)
+    model = GraphLlamaForCausalLM.from_pretrained(model_name, config=config, attn_implementation="eager")
     model.to(device)
     for param in model.parameters():
         param.requires_grad = False
@@ -183,19 +185,20 @@ def training_run(
 
 
 if __name__ == "__main__":
-    BIAS_TYPE = "combined" # options: "none", "spd", "laplacian", "combined"
+    # BIAS_TYPE = "combined" # options: "none", "spd", "laplacian", "combined"
+    BIAS_PARAMS = { "spd": True, "max_spd": 4, "laplacian": False, "rwse": True, "rrwp": False } # set the flags for spd, laplacian, rwse, and rrwp
     TRAIN_DATASET_SIZE = 10_000
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
-    ACTIVE_PARAMS = ["spd_weights", "spectral_weights"]
-    RUN_NAME = f"new_params_only_{BIAS_TYPE}"
+    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_weights"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
+    RUN_NAME = f"new_params_only_{'spd+' if BIAS_PARAMS['spd'] else ''}{'laplacian+' if BIAS_PARAMS['laplacian'] else ''}{'rwse+' if BIAS_PARAMS['rwse'] else ''}{'rrwp+' if BIAS_PARAMS['rrwp'] else ''}"
     # ACTIVE_PARAMS = "all"
     # RUN_NAME = f"all_params_{BIAS_TYPE}"
 
     set_wandb_project("GraphLLM")
     device = get_device()
 
-    model, tokenizer = init_model(model_name=MODEL_NAME, device=device, bias_type=BIAS_TYPE, max_spd=4)
+    model, tokenizer = init_model(model_name=MODEL_NAME, device=device, bias_params=BIAS_PARAMS)
 
     # --------------------------------------------------------------------------
     #region ----------------------- LOAD DATASETS ------------------------------
@@ -213,6 +216,7 @@ if __name__ == "__main__":
         create_and_save_dataset(dataset_size=EVAL_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME)
 
     eval_dataset = TextGraphDataset.load(eval_dataset_path)
+    
     collator = GraphCollator()
 
     possible_labels = [" Yes", " No" ]
@@ -237,13 +241,6 @@ if __name__ == "__main__":
     print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable_params}")
     print('-'*50)
 
-    print("Example bias parameters before fine-tuning:")
-    for name, param in model.named_parameters():
-        if "1.self_attn.spd_weights" in name or "1.self_attn.spectral_weights" in name:
-            print(f" - {name}: shape {param.shape}\n")
-            print(param.data)
-            print('-'*50)
-
     training_run(
         model=model,
         train_dataset=train_dataset,
@@ -257,14 +254,6 @@ if __name__ == "__main__":
         label_options=tokenized_possible_labels,
         pad_token_id=pad_token_id,
     )
-
-    # inspect some of the bias parameters after fine-tuning (model.layers.1.self_attn.spd_weights, model.layers.1.self_attn.spectral_weights)
-    print("Bias parameters after fine-tuning:")
-    for name, param in model.named_parameters():
-        if "1.self_attn.spd_weights" in name or "1.self_attn.spectral_weights" in name:
-            print(f" - {name}: shape {param.shape}\n")
-            print(param.data)
-            print('-'*50)
 
     #endregion
     # --------------------------------------------------------------------------

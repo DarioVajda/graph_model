@@ -9,6 +9,8 @@ from typing import List, Dict, Optional, Any, Union
 from tqdm import tqdm
 
 from .spectral_coordinates import get_spectral_coordinates
+from .rwse import compute_rwse
+from .rrwp import compute_rrwp
 
 # define the item type for type hints (must have 'text', 'num_nodes', 'prompt_node' and 'edges' at minimum and may have 'input_ids', 'spectral_coords', 'shortest_path_dists')
 TextGraph = Dict[str, Any]
@@ -23,7 +25,7 @@ class TextGraphDataset(Dataset):
     - Token IDs (Ragged)
     - Laplacian Spectral Coordinates (Dense, per graph)
     - Shortest Path Distances (Dense/Flattened, per graph)
-    
+    - Random Walk Structural Encoding (Dense, per graph)
     Backend: Hugging Face Datasets (Arrow) + NetworkX (Topology).
     """
 
@@ -76,6 +78,8 @@ class TextGraphDataset(Dataset):
          - 'edges'                  ---> List of tuples (edges between nodes, retrieved from RAM)
          - 'spectral_coords'        ---> Tensor of shape (num_nodes, spectral_dim)
          - 'shortest_path_dists'    ---> Tensor of shape (num_nodes, num_nodes)
+         - 'rwse'                   ---> Tensor of shape (num_nodes, max_rwse_steps)
+         - 'rrwp'                   ---> Dictionary of relative random walk probabilities for each node pair (num_nodes, num_nodes, max_rrwp_steps)
          - 'input_ids'              ---> List of num_nodes lists of token ids (tokenized input for each node)
          - 'labels'                 ---> Tensor of labels for the prompt node
         """
@@ -102,7 +106,7 @@ class TextGraphDataset(Dataset):
         if 'shortest_path_dists' in item and item['shortest_path_dists'] is not None:
             n = item['num_nodes']
             if len(item['shortest_path_dists']) == 0:
-                 item['shortest_path_dists'] = None
+                item['shortest_path_dists'] = None
             else:
                 flat_spd = torch.tensor(item['shortest_path_dists'], dtype=torch.int32)
                 # Safety check for shape
@@ -110,6 +114,15 @@ class TextGraphDataset(Dataset):
                     item['shortest_path_dists'] = flat_spd.reshape((n, n))
                 else:
                     item['shortest_path_dists'] = torch.zeros((n,n))
+
+        # Handle RWSE (Convert list back to torch tensor)
+        if 'rwse' in item and item['rwse'] is not None:
+            item['rwse'] = torch.tensor(item['rwse'], dtype=torch.float32)
+
+        # Handle RRWP (Convert list back to torch tensor)
+        if 'rrwp' in item and item['rrwp'] is not None:
+            # RRWP is stored as a list of lists (num_nodes, num_nodes, max_rrwp_steps)
+            item['rrwp'] = torch.tensor(item['rrwp'], dtype=torch.float32).reshape((item['num_nodes'], item['num_nodes'], -1))
 
         # Handle Labels
         if 'labels' in item and item['labels'] is not None:
@@ -186,7 +199,7 @@ class TextGraphDataset(Dataset):
             # Handle List of Arrays/Tensors (if previous steps produced list of objects)
             if isinstance(coords, list) and n > 0:
                 if isinstance(coords[0], torch.Tensor) or hasattr(coords[0], 'tolist'):
-                     coords = [c.tolist() if hasattr(c, 'tolist') else c for c in coords]
+                    coords = [c.tolist() if hasattr(c, 'tolist') else c for c in coords]
 
             coords_list.append(coords)
 
@@ -222,6 +235,30 @@ class TextGraphDataset(Dataset):
             self._hf_dataset = self._hf_dataset.remove_columns("shortest_path_dists")
             
         self._hf_dataset = self._hf_dataset.add_column("shortest_path_dists", spd_list)
+
+    def compute_rwse(self, max_rwse_steps=8):
+        """Computes Random Walk Structural Encoding and adds 'rwse' column."""
+        print("Computing Random Walk Structural Encoding (RWSE)...")
+        rwse_dataset_list = []
+        for g in tqdm(self.graphs, desc="Computing RWSE"):
+            rwse_dict = compute_rwse(g, max_rwse_steps)
+            rwse_list = [ rwse_dict[i] for i in range(g.number_of_nodes()) ]
+            rwse_dataset_list.append(rwse_list)
+        if "rwse" in self._hf_dataset.column_names:
+            self._hf_dataset = self._hf_dataset.remove_columns("rwse")
+        self._hf_dataset = self._hf_dataset.add_column("rwse", rwse_dataset_list)
+
+    def compute_rrwp(self, max_rrwp_steps=8):
+        """Computes Relative Random Walk Probabilities (RRWP) and adds 'rrwp' column."""
+        print("Computing Relative Random Walk Probabilities (RRWP)...")
+        rrwp_dataset_list = []
+        for g in tqdm(self.graphs, desc="Computing RRWP"):
+            rrwp_dict = compute_rrwp(g, max_distance=max_rrwp_steps)
+            rrwp_list = [ rrwp_dict[(i,j)] for i in range(g.number_of_nodes()) for j in range(g.number_of_nodes()) ]
+            rrwp_dataset_list.append(rrwp_list)
+        if "rrwp" in self._hf_dataset.column_names:
+            self._hf_dataset = self._hf_dataset.remove_columns("rrwp")
+        self._hf_dataset = self._hf_dataset.add_column("rrwp", rrwp_dataset_list)
 
     def compute_labels(self, get_graph_labels):
         """Computes labels for each graph using the provided function and adds 'labels' column."""
@@ -312,7 +349,7 @@ class TextGraphDataset(Dataset):
         hf_dataset = load_from_disk(features_path)
         return cls(graphs=graphs, _hf_dataset=hf_dataset)
 
-def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attributes=False, tokenizer=None, spec_emb_dim=4) -> TextGraphDataset:
+def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attributes=False, tokenizer=None, spec_emb_dim=4, max_rwse_steps=4) -> TextGraphDataset:
     graphs = []
     for i in range(dataset_size):
         # Uses barabasi_albert_graph (safe for all nx versions)
@@ -325,6 +362,7 @@ def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attribute
     if calc_attributes:
         ds.compute_spectral_coordinates(embedding_dim=spec_emb_dim)
         ds.compute_shortest_path_distances()
+        ds.compute_rwse(max_rwse_steps=max_rwse_steps)
         if tokenizer is not None:
             ds.tokenize(tokenizer)
     return ds
