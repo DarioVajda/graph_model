@@ -147,10 +147,12 @@ def training_run(
         # Evaluation arguments:
         eval_strategy="steps",                                  # Evaluate every eval_steps during training
         eval_steps=25,                                          # Number of steps between evaluations
-        load_best_model_at_end=True,                            # Load the best model at the end of training
-        metric_for_best_model="eval_loss",                      # Metric to use for selecting the best model
-        greater_is_better=False,                                # Lower eval_loss is better
+        save_strategy="steps",                                  # Save a checkpoint based on save_steps
+        save_steps=100,                                         # Number of steps between saving checkpoints
+        metric_for_best_model="eval_classification_accuracy",   # Metric to use for selecting the best model
+        greater_is_better=True,                                 # Higher classification_accuracy is better
         save_total_limit=5,                                     # Maximum number of checkpoints to store
+        load_best_model_at_end=True,                            # Load the best model at the end of training
 
         # WandB logging:
         report_to="wandb",                                      # Report training metrics to Weights & Biases
@@ -186,7 +188,7 @@ def training_run(
 
 if __name__ == "__main__":
     # set the flags for spd, laplacian, rwse, and rrwp
-    BIAS_PARAMS = { "spd": False, "max_spd": 4, "laplacian": False, "rwse": False, "rrwp": True, "max_rw_steps": 8 }
+    BIAS_PARAMS = { "spd": False, "max_spd": 4, "laplacian": False, "rwse": True, "rrwp": False, "max_rw_steps": 8 }
     TRAIN_DATASET_SIZE = 10_000
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
