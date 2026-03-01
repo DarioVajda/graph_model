@@ -2,6 +2,7 @@ import networkx as nx
 import numpy as np
 from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigh
+import warnings
 
 def get_spectral_coordinates(G, m, random_sign_flips=False):
     N = G.number_of_nodes()
@@ -14,7 +15,11 @@ def get_spectral_coordinates(G, m, random_sign_flips=False):
     num_eigenvectors_to_compute = min(m + 1, N)
     
     # 1. Use Combinatorial Laplacian (Unnormalized) for purer geometry
-    L = nx.laplacian_matrix(G).astype(float) 
+    L = nx.laplacian_matrix(G).astype(float)
+    
+    # Check if the matrix is symmetric (it should be for an undirected graph)
+    if not np.allclose(L.toarray(), L.toarray().T, atol=1e-8):
+        warnings.warn("Laplacian matrix is not symmetric (because the graph is directed). This will produce unreliable eigenvalues/eigenvectors.")
     
     # 2. Compute Eigenvalues
     if N < 200:
@@ -55,7 +60,7 @@ def get_spectral_coordinates(G, m, random_sign_flips=False):
 
     return {node: final_features[i] for i, node in enumerate(node_list)}
 
-# --- Test ---
+#region --- Test ---
 def plot_spectral_coordinates_progression(m=4):
     # plot the progression graphs and their respective laplacian spectral coordinates as we add nodes one-by-one and save to file "spectral_coords_progression.png"
     import matplotlib.pyplot as plt
@@ -266,6 +271,7 @@ def test_disconnected_graph():
         os.makedirs("plots")
     plt.savefig("plots/disconnected_graph_spectral_coords.png")
     print("Saved disconnected graph spectral coordinates to 'plots/disconnected_graph_spectral_coords.png'")
+#endregion
 
 if __name__ == "__main__":
     # plot_spectral_coordinates_progression(m=4)

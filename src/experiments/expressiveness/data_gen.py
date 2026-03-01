@@ -71,7 +71,10 @@ def _generate_random_connected_component(nodes):
     E = random.randint(min_edges, max_edges)
     
     # 2. Create a random tree to ensure connectivity
-    tree = nx.random_tree(N)
+    complete = nx.complete_graph(N)
+    for (u, v) in complete.edges():
+        complete.edges[u, v]['weight'] = random.random()
+    tree = nx.minimum_spanning_tree(complete)
     # Map the tree's default nodes (0 to N-1) to our actual node labels
     mapping = {i: nodes[i] for i in range(N)}
     tree = nx.relabel_nodes(tree, mapping)
@@ -176,6 +179,10 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
     
     graphs = []
     for G, x, y, label in tqdm(dataset, desc="Preparing dataset"):
+        # if the dataset is hard, make the graph directed (preserve connectivity in both directions)
+        if not easy:
+            G = G.to_directed()
+
         # 1. compute a random subset of the LETTERS and use them as the "text" fields of the nodes
         node_texts = random.sample(LETTERS, len(G.nodes))
         for node, text in zip(G.nodes, node_texts):
@@ -220,7 +227,7 @@ def dataset_path_and_size(dataset_size, easy=True):
     dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
-def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, easy=True):
+def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, max_rwse_steps=16, easy=True):
     dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy)
 
     dataset = prepare_dataset(
@@ -230,6 +237,7 @@ def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, m
         spectral_dims=spectral_dims, 
         tokenizer_name=model_name, 
         max_rrwp_steps=max_rrwp_steps, 
+        max_rwse_steps=max_rwse_steps,
         easy=easy
     )
 
@@ -242,12 +250,24 @@ if __name__ == "__main__":
     MIN_NODES = 10
     MAX_NODES = 20
     SPECTRAL_DIMS = 16
-    DATASET_SIZE = 1000
+    DATASET_SIZE = 1
     model_name = "meta-llama/Llama-3.2-1B"
+    EASY = False
+    max_rwse_steps = 8
+    max_rrwp_steps = 16
 
     print(f"Creating dataset with {DATASET_SIZE // 1000}k examples, node sizes between {MIN_NODES} and {MAX_NODES}, spectral dimensions {SPECTRAL_DIMS}, and tokenizer {model_name}...")
 
-    _, dataset_path = create_and_save_dataset(DATASET_SIZE, MIN_NODES, MAX_NODES, SPECTRAL_DIMS, model_name)
+    _, dataset_path = create_and_save_dataset(
+        dataset_size=DATASET_SIZE, 
+        min_nodes=MIN_NODES, 
+        max_nodes=MAX_NODES, 
+        spectral_dims=SPECTRAL_DIMS,
+        model_name=model_name,
+        easy=EASY,
+        max_rwse_steps=max_rwse_steps,
+        max_rrwp_steps=max_rrwp_steps
+    )
     print(f"Dataset created and saved at {dataset_path}")
 
     # laod the dataset to verify it works

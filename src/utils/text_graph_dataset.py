@@ -11,6 +11,7 @@ from tqdm import tqdm
 from .laplacian import get_spectral_coordinates
 from .rwse import compute_rwse
 from .rrwp import compute_rrwp
+from .magnetic_lap import get_magnetic_laplacian_coords
 
 # define the item type for type hints (must have 'text', 'num_nodes', 'prompt_node' and 'edges' at minimum and may have 'input_ids', 'spectral_coords', 'shortest_path_dists')
 TextGraph = Dict[str, Any]
@@ -72,16 +73,17 @@ class TextGraphDataset(Dataset):
         """
         Returns a dictionary containing ONLY the features that currently exist.
         This method does NOT compute any new features. It simply retrieves the existing data for the given index.
-         - 'text'                   ---> List of strings (raw text for each node)
-         - 'num_nodes'              ---> Integer (number of nodes in the graph)
-         - 'prompt_node'            ---> Integer (index of the prompt node, or -1 if not specified)
-         - 'edges'                  ---> List of tuples (edges between nodes, retrieved from RAM)
-         - 'spectral_coords'        ---> Tensor of shape (num_nodes, spectral_dim)
-         - 'shortest_path_dists'    ---> Tensor of shape (num_nodes, num_nodes)
-         - 'rwse'                   ---> Tensor of shape (num_nodes, max_rwse_steps)
-         - 'rrwp'                   ---> Dictionary of relative random walk probabilities for each node pair (num_nodes, num_nodes, max_rrwp_steps)
-         - 'input_ids'              ---> List of num_nodes lists of token ids (tokenized input for each node)
-         - 'labels'                 ---> Tensor of labels for the prompt node
+         - 'text'                       ---> List of strings (raw text for each node)
+         - 'num_nodes'                  ---> Integer (number of nodes in the graph)
+         - 'prompt_node'                ---> Integer (index of the prompt node, or -1 if not specified)
+         - 'edges'                      ---> List of tuples (edges between nodes, retrieved from RAM)
+         - 'spectral_coords'            ---> Tensor of shape (num_nodes, spectral_dim)
+         - 'shortest_path_dists'        ---> Tensor of shape (num_nodes, num_nodes)
+         - 'rwse'                       ---> Tensor of shape (num_nodes, max_rwse_steps)
+         - 'rrwp'                       ---> Tensor of shape (num_nodes, num_nodes, max_rrwp_steps)
+         - 'magnetic_spectral_coords'   ---> Tensor of shape (num_nodes, embedding_dim, 2) containing complex eigenvalues (real and imaginary parts) if computed
+         - 'input_ids'                  ---> List of num_nodes lists of token ids (tokenized input for each node)
+         - 'labels'                     ---> Tensor of labels for the prompt node
         """
         # 1. Get the base item from Arrow (fast load)
         item = self._hf_dataset[idx]
@@ -101,6 +103,13 @@ class TextGraphDataset(Dataset):
                 item['spectral_coords'] = None
             else:
                 item['spectral_coords'] = torch.tensor(item['spectral_coords'], dtype=torch.float32)
+
+        # Handle Magnetic Spectral Coordinates (Convert list back to torch tensor)
+        if 'magnetic_spectral_coords' in item and item['magnetic_spectral_coords'] is not None:
+            if len(item['magnetic_spectral_coords']) == 0:
+                item['magnetic_spectral_coords'] = None
+            else:
+                item['magnetic_spectral_coords'] = torch.tensor(item['magnetic_spectral_coords'], dtype=torch.float32)
             
         # Handle SPD (Reshape flattened array back to Matrix)
         if 'shortest_path_dists' in item and item['shortest_path_dists'] is not None:
@@ -260,6 +269,32 @@ class TextGraphDataset(Dataset):
             self._hf_dataset = self._hf_dataset.remove_columns("rrwp")
         self._hf_dataset = self._hf_dataset.add_column("rrwp", rrwp_dataset_list)
 
+    def compute_magnetic_lap(self, embedding_dim=16, q=0.25):
+        """Computes Magnetic Laplacian eigenvalues and eigenvectors and adds 'magnetic_spectral_coords' column."""
+        print(f"Computing Magnetic Spectral Coordinates (dim={embedding_dim}, q={q})...")
+        
+        coords_list = []
+        for g in tqdm(self.graphs, desc="Magnetic Eigen-decomposition"):
+            g_int = nx.convert_node_labels_to_integers(g, ordering="sorted")
+            n = g_int.number_of_nodes()
+            
+            # Use the function from magnetic_lap.py, which returns a dict mapped by node
+            coords_dict = get_magnetic_laplacian_coords(g_int, m=embedding_dim, q=q)
+            
+            try:
+                # Extract and convert numpy arrays to Python lists for Arrow storage
+                coords = [coords_dict[i].tolist() for i in range(n)]
+            except KeyError:
+                print(f"Warning: Magnetic spectral dict keys mismatch for graph with {n} nodes. Filling zeros.")
+                coords = [[[0.0, 0.0] for _ in range(embedding_dim)] for _ in range(n)]
+                
+            coords_list.append(coords)
+
+        if "magnetic_spectral_coords" in self._hf_dataset.column_names:
+            self._hf_dataset = self._hf_dataset.remove_columns("magnetic_spectral_coords")
+            
+        self._hf_dataset = self._hf_dataset.add_column("magnetic_spectral_coords", coords_list)
+
     def compute_labels(self, get_graph_labels):
         """Computes labels for each graph using the provided function and adds 'labels' column."""
         print("Computing Labels...")
@@ -361,6 +396,7 @@ def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attribute
     ds = TextGraphDataset(graphs)
     if calc_attributes:
         ds.compute_spectral_coordinates(embedding_dim=spec_emb_dim)
+        ds.compute_magnetic_lap(embedding_dim=spec_emb_dim)
         ds.compute_shortest_path_distances()
         ds.compute_rwse(max_rwse_steps=max_rwse_steps)
         ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)
@@ -392,6 +428,7 @@ if __name__ == "__main__":
     
     print("\n--- 2. Processing (Calculating Features) ---")
     ds.compute_spectral_coordinates(embedding_dim=4)
+    ds.compute_magnetic_lap(embedding_dim=4)
     ds.compute_shortest_path_distances()
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     ds.tokenize(tokenizer)
@@ -403,6 +440,9 @@ if __name__ == "__main__":
     print(f"Text: {item['text']}")
     print(f"Edges: {item['edges']}")
     print(f"Spectral Shape: {item['spectral_coords'].shape}")
+    print(f"Magnetic Spectral Shape: {item['magnetic_spectral_coords'].shape}")
+    for i, emb in enumerate(item['magnetic_spectral_coords']):
+        print(f"Node {i} Magnetic Spectral Coords (real, imag):\n{emb}")
     print(f"SPD Shape: {item['shortest_path_dists'].shape}")
     print(f"Input IDs: {item['input_ids']}")
     print(f"Type of Input IDs: {type(item['input_ids'])}; Type of input_ids[0]: {type(item['input_ids'][0])}; type of input_ids[0][0]: {type(item['input_ids'][0][0])}")
