@@ -5,27 +5,19 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from ...utils.text_graph_dataset import TextGraphDataset
-from ...utils.spectral_coordinates import get_spectral_coordinates
 
 LETTERS = [
     ' ' + letter for letter in
     ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
 ]
 
-def generate_graph(size=None, min_size=5, max_size=15):
+import random
+import networkx as nx
+import itertools
+
+def generate_easy_graph(size=None, min_size=5, max_size=15, balanced=True):
     """
         Generate a graph with nodes {0, 1, ..., N-1} where {a_1, a_2,... a_M} are a fully connected clique A and the rest a fully connected clique B.
-
-        Arguments:
-        - size: the number of nodes in the graph. If None, a random size between min_size and max_size will be chosen.
-        - min_size: the minimum number of nodes in the graph (inclusive).
-        - max_size: the maximum number of nodes in the graph (inclusive).
-
-        Returns:
-        - G: the generated graph (networkx.Graph)
-        - x: query node 1 (int)
-        - y: query node 2 (int)
-        - label: 1 if x and y are in the same clique, 0 otherwise 
     """
     if size is None:
         size = random.randint(min_size, max_size)
@@ -42,27 +34,124 @@ def generate_graph(size=None, min_size=5, max_size=15):
     G.add_edges_from([(i, j) for i in A for j in A if i != j])
     G.add_edges_from([(i, j) for i in B for j in B if i != j])
 
-    # generate a random label and choose the query nodes accordingly
-    label = random.choice([0, 1])
-
-    if label == 0:
-        x = random.choice(A)
-        y = random.choice(B)
-    else:
-        if random.choice([True, False]): # choose A with 50% probability
-            x, y = random.sample(A, 2)
+    if balanced:
+        # generate a random label and choose the query nodes accordingly
+        label = random.choice([0, 1])
+    
+        if label == 0:
+            x = random.choice(A)
+            y = random.choice(B)
         else:
-            x, y = random.sample(B, 2)
+            if random.choice([True, False]): # choose A with 50% probability
+                x, y = random.sample(A, 2)
+            else:
+                x, y = random.sample(B, 2)
+    else:
+        x, y = random.sample(labels, 2)
+        label = 1 if (x in A and y in A) or (x in B and y in B) else 0
 
     if random.choice([True, False]): # swap x and y with 50% probability
         x, y = y, x
 
     return G, x, y, label
 
-def generate_graph_dataset(num_examples, min_size=5, max_size=15):
+
+def _generate_random_connected_component(nodes):
+    """Helper function to generate a connected subgraph for a given set of nodes."""
+    N = len(nodes)
+    G = nx.Graph()
+    G.add_nodes_from(nodes)
+    
+    if N < 2:
+        return G
+        
+    # 1. Randomly choose number of edges E
+    min_edges = N - 1
+    max_edges = N * (N - 1) // 2
+    E = random.randint(min_edges, max_edges)
+    
+    # 2. Create a random tree to ensure connectivity
+    tree = nx.random_tree(N)
+    # Map the tree's default nodes (0 to N-1) to our actual node labels
+    mapping = {i: nodes[i] for i in range(N)}
+    tree = nx.relabel_nodes(tree, mapping)
+    G.add_edges_from(tree.edges())
+    
+    # 3. Add the remaining E - (N - 1) edges randomly
+    if E > min_edges:
+        all_possible_edges = set(itertools.combinations(nodes, 2))
+        existing_edges = set((min(u, v), max(u, v)) for u, v in G.edges())
+        all_possible_edges = set((min(u, v), max(u, v)) for u, v in all_possible_edges)
+        
+        available_edges = list(all_possible_edges - existing_edges)
+        new_edges = random.sample(available_edges, E - min_edges)
+        G.add_edges_from(new_edges)
+        
+    return G
+
+def generate_hard_graph(size=None, min_size=5, max_size=15, balanced=True):
+    """
+        Generate a graph with K connected components, generated dynamically.
+    """
+    if size is None:
+        size = random.randint(min_size, max_size)
+        
+    labels = list(range(size))
+    
+    # Determine number of components K (between 2 and size // 2)
+    max_components = max(2, size // 2)
+    K = random.randint(2, max_components)
+    
+    # Distribute nodes to components (guarantee at least 2 nodes per component)
+    random.shuffle(labels)
+    components = [labels[i*2:(i+1)*2] for i in range(K)]
+    
+    remaining_nodes = labels[K*2:]
+    for node in remaining_nodes:
+        random.choice(components).append(node)
+        
+    # Build the full graph by generating each component
+    G = nx.Graph()
+    G.add_nodes_from(labels)
+    
+    for comp_nodes in components:
+        comp_graph = _generate_random_connected_component(comp_nodes)
+        G.add_edges_from(comp_graph.edges())
+    
+    # Sample the query nodes
+    if balanced:
+        label = random.choice([0, 1])
+        if label == 1:
+            # Positive example: Sample from the same component
+            target_comp = random.choice(components)
+            x, y = random.sample(target_comp, 2)
+        else:
+            # Negative example: Sample from two different components
+            comp1, comp2 = random.sample(components, 2)
+            x = random.choice(comp1)
+            y = random.choice(comp2)
+    else:
+        # Natural distribution: Completely random sample
+        x, y = random.sample(labels, 2)
+        label = 0
+        for comp in components:
+            if x in comp and y in comp:
+                label = 1
+                break
+
+    if random.choice([True, False]): # swap x and y with 50% probability
+        x, y = y, x
+
+    return G, x, y, label
+
+
+def generate_graph_dataset(num_examples, min_size=5, max_size=15, easy=True):
     dataset = []
     for _ in range(num_examples):
-        G, x, y, label = generate_graph(min_size=min_size, max_size=max_size)
+        if easy:
+            G, x, y, label = generate_easy_graph(min_size=min_size, max_size=max_size)
+        else:
+            G, x, y, label = generate_hard_graph(min_size=min_size, max_size=max_size)
         dataset.append((G, x, y, label))
     return dataset
 
@@ -77,8 +166,8 @@ def get_prompt_node_labels(example):
     return labels
 
 
-def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16):
-    dataset = generate_graph_dataset(num_examples, min_size=min_size, max_size=max_size)
+def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16, easy=True):
+    dataset = generate_graph_dataset(num_examples, min_size=min_size, max_size=max_size, easy=easy)
 
     # FOR EACH EXAMPLE:
     # 1. compute a random subset of the LETTERS and use them as the "text" fields of the nodes
@@ -126,15 +215,23 @@ def round_size_str(size):
     else:
         return str(size), size, 1
 
-def dataset_path_and_size(dataset_size):
+def dataset_path_and_size(dataset_size, easy=True):
     size_str, rounded_size, scale = round_size_str(dataset_size)
-    dataset_path = f"./src/experiments/expressiveness/new_{size_str}_dataset.gtds"
+    dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
-def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16):
-    dataset_path, final_dataset_size = dataset_path_and_size(dataset_size)
+def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, easy=True):
+    dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy)
 
-    dataset = prepare_dataset(final_dataset_size, min_size=min_nodes, max_size=max_nodes, spectral_dims=spectral_dims, tokenizer_name=model_name, max_rrwp_steps=max_rrwp_steps)
+    dataset = prepare_dataset(
+        final_dataset_size, 
+        min_size=min_nodes, 
+        max_size=max_nodes, 
+        spectral_dims=spectral_dims, 
+        tokenizer_name=model_name, 
+        max_rrwp_steps=max_rrwp_steps, 
+        easy=easy
+    )
 
     # Save the dataset to disk
     dataset.save(dataset_path)

@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from typing import List, Dict, Optional, Any, Union
 from tqdm import tqdm
 
-from .spectral_coordinates import get_spectral_coordinates
+from .laplacian import get_spectral_coordinates
 from .rwse import compute_rwse
 from .rrwp import compute_rrwp
 

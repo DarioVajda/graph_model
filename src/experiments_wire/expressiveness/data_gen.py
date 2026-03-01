@@ -3,7 +3,7 @@ import random
 import torch
 from tqdm import tqdm
 
-from ...utils.spectral_coordinates import get_spectral_coordinates
+from ...utils.laplacian import get_spectral_coordinates
 
 def generate_example(size=None, min_size=5, max_size=15):
     if size is None:

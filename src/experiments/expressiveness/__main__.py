@@ -185,17 +185,42 @@ def training_run(
 
     trainer.train()
 
+def calculate_label_distribution(dataset):
+        yes_count = 0
+        no_count = 0
+        for example in dataset:
+            label = example["labels"][-1].item() # the last token in the labels is the true label (0 for "Yes", 1 for "No")
+            if label == tokenized_possible_labels[0][0]: # "Yes"
+                yes_count += 1
+            elif label == tokenized_possible_labels[1][0]: # "No"
+                no_count += 1
+        total = yes_count + no_count
+        yes_percentage = (yes_count / total) * 100 if total > 0 else 0
+        no_percentage = (no_count / total) * 100 if total > 0 else 0
+        return yes_percentage, no_percentage
 
 if __name__ == "__main__":
     # set the flags for spd, laplacian, rwse, and rrwp
-    BIAS_PARAMS = { "spd": False, "max_spd": 4, "laplacian": False, "rwse": True, "rrwp": False, "max_rw_steps": 8 }
+    BIAS_PARAMS = { 
+        "spd": True, 
+        "max_spd": 4, 
+        "laplacian": False, 
+        "rwse": False, 
+        "rrwp": True, 
+        "max_rw_steps": 8 
+    }
     TRAIN_DATASET_SIZE = 10_000
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
     ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
-    RUN_NAME = f"new_params_only_{'spd+' if BIAS_PARAMS['spd'] else ''}{'laplacian+' if BIAS_PARAMS['laplacian'] else ''}{'rwse+' if BIAS_PARAMS['rwse'] else ''}{'rrwp+' if BIAS_PARAMS['rrwp'] else ''}"
-    # ACTIVE_PARAMS = "all"
-    # RUN_NAME = f"all_params_{BIAS_TYPE}"
+
+    run_suffix = "+".join([ 
+        bias_type
+        for bias_type 
+        in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})"] 
+        if BIAS_PARAMS[bias_type.split('(')[0]]
+    ])
+    RUN_NAME = f"EASY_{run_suffix}"
 
     set_wandb_project("GraphLLM")
     device = get_device()
@@ -224,6 +249,14 @@ if __name__ == "__main__":
     possible_labels = [" Yes", " No" ]
     tokenized_possible_labels = [tokenizer(label, add_special_tokens=False).input_ids for label in possible_labels]
     pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+
+    # calculate the percentage of "Yes" and "No" labels in the training and evaluation datasets
+    train_yes_percentage, train_no_percentage = calculate_label_distribution(train_dataset)
+    eval_yes_percentage, eval_no_percentage = calculate_label_distribution(eval_dataset)
+    print("!"*100)
+    print(f"Training dataset label distribution: {train_yes_percentage:.2f}% Yes, {train_no_percentage:.2f}% No")
+    print(f"Evaluation dataset label distribution: {eval_yes_percentage:.2f}% Yes, {eval_no_percentage:.2f}% No")
+    print("!"*100)
     #endregion
     # --------------------------------------------------------------------------
 

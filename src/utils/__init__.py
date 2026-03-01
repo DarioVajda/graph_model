@@ -1,4 +1,4 @@
-from .spectral_coordinates import get_spectral_coordinates
+from .laplacian import get_spectral_coordinates
 from .text_graph_collator import GraphCollator
 from .text_graph_dataset import TextGraphDataset, generate_text_graph_example, prepare_example_labels
 from .text_graph_trainer import GraphTrainer, set_wandb_project
