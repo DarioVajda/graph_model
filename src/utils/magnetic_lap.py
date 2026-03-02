@@ -2,16 +2,18 @@ import numpy as np
 import networkx as nx
 from scipy.linalg import eigh
 
-def get_magnetic_laplacian_coords(G, m=16, q=0.25):
+def get_magnetic_laplacian_coords(G, q=0.25):
     """
-    Computes the magnetic Laplacian spectral coordinates for a given graph G.
+    Computes the magnetic Laplacian spectral coordinates for a given directed graph G and parameter q.
+    The following equation holds: L_N = V @ diag(lambdas) @ conj(V.T)
     
     Args:
         G (networkx.Graph): Input graph.
-        m (int): Number of spectral coordinates to compute.
-        q (float): Parameter for calculating the rotation angles by this formula: theta_ij = 2pi * q * (a_ij  a_ji).
+        q (float): Parameter in interval [0, 0.25] for calculating the rotation angles by this formula: theta_ij = 2pi * q * (a_ij  a_ji).
     Returns:
-        dict: A dictionary mapping node to its magnetic spectral coordinates (tensor of shape (m, 2) for real and imaginary parts).
+        tuple (V, lambdas):
+            V (numpy.ndarray): (n, n, 2) Full matrix of the eigenvectors of the magnetic Laplacian with real and imaginary parts separated in the last dimension.
+            lambdas (numpy.ndarray): (n,) Array of eigenvalues of the magnetic Laplacian.
     """
     A = nx.adjacency_matrix(G).astype(float)
 
@@ -25,33 +27,25 @@ def get_magnetic_laplacian_coords(G, m=16, q=0.25):
     thetas = 2 * np.pi * q * (A - A.T).todense()
 
     # compute the normalised Magnetic Laplacian (Hermitian) matrix == I - (Ds^-1/2 * As * Ds^-1/2) .* exp(i * thetas)
-    Ds_sqrt_inv = np.diag(1/np.sqrt(Ds.diagonal()))
+    diag_Ds = Ds.diagonal()
+    safe_inv_sqrt = np.divide(1.0, np.sqrt(diag_Ds), out=np.zeros_like(diag_Ds, dtype=float), where=diag_Ds!=0)
+    Ds_sqrt_inv = np.diag(safe_inv_sqrt)
     L_N = np.eye(Ds.shape[0]) - Ds_sqrt_inv @ As @ Ds_sqrt_inv * np.exp(1j * thetas)
 
-    # compute Eigenvalues and Eigenvectors
-    k = min(m, L_N.shape[0])
-    evals, evecs = eigh(L_N, subset_by_index=[0, k-1])
+    # compute Eigenvalues and Eigenvectors of the magnetic Laplacian
+    eigvals, eigvecs = eigh(L_N)
     
-    # format the output mapping with zero-padding
-    coords = {}
-    nodes = list(G.nodes())
-    
-    for i, node in enumerate(nodes):
-        node_complex_coords = evecs[i, :]  # Shape: (k,)
-        
-        node_tensor = np.zeros((m, 2))
-        
-        node_tensor[:k, 0] = node_complex_coords.real
-        node_tensor[:k, 1] = node_complex_coords.imag
-        
-        coords[node] = node_tensor
-        
-    return coords
+    # separate real and imaginary parts of the eigenvectors
+    V = np.zeros((eigvecs.shape[0], eigvecs.shape[1], 2))
+    V[:,:,0] = np.real(eigvecs)
+    V[:,:,1] = np.imag(eigvecs)
+
+    return V, eigvals
+
 
 if __name__ == "__main__":    
     G = nx.DiGraph()
     G.add_edges_from([(0, 1), (1, 2), (2, 1), (2, 3), (3, 0)])
-    magnetic_coords = get_magnetic_laplacian_coords(G, m=8)
-    for node, coords in magnetic_coords.items():
-        print(f"Node {node}:")
-        print(coords)
+    V, lambdas = get_magnetic_laplacian_coords(G, q=0.25)
+    print("Magnetic Laplacian Eigenvalues:", lambdas)
+    print("Magnetic Laplacian Eigenvectors:\n", V)
