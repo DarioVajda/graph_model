@@ -8,12 +8,12 @@ There are four types of biases that can be added to the attention scores:
         b_ij = spd_weights[d_ij] if d_ij > 0 else 0
     - Trainable parameters: spd_weights (num_layers * num_heads * max_spd total parameters)
 
-2. Spectral (Laplacian) Bias
-    - This bias is based on the spectral coordinates of the nodes in the graph.
+2. Laplacian Bias
+    - This bias is based on the Laplacian spectral coordinates of the nodes in the graph.
     - It is calculated by this formula:
         b_ij = w_k * d_ij
-      where d_ij is the L2 distance between the spectral coordinates of nodes i and j
-      (spectral coordinates are the eigenvectors of the graph Laplacian).
+      where d_ij is the L2 distance between the Laplacian spectral coordinates of nodes i and j
+      (Laplacian spectral coordinates are the eigenvectors of the graph Laplacian).
     - Trainable parameters: laplacian_weights (num_layers * num_heads total parameters)
 
 3. Random Walk Structural Encoding (RWSE) Bias
@@ -230,60 +230,25 @@ class LlamaAttentionWithBias(LlamaAttention):
         # Validate that input_graph_batch contains the necessary information based on the required bias types
         if self.require_spd and (input_graph_batch is None or 'shortest_path_dists' not in input_graph_batch):
             raise ValueError("Shortest Path Distance bias is required but 'shortest_path_dists' is missing from input_graph_batch.")
-        if self.require_laplacian and (input_graph_batch is None or 'spectral_coords' not in input_graph_batch):
-            raise ValueError("Laplacian bias is required but 'spectral_coords' is missing from input_graph_batch.")
+        if self.require_laplacian and (input_graph_batch is None or 'laplacian_coordinates' not in input_graph_batch):
+            raise ValueError("Laplacian bias is required but 'laplacian_coordinates' is missing from input_graph_batch.")
         if self.require_rwse and (input_graph_batch is None or 'rwse' not in input_graph_batch):
             raise ValueError("RWSE bias is required but 'rwse' is missing from input_graph_batch.")
         if self.require_rrwp and (input_graph_batch is None or 'rrwp' not in input_graph_batch):
             raise ValueError("RRWP bias is required but 'rrwp' is missing from input_graph_batch.")
 
-    def forward(
+    def compute_bias_slow(
         self,
-        hidden_states: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[torch.Tensor],
-        past_key_value: Optional[any] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-
-        # CUSTOM ARGUMENTS
-        node_ids: Optional[torch.LongTensor] = None,
-        input_graph_batch: Optional[TextGraph] = None,
-        
-        **kwargs,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-
-        # Validate required inputs based on bias type (set to None if not required)
-        self._validate_input_graph_batch(input_graph_batch)
-        shortest_path_distances = input_graph_batch.get('shortest_path_dists', None) if self.require_spd else None
-        spectral_coordinates = input_graph_batch.get('spectral_coords', None) if self.require_laplacian else None
-        rwse_emb = input_graph_batch.get('rwse', None) if self.require_rwse else None
-        rrwp_emb = input_graph_batch.get('rrwp', None) if self.require_rrwp else None
-
-        input_shape = hidden_states.shape[:-1]
-        hidden_shape = (*input_shape, -1, self.head_dim)
-
-        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-
-        cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-        if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-        # =====================================================================
-        # CUSTOM LOGIC: Construct and add the graph bias
-        # =====================================================================
+        query_states: torch.Tensor,                             # (batch_size, num_heads, q_len, head_dim)
+        key_states: torch.Tensor,                               # (batch_size, num_heads, kv_len, head_dim)
+        node_ids: Optional[torch.LongTensor],                   # (batch_size, seq_len)
+        shortest_path_distances: Optional[list[torch.Tensor]],  # batch_size x (num_nodes_i, num_nodes_i)
+        spectral_coordinates: Optional[list[torch.Tensor]],     # batch_size x (num_nodes_i, spec_dim)
+        rwse_emb: Optional[list[torch.Tensor]],                 # batch_size x (num_nodes_i, rwse_dim)
+        rrwp_emb: Optional[list[torch.Tensor]],                 # batch_size x (num_nodes_i, num_nodes_i, max_rw_steps)
+    ):
         batch_size, q_len = query_states.shape[0], query_states.shape[2]
         kv_len = key_states.shape[2]
-
-        # print("DEBUG: Inside LlamaAttentionWithBias.forward")
-        # print("batch_size:", batch_size)
-        # print("q_len:", q_len)
-        # print("kv_len:", kv_len)
 
         using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp
         if using_graph_bias and node_ids is not None:
@@ -316,7 +281,7 @@ class LlamaAttentionWithBias(LlamaAttention):
                     spd_b = spd_b * non_zero_mask.unsqueeze(0)
                     node_bias = node_bias + spd_b
 
-                # 2. Calculate Spectral Bias
+                # 2. Calculate Laplacian Bias
                 if self.require_laplacian and spectral_coordinates is not None:
                     spec_coords = spectral_coordinates[batch_idx] # (num_nodes, spec_dim)
                     
@@ -360,11 +325,151 @@ class LlamaAttentionWithBias(LlamaAttention):
 
                     graph_bias[batch_idx] = token_bias
 
-            # 6. Inject our custom graph bias into the existing attention mask
-            if attention_mask is None:
-                attention_mask = graph_bias
-            else:
-                attention_mask = attention_mask + graph_bias
+        return graph_bias if using_graph_bias else None
+
+    def compute_bias(
+        self,
+        query_states: torch.Tensor,                         # (batch_size, num_heads, q_len, head_dim)
+        key_states: torch.Tensor,                           # (batch_size, num_heads, kv_len, head_dim)
+        node_ids: Optional[torch.LongTensor],               # (batch_size, seq_len)
+        shortest_path_distances: Optional[torch.Tensor],    # (batch_size, max_num_nodes, max_num_nodes)
+        laplacian_coordinates: Optional[torch.Tensor],      # (batch_size, max_num_nodes, spec_dim)
+        rwse_emb: Optional[torch.Tensor],                   # (batch_size, max_num_nodes, rwse_dim)
+        rrwp_emb: Optional[torch.Tensor],                   # (batch_size, max_num_nodes, max_num_nodes, max_rw_steps)
+    ):
+        # print("Shapes of all inputs:")
+        # print("query_states:", query_states.shape)
+        # print("key_states:", key_states.shape)
+        # print("node_ids:", node_ids.shape if node_ids is not None else None)
+        # print("shortest_path_distances:", shortest_path_distances.shape if shortest_path_distances is not None else None)
+        # print("laplacian_coordinates:", laplacian_coordinates.shape if laplacian_coordinates is not None else None)
+        # print("rwse_emb:", rwse_emb.shape if rwse_emb is not None else None)
+        # print("rrwp_emb:", rrwp_emb.shape if rrwp_emb is not None else None)
+
+        using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp
+        if not using_graph_bias:
+            return None  # No bias needed, return None to indicate this
+        if node_ids is None:
+            raise ValueError("Graph-based bias is required but 'node_ids' is not provided.")
+
+        dtype = query_states.dtype
+        node_bias = 0
+        device = query_states.device
+
+        if self.require_spd:
+            if shortest_path_distances is None: raise ValueError("Shortest Path Distance bias is required but 'shortest_path_distances' is not provided.")
+            non_zero_mask = (shortest_path_distances > 0)
+            spd_indices = torch.clamp(shortest_path_distances - 1, min=0, max=self.spd_weights.shape[0] - 1) # mapping D -> D-1 for indexing in spd_weights
+            
+            spd_bias = F.embedding(spd_indices, self.spd_weights).permute(0, 3, 1, 2).to(dtype=dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+            spd_bias = spd_bias * non_zero_mask.unsqueeze(1)  # Zero out entries where distance was originally 0
+            node_bias = node_bias + spd_bias
+
+        if self.require_laplacian:
+            if laplacian_coordinates is None: raise ValueError("Laplacian bias is required but 'laplacian_coordinates' is not provided.")
+            lap_dist = torch.cdist(laplacian_coordinates, laplacian_coordinates, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
+            lap_bias = lap_dist.unsqueeze(1) * self.laplacian_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+            node_bias = node_bias + lap_bias
+
+        if self.require_rwse:
+            if rwse_emb is None: raise ValueError("RWSE bias is required but 'rwse_emb' is not provided.")
+            rwse_dist = torch.cdist(rwse_emb, rwse_emb, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
+            rwse_bias = rwse_dist.unsqueeze(1) * self.rwse_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+            node_bias = node_bias + rwse_bias
+
+        if self.require_rrwp:
+            if rrwp_emb is None: raise ValueError("RRWP bias is required but 'rrwp_emb' is not provided.")
+            rrwp_bias = self.rrwp_proj(rrwp_emb).permute(0, 3, 1, 2) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+            diag_mask = torch.eye(rrwp_bias.shape[-1], device=device, dtype=torch.bool)
+            rrwp_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # Zero out diagonal entries where i=j
+            node_bias = node_bias + rrwp_bias
+
+        # Expanding the node-level biases to token-level biases using advanced indexing
+        B, S = node_ids.shape
+        _, H, _, _ = node_bias.shape
+        device = node_ids.device
+
+        batch_idx = torch.arange(B, device=device).view(B, 1, 1, 1) # Shape: (B, 1, 1, 1)
+        head_idx = torch.arange(H, device=device).view(1, H, 1, 1)  # Shape: (1, H, 1, 1)
+        q_idx = node_ids.view(B, 1, S, 1)                           # Shape: (B, 1, S, 1)
+        k_idx = node_ids.view(B, 1, 1, S)                           # Shape: (B, 1, 1, S)
+
+        token_bias = node_bias[batch_idx, head_idx, q_idx, k_idx]   # Shape: (B, H, S, S)
+
+        return token_bias
+
+        # Expanding the node-level biases to token-level biases using advanced indexing
+        batch_size, q_len = query_states.shape[0], query_states.shape[2]
+        kv_len = key_states.shape[2]
+
+        # Slice node_ids to match the current query and key lengths
+        node_ids_q = node_ids[:, -q_len:]
+        node_ids_kv = node_ids[:, -kv_len:]
+
+        B = batch_size
+        _, H, _, _ = node_bias.shape
+        device = node_ids.device
+
+        batch_idx = torch.arange(B, device=device).view(B, 1, 1, 1) # Shape: (B, 1, 1, 1)
+        head_idx = torch.arange(H, device=device).view(1, H, 1, 1)  # Shape: (1, H, 1, 1)
+        q_idx = node_ids_q.view(B, 1, q_len, 1)                     # Shape: (B, 1, q_len, 1)
+        k_idx = node_ids_kv.view(B, 1, 1, kv_len)                   # Shape: (B, 1, 1, kv_len)
+
+        token_bias = node_bias[batch_idx, head_idx, q_idx, k_idx]   # Shape: (B, H, q_len, kv_len)
+
+        return token_bias
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[torch.Tensor],
+        past_key_value: Optional[any] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+
+        # CUSTOM ARGUMENTS
+        node_ids: Optional[torch.LongTensor] = None,
+        input_graph_batch: Optional[TextGraph] = None,
+        
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+
+        # Validate required inputs based on bias type (set to None if not required)
+        self._validate_input_graph_batch(input_graph_batch)
+        shortest_path_distances = input_graph_batch.get('shortest_path_dists', None) if self.require_spd else None
+        laplacian_coordinates = input_graph_batch.get('laplacian_coordinates', None) if self.require_laplacian else None
+        rwse_emb = input_graph_batch.get('rwse', None) if self.require_rwse else None
+        rrwp_emb = input_graph_batch.get('rrwp', None) if self.require_rrwp else None
+
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+
+        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_value is not None:
+            # sin and cos are specific to RoPE models; cache_position needed for the static cache
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        # =====================================================================
+        # CUSTOM LOGIC: Construct and add the graph bias
+        # =====================================================================
+        custom_bias = self.compute_bias(
+            query_states=query_states,
+            key_states=key_states,
+            node_ids=node_ids,
+            shortest_path_distances=shortest_path_distances,
+            laplacian_coordinates=laplacian_coordinates,
+            rwse_emb=rwse_emb,
+            rrwp_emb=rrwp_emb,
+        ) # (batch_size, num_heads, seq_len, seq_len)
+        if custom_bias is not None and attention_mask is not None:
+            attention_mask = attention_mask + custom_bias
         # =====================================================================
 
         attention_interface: Callable = eager_attention_forward
@@ -829,7 +934,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                     'prompt_node'           - index of the prompt node in the graph     ---> Tensor of shape (batch_size,) containing the index of the prompt node for each graph in the batch
                     'input_ids'             - tokenized input ids for the text          ---> List of batch_size elements, each being a list of shape num_nodes elements, each being a tensor of shape (seq_len_i_j) representing the tokenized input for each node
                     'edges'                 - list of edges in the graph                ---> List of batch_size elements, each being a tensor of shape (num_edges, 2) representing the edges between nodes
-                    'spectral_coords'       - precomputed spectral coordinates          ---> List of batch_size elements, each being a tensor of shape (num_nodes, spectral_dim)
+                    'laplacian_coordinates' - precomputed laplacian coordinates         ---> List of batch_size elements, each being a tensor of shape (num_nodes, spectral_dim)
                     'shortest_path_dists'   - precomputed shortest path distances       ---> List of batch_size elements, each being a tensor of shape (num_nodes, num_nodes) representing the pairwise shortest path distances between nodes
                 ...(other arguments are the same as the original forward method)
         """

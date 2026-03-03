@@ -204,7 +204,7 @@ if __name__ == "__main__":
     BIAS_PARAMS = { 
         "spd": True, 
         "max_spd": 4, 
-        "laplacian": False, 
+        "laplacian": True, 
         "rwse": False, 
         "rrwp": True, 
         "max_rw_steps": 8 
@@ -220,7 +220,7 @@ if __name__ == "__main__":
         in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})"] 
         if BIAS_PARAMS[bias_type.split('(')[0]]
     ])
-    RUN_NAME = f"EASY_{run_suffix}"
+    RUN_NAME = f"tensor_EASY_{run_suffix}"
 
     set_wandb_project("GraphLLM")
     device = get_device()

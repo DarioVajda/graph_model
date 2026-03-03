@@ -31,7 +31,7 @@ def generate_example(model_name, tokenizer):
 
     ds = TextGraphDataset([G])
 
-    ds.compute_spectral_coordinates()
+    ds.compute_laplacian_coordinates()
     ds.compute_shortest_path_distances()
 
     ds.tokenize(tokenizer)

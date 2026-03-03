@@ -27,10 +27,39 @@ class GraphCollator:
 
         labels = [ item['labels'] for item in batch ] if "labels" in batch[0] else None
 
-        spectral_coords = [ item['spectral_coords'] for item in batch ] if "spectral_coords" in batch[0] else None
-        shortest_path_dists = [ item['shortest_path_dists'] for item in batch ] if "shortest_path_dists" in batch[0] else None
-        rwse = [ item['rwse'] for item in batch ] if "rwse" in batch[0] else None
-        rrwp = [ item['rrwp'] for item in batch ] if "rrwp" in batch[0] else None
+        # spectral_coords = [ item['spectral_coords'] for item in batch ] if "spectral_coords" in batch[0] else None
+        # shortest_path_dists = [ item['shortest_path_dists'] for item in batch ] if "shortest_path_dists" in batch[0] else None
+        # rwse = [ item['rwse'] for item in batch ] if "rwse" in batch[0] else None
+        # rrwp = [ item['rrwp'] for item in batch ] if "rrwp" in batch[0] else None
+
+        batch_size = len(batch)
+        max_num_nodes = max(sizes).item()
+
+        # initialise laplacian_coordinates
+        spectral_dim = batch[0]['laplacian_coordinates'].shape[1] if "laplacian_coordinates" in batch[0] else 0
+        laplacian_coordinates = torch.zeros(batch_size, max_num_nodes, spectral_dim, dtype=torch.float)
+
+        # initialise shortest_path_dists
+        shortest_path_dists = torch.full((batch_size, max_num_nodes, max_num_nodes), max_num_nodes, dtype=torch.long)
+
+        # initialise rwse
+        rwse_dim = batch[0]['rwse'].shape[1] if "rwse" in batch[0] else 0
+        rwse = torch.zeros(batch_size, max_num_nodes, rwse_dim, dtype=torch.float)
+
+        # initialise rrwp
+        max_rw_steps = batch[0]['rrwp'].shape[2] if "rrwp" in batch[0] else 0
+        rrwp = torch.zeros(batch_size, max_num_nodes, max_num_nodes, max_rw_steps, dtype=torch.float)
+
+        for i, item in enumerate(batch):
+            num_nodes = item['num_nodes']
+            if "laplacian_coordinates" in item:
+                laplacian_coordinates[i, :num_nodes, :] = item['laplacian_coordinates'].detach().clone()
+            if "shortest_path_dists" in item:
+                shortest_path_dists[i, :num_nodes, :num_nodes] = item['shortest_path_dists'].detach().clone()
+            if "rwse" in item:
+                rwse[i, :num_nodes, :] = item['rwse'].detach().clone()
+            if "rrwp" in item:
+                rrwp[i, :num_nodes, :num_nodes, :] = item['rrwp'].detach().clone()
 
         return {
             'num_nodes': sizes,
@@ -39,7 +68,7 @@ class GraphCollator:
             'edges': edges,
             'input_ids': input_ids,
             'labels': labels,
-            'spectral_coords': spectral_coords,
+            'laplacian_coordinates': laplacian_coordinates,
             'shortest_path_dists': shortest_path_dists,
             'rwse': rwse,
             'rrwp': rrwp

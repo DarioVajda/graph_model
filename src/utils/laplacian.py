@@ -4,7 +4,7 @@ from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigh
 import warnings
 
-def get_spectral_coordinates(G, m, random_sign_flips=False):
+def get_laplacian_coordinates(G, m, random_sign_flips=False):
     N = G.number_of_nodes()
     node_list = list(G.nodes())
     
@@ -97,7 +97,7 @@ def plot_spectral_coordinates_progression(m=4):
     # ]
 
     # compute spectral coordinates for each graph <-- Perform this twice to see how these features can differ based on sign flips!
-    spectral_coords_list = [get_spectral_coordinates(G, m) for G in graphs]
+    spectral_coords_list = [get_laplacian_coordinates(G, m) for G in graphs]
 
 
     transformations = fit_transformations(spectral_coords_list)
@@ -235,7 +235,7 @@ def test_disconnected_graph():
         (8, 9), (8, 10), (8, 11), (8, 12), (8, 13), (8, 14), (9, 10), (9, 11), (9, 12), (9, 13), (9, 14), (10, 11), (10, 12), (10, 13), (10, 14), (11, 12), (11, 13), (11, 14), (12, 13), (12, 14), (13, 14),
     ])
 
-    spectral_coords = get_spectral_coordinates(G, m=8)
+    spectral_coords = get_laplacian_coordinates(G, m=8)
     print("Spectral coordinates for disconnected graph:")
     for node, coords in spectral_coords.items():
         print(f" Node {node}: {list(np.round(coords, 3))}")

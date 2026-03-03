@@ -199,7 +199,7 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
         graphs.append(G)
 
     ds = TextGraphDataset(graphs)
-    ds.compute_spectral_coordinates(embedding_dim=spectral_dims)
+    ds.compute_laplacian_coordinates(embedding_dim=spectral_dims)
     ds.compute_shortest_path_distances()
     ds.compute_rwse(max_rwse_steps=max_rwse_steps)
     ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)

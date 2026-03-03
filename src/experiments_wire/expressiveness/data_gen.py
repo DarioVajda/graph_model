@@ -3,7 +3,7 @@ import random
 import torch
 from tqdm import tqdm
 
-from ...utils.laplacian import get_spectral_coordinates
+from ...utils.laplacian import get_laplacian_coordinates
 
 def generate_example(size=None, min_size=5, max_size=15):
     if size is None:
@@ -102,7 +102,7 @@ def tokenize_example(G, node_label_to_token_id, tokenized_prompt, graph_model=Fa
     G_with_prompt = G.copy()
     G_with_prompt.add_node('prompt')  # add node for the prompt
     if spectral_type == "laplacian":
-        spectral_coords = get_spectral_coordinates(G_with_prompt, m=spectral_dims)
+        spectral_coords = get_laplacian_coordinates(G_with_prompt, m=spectral_dims)
     elif spectral_type == "disconnected":
         spectral_coords = get_disconnected_spectral_coordinates(G)
         spectral_coords['prompt'] = [0.0, 0.0]

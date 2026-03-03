@@ -8,12 +8,12 @@ from torch.utils.data import Dataset
 from typing import List, Dict, Optional, Any, Union
 from tqdm import tqdm
 
-from .laplacian import get_spectral_coordinates
+from .laplacian import get_laplacian_coordinates
 from .rwse import compute_rwse
 from .rrwp import compute_rrwp
 from .magnetic_lap import get_magnetic_laplacian_coords
 
-# define the item type for type hints (must have 'text', 'num_nodes', 'prompt_node' and 'edges' at minimum and may have 'input_ids', 'spectral_coords', 'shortest_path_dists')
+# define the item type for type hints (must have 'text', 'num_nodes', 'prompt_node' and 'edges' at minimum and may have 'input_ids', 'laplacian_coordinates', 'shortest_path_dists')
 TextGraph = Dict[str, Any]
 
 # -----------------------------------------------------------------------------
@@ -77,7 +77,7 @@ class TextGraphDataset(Dataset):
          - 'num_nodes'                  ---> Integer (number of nodes in the graph)
          - 'prompt_node'                ---> Integer (index of the prompt node, or -1 if not specified)
          - 'edges'                      ---> List of tuples (edges between nodes, retrieved from RAM)
-         - 'spectral_coords'            ---> Tensor of shape (num_nodes, spectral_dim)
+         - 'laplacian_coordinates'           ---> Tensor of shape (num_nodes, spectral_dim)
          - 'shortest_path_dists'        ---> Tensor of shape (num_nodes, num_nodes)
          - 'rwse'                       ---> Tensor of shape (num_nodes, max_rwse_steps)
          - 'rrwp'                       ---> Tensor of shape (num_nodes, num_nodes, max_rrwp_steps)
@@ -96,13 +96,13 @@ class TextGraphDataset(Dataset):
 
         # 3. Post-process specific fields if they exist in the dataset
         
-        # Handle Spectral Coordinates (Convert list back to torch tensor)
-        if 'spectral_coords' in item and item['spectral_coords'] is not None:
+        # Handle Laplacian Coordinates (Convert list back to torch tensor)
+        if 'laplacian_coordinates' in item and item['laplacian_coordinates'] is not None:
             # Check if it's empty
-            if len(item['spectral_coords']) == 0:
-                item['spectral_coords'] = None
+            if len(item['laplacian_coordinates']) == 0:
+                item['laplacian_coordinates'] = None
             else:
-                item['spectral_coords'] = torch.tensor(item['spectral_coords'], dtype=torch.float32)
+                item['laplacian_coordinates'] = torch.tensor(item['laplacian_coordinates'], dtype=torch.float32)
 
         # Handle Magnetic Spectral Coordinates (Convert list back to torch tensor)
         if 'magnetic_V' in item and item['magnetic_V'] is not None and 'magnetic_lambdas' in item and item['magnetic_lambdas'] is not None:
@@ -171,9 +171,9 @@ class TextGraphDataset(Dataset):
             desc="Tokenizing"
         )
 
-    def compute_spectral_coordinates(self, embedding_dim=16):
-        """Computes Laplacian Eigenmaps and adds 'spectral_coords' column."""
-        print(f"Computing Spectral Coordinates (dim={embedding_dim})...")
+    def compute_laplacian_coordinates(self, embedding_dim=16):
+        """Computes Laplacian Eigenmaps and adds 'laplacian_coordinates' column."""
+        print(f"Computing Laplacian Coordinates (dim={embedding_dim})...")
         
         coords_list = []
         for g in tqdm(self.graphs, desc="Eigen-decomposition"):
@@ -182,7 +182,7 @@ class TextGraphDataset(Dataset):
             n = g_int.number_of_nodes()
             
             # Call user function
-            coords = get_spectral_coordinates(g_int, embedding_dim)
+            coords = get_laplacian_coordinates(g_int, embedding_dim)
             
             # --- FIX: ROBUST CONVERSION LOGIC ---
             # Handle Dictionary {0: [...], 1: [...]} from user function
@@ -192,7 +192,7 @@ class TextGraphDataset(Dataset):
                 try:
                     coords = [coords[i] for i in range(n)]
                 except KeyError:
-                    print(f"Warning: Spectral dict keys mismatch for graph with {n} nodes. Filling zeros.")
+                    print(f"Warning: Laplacian dict keys mismatch for graph with {n} nodes. Filling zeros.")
                     coords = [[0.0]*embedding_dim for _ in range(n)]
             
             # Handle PyTorch Tensor
@@ -211,10 +211,10 @@ class TextGraphDataset(Dataset):
             coords_list.append(coords)
 
         # Remove old column if exists
-        if "spectral_coords" in self._hf_dataset.column_names:
-            self._hf_dataset = self._hf_dataset.remove_columns("spectral_coords")
+        if "laplacian_coordinates" in self._hf_dataset.column_names:
+            self._hf_dataset = self._hf_dataset.remove_columns("laplacian_coordinates")
             
-        self._hf_dataset = self._hf_dataset.add_column("spectral_coords", coords_list)
+        self._hf_dataset = self._hf_dataset.add_column("laplacian_coordinates", coords_list)
 
     def compute_shortest_path_distances(self, cutoff=None):
         """Computes APSP and adds 'shortest_path_dists' column (flattened)."""
@@ -395,7 +395,7 @@ def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attribute
 
     ds = TextGraphDataset(graphs)
     if calc_attributes:
-        ds.compute_spectral_coordinates(embedding_dim=spec_emb_dim)
+        ds.compute_laplacian_coordinates(embedding_dim=spec_emb_dim)
         ds.compute_magnetic_lap(q=0.25)
         ds.compute_shortest_path_distances()
         ds.compute_rwse(max_rwse_steps=max_rwse_steps)
@@ -443,7 +443,7 @@ if __name__ == "__main__":
     print(f"Prompt Node: {item['prompt_node']}")
     print(f"Text: {item['text']}")
     print(f"Edges: {item['edges']}")
-    print(f"Spectral Shape: {item['spectral_coords'].shape}")
+    print(f"Laplacian Shape: {item['laplacian_coordinates'].shape}")
     print(f"Magnetic V Shape: {item['magnetic_V'].shape}")
     print(f"Magnetic Lambdas Shape: {item['magnetic_lambdas'].shape}")
     for i, emb in enumerate(item['magnetic_V']):
