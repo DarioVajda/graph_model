@@ -1,35 +1,38 @@
 """
-This is an implementation of a custom Llama model that incorporates graph-based attention biases.
-There are four types of biases that can be added to the attention scores:
+    This is an implementation of a custom Llama model that incorporates graph-based attention biases.
+    There are four types of biases that can be added to the attention scores:
 
-1. Shortest Path Distance (SPD) Bias
-    - This bias is based on the shortest path distance between nodes in the graph.
-    - It is calculated by this formula:
-        b_ij = spd_weights[d_ij] if d_ij > 0 else 0
-    - Trainable parameters: spd_weights (num_layers * num_heads * max_spd total parameters)
+    1. Shortest Path Distance (SPD) Bias
+        - This bias is based on the shortest path distance between nodes in the graph.
+        - It is calculated by this formula:
+            b_ij = spd_weights[d_ij] if d_ij > 0 else 0
+        - Trainable parameters: spd_weights (num_layers * num_heads * max_spd total parameters)
 
-2. Laplacian Bias
-    - This bias is based on the Laplacian spectral coordinates of the nodes in the graph.
-    - It is calculated by this formula:
-        b_ij = w_k * d_ij
-      where d_ij is the L2 distance between the Laplacian spectral coordinates of nodes i and j
-      (Laplacian spectral coordinates are the eigenvectors of the graph Laplacian).
-    - Trainable parameters: laplacian_weights (num_layers * num_heads total parameters)
+    2. Laplacian Bias
+        - This bias is based on the Laplacian spectral coordinates of the nodes in the graph.
+        - It is calculated by this formula:
+            b_ij = w_k * d_ij
+        where d_ij is the L2 distance between the Laplacian spectral coordinates of nodes i and j
+        (Laplacian spectral coordinates are the eigenvectors of the graph Laplacian).
+        - Trainable parameters: laplacian_weights (num_layers * num_heads total parameters)
 
-3. Random Walk Structural Encoding (RWSE) Bias
-    - This bias is based on the random walk structural features of the nodes.
-    - It is calculated by this formula:
-        b_ij = w_k * d_ij
-      where d_ij is the L2 distance between the RWSE feature vectors of nodes i and j.
-    - Trainable parameters: rwse_weights (num_layers * num_heads total parameters)
+    3. Random Walk Structural Encoding (RWSE) Bias
+        - This bias is based on the random walk structural features of the nodes.
+        - It is calculated by this formula:
+            b_ij = w_k * d_ij
+        where d_ij is the L2 distance between the RWSE feature vectors of nodes i and j.
+        - Trainable parameters: rwse_weights (num_layers * num_heads total parameters)
 
-4. Relative Random Walk Probability (RRWP) Bias
-    - This bias is based on the multi-hop probability of a random walk starting at node i and landing on node j.
-    - It maps the vector of transition probabilities (from 1 to max_rw_steps) into a bias value for each attention head.
-    - It is calculated by this formula:
-        b_ij = MLP(RRWP_ij) if i != j else 0
-      where the MLP is a 2-layer network (Linear -> SiLU -> Linear) mapping the max_rw_steps vector directly to num_heads.
-    - Trainable parameters: rrwp_proj (num_layers * (layer_1_weights + layer_2_weights) total parameters)
+    4. Relative Random Walk Probability (RRWP) Bias
+        - This bias is based on the multi-hop probability of a random walk starting at node i and landing on node j.
+        - It maps the vector of transition probabilities (from 1 to max_rw_steps) into a bias value for each attention head.
+        - It is calculated by this formula:
+            b_ij = MLP(RRWP_ij) if i != j else 0
+        where the MLP is a 2-layer network (Linear -> SiLU -> Linear) mapping the max_rw_steps vector directly to num_heads.
+        - Trainable parameters: rrwp_proj (num_layers * (layer_1_weights + layer_2_weights) total parameters)
+
+    5. Magnetic Laplacian Bias
+        - This bias is based on the magnetic Laplacian spectral coordinates of the nodes in the graph, which capture directed structural information.
 """
 
 import torch
@@ -67,13 +70,17 @@ from accelerate.utils import send_to_device
 
 #region Graph Llama Config
 class GraphAttnBiasConfig:
-    def __init__(self, spd=False, laplacian=False, max_spd=32, rwse=False, rrwp=False, max_rw_steps=8):
+    def __init__(self, spd=False, laplacian=False, max_spd=32, rwse=False, rrwp=False, max_rw_steps=8, magnetic=False, magnetic_dim=32, magnetic_q=0.25):
         self.spd = spd
         self.laplacian = laplacian
         self.max_spd = max_spd
         self.rwse = rwse
         self.rrwp = rrwp
         self.max_rw_steps = max_rw_steps
+        self.magnetic = magnetic
+        self.magnetic_dim = magnetic_dim
+        self.magnetic_q = 0.25
+
     def to_dict(self):
         return {
             "spd": self.spd,
@@ -82,6 +89,9 @@ class GraphAttnBiasConfig:
             "rwse": self.rwse,
             "rrwp": self.rrwp,
             "max_rw_steps": self.max_rw_steps,
+            "magnetic": self.magnetic,
+            "magnetic_dim": self.magnetic_dim,
+            "magnetic_q": self.magnetic_q
         }
 
     def __str__(self):
@@ -99,6 +109,8 @@ class GraphLlamaConfig(LlamaConfig):
         rrwp=False,
         max_rw_steps=8,
         graph_attn_bias=None, 
+        magnetic=False,
+        magnetic_dim=32,
         **kwargs
     ):
         # 1. Initialize standard Llama parameters
@@ -117,7 +129,9 @@ class GraphLlamaConfig(LlamaConfig):
                 max_spd=max_spd, 
                 rwse=rwse,
                 rrwp=rrwp,
-                max_rw_steps=max_rw_steps
+                max_rw_steps=max_rw_steps,
+                magnetic=magnetic,
+                magnetic_dim=magnetic_dim
             )
 
     def to_dict(self):
@@ -146,6 +160,9 @@ class GraphLlamaConfig(LlamaConfig):
         rwse = kwargs.pop("rwse", graph_saved_data.get("rwse", None))
         rrwp = kwargs.pop("rrwp", graph_saved_data.get("rrwp", None))
         max_rw_steps = kwargs.pop("max_rw_steps", graph_saved_data.get("max_rw_steps", None))
+        magnetic = kwargs.pop("magnetic", graph_saved_data.get("magnetic", None))
+        magnetic_dim = kwargs.pop("magnetic_dim", graph_saved_data.get("magnetic_dim", 32))
+        magnetic_q = kwargs.pop("magnetic_q", graph_saved_data.get("magnetic_q", 0.25))
 
         # 4. Return the instance
         return cls(
@@ -155,6 +172,9 @@ class GraphLlamaConfig(LlamaConfig):
             rwse=rwse, 
             rrwp=rrwp,
             max_rw_steps=max_rw_steps,
+            magnetic=magnetic,
+            magnetic_dim=magnetic_dim,
+            magnetic_q=magnetic_q,
             **config_dict
         )
 #endregion
@@ -174,8 +194,11 @@ class LlamaAttentionWithBias(LlamaAttention):
         self.require_rwse = getattr(graph_attn_bias_config, 'rwse', False)
         self.require_rrwp = getattr(graph_attn_bias_config, 'rrwp', False)
         self.max_rw_steps = getattr(graph_attn_bias_config, 'max_rw_steps', 8)
+        self.require_magnetic = getattr(graph_attn_bias_config, 'magnetic', False)
+        self.magnetic_dim = getattr(graph_attn_bias_config, 'magnetic_dim', 32)
 
         self.num_heads = config.num_attention_heads
+        self.head_dim = config.hidden_size // self.num_heads
 
         # Set of lookup embeddings mapping distances {0, 1,... max_spd-1, ≥max_spd} to bias values for each attention head separately
         # Note that we use nn.Parameter, so that the initialisation doesn't get overridden by the HF's _init_weights method
@@ -208,6 +231,26 @@ class LlamaAttentionWithBias(LlamaAttention):
             nn.init.zeros_(second_linear.bias)
             second_linear._is_hf_initialized = True
 
+        # MLP( V @ diag(phi(lambdas)) @ conj(V.T) )
+        if self.require_magnetic:
+            # Creating the eigenvalue-based features
+            self.magnetic_lambda_lin = nn.Linear(1, self.head_dim, bias=True) # R --> R^m_dim: lambda_i --> h_lambda_i
+
+            # The deep set architecture to process the eigenvalues in a permutation-equivariant way
+            self.magnetic_lambda_deep_set = nn.Sequential(
+                nn.Linear(self.head_dim*2, self.magnetic_dim, bias=True),
+                nn.SiLU(),
+            ) # R^(*2m_dim) --> R^m_dim:  concat(h_lambda_i, avg(h_lambda)) --> phi(lambda_i)
+
+            # The final MLP to map the magnetic features to bias values for each head
+            self.magnetic_bias_proj = nn.Sequential(
+                nn.Linear(self.magnetic_dim * 2, self.magnetic_dim, bias=True),
+                nn.SiLU(),
+                nn.Linear(self.magnetic_dim, self.num_heads, bias=True)
+            ) # R^m_dim*2 --> R^head_dim:   b_ij = MLP( V @ diag(phi(lambdas)) @ conj(V.T) )
+            # (multiply by 2 to process both the real and imaginary parts of the magnetic features together)
+
+
     def _initial_spd_weights(self, max_spd, num_heads, epsilon=1.0):
         """
             Initialize the shortest path distance (SPD) weights with a simple, yet logical starting point.
@@ -236,6 +279,8 @@ class LlamaAttentionWithBias(LlamaAttention):
             raise ValueError("RWSE bias is required but 'rwse' is missing from input_graph_batch.")
         if self.require_rrwp and (input_graph_batch is None or 'rrwp' not in input_graph_batch):
             raise ValueError("RRWP bias is required but 'rrwp' is missing from input_graph_batch.")
+        if self.require_magnetic and (input_graph_batch is None or 'magnetic' not in input_graph_batch):
+            raise ValueError("Magnetic bias is required but 'magnetic' is missing from input_graph_batch. It should be a tuple with the magnetic eigenvectors (shape BxNxNx2) and eigenvalues (shape N).")
 
     def compute_bias_slow(
         self,
@@ -329,14 +374,18 @@ class LlamaAttentionWithBias(LlamaAttention):
 
     def compute_bias(
         self,
-        query_states: torch.Tensor,                         # (batch_size, num_heads, q_len, head_dim)
-        key_states: torch.Tensor,                           # (batch_size, num_heads, kv_len, head_dim)
-        node_ids: Optional[torch.LongTensor],               # (batch_size, seq_len)
-        shortest_path_distances: Optional[torch.Tensor],    # (batch_size, max_num_nodes, max_num_nodes)
-        laplacian_coordinates: Optional[torch.Tensor],      # (batch_size, max_num_nodes, spec_dim)
-        rwse_emb: Optional[torch.Tensor],                   # (batch_size, max_num_nodes, rwse_dim)
-        rrwp_emb: Optional[torch.Tensor],                   # (batch_size, max_num_nodes, max_num_nodes, max_rw_steps)
+        query_states: torch.Tensor,                             # (batch_size, num_heads, q_len, head_dim)
+        key_states: torch.Tensor,                               # (batch_size, num_heads, kv_len, head_dim)
+        node_ids: Optional[torch.LongTensor],                   # (batch_size, seq_len)
+        shortest_path_distances: Optional[torch.Tensor],        # (batch_size, max_num_nodes, max_num_nodes)
+        laplacian_coordinates: Optional[torch.Tensor],          # (batch_size, max_num_nodes, spec_dim)
+        rwse_emb: Optional[torch.Tensor],                       # (batch_size, max_num_nodes, rwse_dim)
+        rrwp_emb: Optional[torch.Tensor],                       # (batch_size, max_num_nodes, max_num_nodes, max_rw_steps)
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]],  # (batch_size, max_num_nodes, max_num_nodes, 2), (batch_size, max_num_nodes)
     ):
+        magnetic_V = magnetic[0] if magnetic is not None else None          # (batch_size, max_num_nodes, max_num_nodes, 2)
+        magnetic_lambdas = magnetic[1] if magnetic is not None else None    # (batch_size, max_num_nodes)
+
         # print("Shapes of all inputs:")
         # print("query_states:", query_states.shape)
         # print("key_states:", key_states.shape)
@@ -345,8 +394,11 @@ class LlamaAttentionWithBias(LlamaAttention):
         # print("laplacian_coordinates:", laplacian_coordinates.shape if laplacian_coordinates is not None else None)
         # print("rwse_emb:", rwse_emb.shape if rwse_emb is not None else None)
         # print("rrwp_emb:", rrwp_emb.shape if rrwp_emb is not None else None)
+        # print("magnetic_V:", magnetic_V.shape if magnetic_V is not None else None)
+        # print("magnetic_lambdas:", magnetic_lambdas.shape if magnetic_lambdas is not None else None)
+        # exit()
 
-        using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp
+        using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp or self.require_magnetic
         if not using_graph_bias:
             return None  # No bias needed, return None to indicate this
         if node_ids is None:
@@ -384,19 +436,36 @@ class LlamaAttentionWithBias(LlamaAttention):
             rrwp_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # Zero out diagonal entries where i=j
             node_bias = node_bias + rrwp_bias
 
-        # Expanding the node-level biases to token-level biases using advanced indexing
-        B, S = node_ids.shape
-        _, H, _, _ = node_bias.shape
-        device = node_ids.device
+        if self.require_magnetic:
+            if magnetic_V is None or magnetic_lambdas is None: raise ValueError("Magnetic bias is required but 'magnetic' data is not provided.")
+            # compute embeddings for each eigenvalue and their average
+            h_i = self.magnetic_lambda_lin(magnetic_lambdas.unsqueeze(-1)) # (batch_size, max_num_nodes, head_dim)
+            h_avg = h_i.mean(dim=1, keepdim=True) # (batch_size, 1, head_dim)
+            h_avg_expanded = h_avg.expand(-1, magnetic_lambdas.shape[1], -1) # (batch_size, max_num_nodes, head_dim)
 
-        batch_idx = torch.arange(B, device=device).view(B, 1, 1, 1) # Shape: (B, 1, 1, 1)
-        head_idx = torch.arange(H, device=device).view(1, H, 1, 1)  # Shape: (1, H, 1, 1)
-        q_idx = node_ids.view(B, 1, S, 1)                           # Shape: (B, 1, S, 1)
-        k_idx = node_ids.view(B, 1, 1, S)                           # Shape: (B, 1, 1, S)
+            # compute the magnetic features using a deep set architecture to ensure permutation equivariance
+            deep_set_input = torch.cat([h_i, h_avg_expanded], dim=-1) # (batch_size, max_num_nodes, head_dim*2)
+            phi_lambdas = self.magnetic_lambda_deep_set(deep_set_input) # (batch_size, max_num_nodes, magnetic_dim)
 
-        token_bias = node_bias[batch_idx, head_idx, q_idx, k_idx]   # Shape: (B, H, S, S)
+            # compute the edge-level embeddings using the magnetic eigenvectors and the phi_lambdas features
+            V_real = magnetic_V[..., 0] # (batch_size, max_num_nodes, max_num_nodes)
+            V_imag = magnetic_V[..., 1] # (batch_size, max_num_nodes, max_num_nodes)
 
-        return token_bias
+            # Compute V @ diag(phi) @ conj(V.T) efficiently using Einstein summation
+            # Real Part: (V_R * Phi * V_R.T) + (V_I * Phi * V_I.T)
+            real_part = torch.einsum('bil, bjl, blk -> bijk', V_real, V_real, phi_lambdas) + torch.einsum('bil, bjl, blk -> bijk', V_imag, V_imag, phi_lambdas)
+            
+            # Imaginary Part: (V_I * Phi * V_R.T) - (V_R * Phi * V_I.T)
+            imag_part = torch.einsum('bil, bjl, blk -> bijk', V_imag, V_real, phi_lambdas) - torch.einsum('bil, bjl, blk -> bijk', V_real, V_imag, phi_lambdas)
+
+            # Concatenate real and imaginary parts to form the stable 2m-dim edge features
+            magnetic_edge_features = torch.cat([real_part, imag_part], dim=-1) # (batch_size, max_num_nodes, max_num_nodes, magnetic_dim * 2)
+
+            # Project the edge features to scalar bias values for each attention head
+            magnetic_bias = self.magnetic_bias_proj(magnetic_edge_features) # (batch_size, max_num_nodes, max_num_nodes, num_heads)
+
+            # Permute to match standard Transformer attention mask shape: (B, H, N, N)
+            magnetic_bias = magnetic_bias.permute(0, 3, 1, 2)
 
         # Expanding the node-level biases to token-level biases using advanced indexing
         batch_size, q_len = query_states.shape[0], query_states.shape[2]
@@ -417,7 +486,7 @@ class LlamaAttentionWithBias(LlamaAttention):
 
         token_bias = node_bias[batch_idx, head_idx, q_idx, k_idx]   # Shape: (B, H, q_len, kv_len)
 
-        return token_bias
+        return token_bias.to(dtype=query_states.dtype)
 
     def forward(
         self,
@@ -440,6 +509,7 @@ class LlamaAttentionWithBias(LlamaAttention):
         laplacian_coordinates = input_graph_batch.get('laplacian_coordinates', None) if self.require_laplacian else None
         rwse_emb = input_graph_batch.get('rwse', None) if self.require_rwse else None
         rrwp_emb = input_graph_batch.get('rrwp', None) if self.require_rrwp else None
+        magnetic = input_graph_batch.get('magnetic', None) if self.require_magnetic else (None, None)
 
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
@@ -467,6 +537,7 @@ class LlamaAttentionWithBias(LlamaAttention):
             laplacian_coordinates=laplacian_coordinates,
             rwse_emb=rwse_emb,
             rrwp_emb=rrwp_emb,
+            magnetic=magnetic,
         ) # (batch_size, num_heads, seq_len, seq_len)
         if custom_bias is not None and attention_mask is not None:
             attention_mask = attention_mask + custom_bias

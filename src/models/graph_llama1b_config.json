@@ -12,7 +12,10 @@
     "max_spd": 16,
     "rwse": true,
     "rrwp": true,
-    "max_rw_steps": 4
+    "max_rw_steps": 4,
+    "magnetic": true,
+    "magnetic_dim": 16,
+    "magnetic_q": 0.2
   },
   "head_dim": 64,
   "hidden_act": "silu",

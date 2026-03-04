@@ -81,7 +81,8 @@ class TextGraphDataset(Dataset):
          - 'shortest_path_dists'        ---> Tensor of shape (num_nodes, num_nodes)
          - 'rwse'                       ---> Tensor of shape (num_nodes, max_rwse_steps)
          - 'rrwp'                       ---> Tensor of shape (num_nodes, num_nodes, max_rrwp_steps)
-         - 'magnetic'                   ---> Tuple (V, lambdas) where V is a tensor of shape (num_nodes, num_nodes, 2) containing real and imaginary parts of the eigenvectors, and lambdas is a tensor of shape (num_nodes,) containing the eigenvalues.
+         - 'magnetic_V'                 ---> Tensor of shape (num_nodes, num_nodes, 2) containing real and imaginary parts of the magnetic eigenvectors
+         - 'magnetic_lambdas'          ---> Tensor of shape (num_nodes) containing the magnetic eigenvalues (which are real-valued, as the magnetic Laplacian is Hermitian matrix)
          - 'input_ids'                  ---> List of num_nodes lists of token ids (tokenized input for each node)
          - 'labels'                     ---> Tensor of labels for the prompt node
         """

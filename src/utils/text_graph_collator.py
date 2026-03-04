@@ -4,8 +4,9 @@ from torch.nn.utils.rnn import pad_sequence
 from .text_graph_dataset import TextGraph
 
 class GraphCollator:
-    def __init__(self, tokenizer=None, ):
+    def __init__(self, tokenizer=None, padding_type="right"):
         self.tokenizer = tokenizer
+        self.padding_type = padding_type
 
     def __call__(self, batch: list[TextGraph]):
         """
@@ -50,6 +51,10 @@ class GraphCollator:
         max_rw_steps = batch[0]['rrwp'].shape[2] if "rrwp" in batch[0] else 0
         rrwp = torch.zeros(batch_size, max_num_nodes, max_num_nodes, max_rw_steps, dtype=torch.float)
 
+        # initialise magnetic laplacian
+        magnetic_V = torch.zeros(batch_size, max_num_nodes, max_num_nodes, 2, dtype=torch.float) # 2 for real and imaginary parts
+        magnetic_lambdas = torch.zeros(batch_size, max_num_nodes, dtype=torch.float)
+
         for i, item in enumerate(batch):
             num_nodes = item['num_nodes']
             if "laplacian_coordinates" in item:
@@ -60,6 +65,9 @@ class GraphCollator:
                 rwse[i, :num_nodes, :] = item['rwse'].detach().clone()
             if "rrwp" in item:
                 rrwp[i, :num_nodes, :num_nodes, :] = item['rrwp'].detach().clone()
+            if "magnetic_V" in item and "magnetic_lambdas" in item:
+                magnetic_V[i, :num_nodes, :num_nodes, :] = item['magnetic_V'].detach().clone()
+                magnetic_lambdas[i, :num_nodes] = item['magnetic_lambdas'].detach().clone()
 
         return {
             'num_nodes': sizes,
@@ -71,5 +79,6 @@ class GraphCollator:
             'laplacian_coordinates': laplacian_coordinates,
             'shortest_path_dists': shortest_path_dists,
             'rwse': rwse,
-            'rrwp': rrwp
+            'rrwp': rrwp,
+            'magnetic': (magnetic_V, magnetic_lambdas) if torch.any(magnetic_V) or torch.any(magnetic_lambdas) else None,
         }
