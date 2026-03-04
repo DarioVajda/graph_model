@@ -250,6 +250,12 @@ class LlamaAttentionWithBias(LlamaAttention):
             ) # R^m_dim*2 --> R^head_dim:   b_ij = MLP( V @ diag(phi(lambdas)) @ conj(V.T) )
             # (multiply by 2 to process both the real and imaginary parts of the magnetic features together)
 
+            # initialise the final linear layer to 0 so that the initial bias is 0 and doesn't interfere with training at the start
+            final_linear = self.magnetic_bias_proj[2]
+            nn.init.zeros_(final_linear.weight)
+            nn.init.zeros_(final_linear.bias)
+            final_linear._is_hf_initialized = True
+
 
     def _initial_spd_weights(self, max_spd, num_heads, epsilon=1.0):
         """
@@ -271,6 +277,14 @@ class LlamaAttentionWithBias(LlamaAttention):
 
     def _validate_input_graph_batch(self, input_graph_batch):
         # Validate that input_graph_batch contains the necessary information based on the required bias types
+        if input_graph_batch is None:
+            raise ValueError("input_graph_batch is required but is None.")
+
+        # Check for num_nodes field
+        if 'num_nodes' not in input_graph_batch:
+            raise ValueError("input_graph_batch must contain 'num_nodes' field indicating the number of nodes in each graph in the batch.")
+        
+        # Check bias-type-specific requirements
         if self.require_spd and (input_graph_batch is None or 'shortest_path_dists' not in input_graph_batch):
             raise ValueError("Shortest Path Distance bias is required but 'shortest_path_dists' is missing from input_graph_batch.")
         if self.require_laplacian and (input_graph_batch is None or 'laplacian_coordinates' not in input_graph_batch):
@@ -377,6 +391,7 @@ class LlamaAttentionWithBias(LlamaAttention):
         query_states: torch.Tensor,                             # (batch_size, num_heads, q_len, head_dim)
         key_states: torch.Tensor,                               # (batch_size, num_heads, kv_len, head_dim)
         node_ids: Optional[torch.LongTensor],                   # (batch_size, seq_len)
+        num_nodes: Optional[torch.Tensor],                      # (batch_size,)
         shortest_path_distances: Optional[torch.Tensor],        # (batch_size, max_num_nodes, max_num_nodes)
         laplacian_coordinates: Optional[torch.Tensor],          # (batch_size, max_num_nodes, spec_dim)
         rwse_emb: Optional[torch.Tensor],                       # (batch_size, max_num_nodes, rwse_dim)
@@ -438,9 +453,17 @@ class LlamaAttentionWithBias(LlamaAttention):
 
         if self.require_magnetic:
             if magnetic_V is None or magnetic_lambdas is None: raise ValueError("Magnetic bias is required but 'magnetic' data is not provided.")
-            # compute embeddings for each eigenvalue and their average
+            # compute the eigenvalue-based features
             h_i = self.magnetic_lambda_lin(magnetic_lambdas.unsqueeze(-1)) # (batch_size, max_num_nodes, head_dim)
-            h_avg = h_i.mean(dim=1, keepdim=True) # (batch_size, 1, head_dim)
+
+            # create a boolean mask of valid nodes: shape (batch_size, max_num_nodes)
+            valid_mask = torch.arange(magnetic_lambdas.shape[1], device=h_i.device).expand(len(num_nodes), -1) < num_nodes.unsqueeze(1) # (batch_size, max_num_nodes) bool
+
+            # mask the invalid nodes out of the sum
+            h_i_masked = h_i * valid_mask.unsqueeze(-1) 
+
+            # compute the average of the h_i features (only across the valid nodes)
+            h_avg = h_i_masked.sum(dim=1, keepdim=True) / num_nodes.view(-1, 1, 1).to(h_i.dtype) # (batch_size, 1, head_dim) / (batch_size, 1, 1) -> (batch_size, 1, head_dim)
             h_avg_expanded = h_avg.expand(-1, magnetic_lambdas.shape[1], -1) # (batch_size, max_num_nodes, head_dim)
 
             # compute the magnetic features using a deep set architecture to ensure permutation equivariance
@@ -466,6 +489,13 @@ class LlamaAttentionWithBias(LlamaAttention):
 
             # Permute to match standard Transformer attention mask shape: (B, H, N, N)
             magnetic_bias = magnetic_bias.permute(0, 3, 1, 2)
+
+            # mask the diagonal entries where i=j to 0, since we don't want self-loops to contribute to the bias
+            diag_mask = torch.eye(magnetic_bias.shape[-1], device=device, dtype=torch.bool)
+            magnetic_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0)
+
+            # Add the magnetic bias to the total node_bias
+            node_bias = node_bias + magnetic_bias
 
         # Expanding the node-level biases to token-level biases using advanced indexing
         batch_size, q_len = query_states.shape[0], query_states.shape[2]
@@ -505,6 +535,9 @@ class LlamaAttentionWithBias(LlamaAttention):
 
         # Validate required inputs based on bias type (set to None if not required)
         self._validate_input_graph_batch(input_graph_batch)
+
+        num_nodes = input_graph_batch.get('num_nodes', None) if self.require_magnetic else None
+
         shortest_path_distances = input_graph_batch.get('shortest_path_dists', None) if self.require_spd else None
         laplacian_coordinates = input_graph_batch.get('laplacian_coordinates', None) if self.require_laplacian else None
         rwse_emb = input_graph_batch.get('rwse', None) if self.require_rwse else None
@@ -533,6 +566,7 @@ class LlamaAttentionWithBias(LlamaAttention):
             query_states=query_states,
             key_states=key_states,
             node_ids=node_ids,
+            num_nodes=num_nodes,
             shortest_path_distances=shortest_path_distances,
             laplacian_coordinates=laplacian_coordinates,
             rwse_emb=rwse_emb,

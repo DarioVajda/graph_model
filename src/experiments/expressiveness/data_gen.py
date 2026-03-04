@@ -169,7 +169,7 @@ def get_prompt_node_labels(example):
     return labels
 
 
-def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16, easy=True):
+def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16, easy=True, magnetic_q=0.25):
     dataset = generate_graph_dataset(num_examples, min_size=min_size, max_size=max_size, easy=easy)
 
     # FOR EACH EXAMPLE:
@@ -203,6 +203,7 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
     ds.compute_shortest_path_distances()
     ds.compute_rwse(max_rwse_steps=max_rwse_steps)
     ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)
+    ds.compute_magnetic_lap(q=magnetic_q)
 
     if tokenizer_name is None:
         raise ValueError("Tokenizer must be provided to prepare_dataset function.")
@@ -227,7 +228,7 @@ def dataset_path_and_size(dataset_size, easy=True):
     dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
-def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, max_rwse_steps=16, easy=True):
+def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, max_rwse_steps=16, easy=True, magnetic_q=0.25):
     dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy)
 
     dataset = prepare_dataset(
@@ -238,6 +239,7 @@ def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, m
         tokenizer_name=model_name, 
         max_rrwp_steps=max_rrwp_steps, 
         max_rwse_steps=max_rwse_steps,
+        magnetic_q=magnetic_q,
         easy=easy
     )
 
@@ -247,14 +249,15 @@ def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, m
     return dataset, dataset_path
 
 if __name__ == "__main__":
+    DATASET_SIZE = 1
     MIN_NODES = 10
     MAX_NODES = 20
     SPECTRAL_DIMS = 16
-    DATASET_SIZE = 1
     model_name = "meta-llama/Llama-3.2-1B"
     EASY = False
     max_rwse_steps = 8
     max_rrwp_steps = 16
+    magnetic_q = 0.25
 
     print(f"Creating dataset with {DATASET_SIZE // 1000}k examples, node sizes between {MIN_NODES} and {MAX_NODES}, spectral dimensions {SPECTRAL_DIMS}, and tokenizer {model_name}...")
 
@@ -266,7 +269,8 @@ if __name__ == "__main__":
         model_name=model_name,
         easy=EASY,
         max_rwse_steps=max_rwse_steps,
-        max_rrwp_steps=max_rrwp_steps
+        max_rrwp_steps=max_rrwp_steps,
+        magnetic_q=magnetic_q
     )
     print(f"Dataset created and saved at {dataset_path}")
 

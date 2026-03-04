@@ -202,25 +202,28 @@ def calculate_label_distribution(dataset):
 if __name__ == "__main__":
     # set the flags for spd, laplacian, rwse, and rrwp
     BIAS_PARAMS = { 
-        "spd": True, 
+        "spd": False, 
         "max_spd": 4, 
-        "laplacian": True, 
+        "laplacian": False, 
         "rwse": False, 
-        "rrwp": True, 
-        "max_rw_steps": 8 
+        "rrwp": False, 
+        "max_rw_steps": 8,
+        "magnetic": True,
+        "magnetic_dim": 32,
+        "magnetic_q": 0.25
     }
     TRAIN_DATASET_SIZE = 10_000
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
-    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
+    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
 
     run_suffix = "+".join([ 
         bias_type
         for bias_type 
-        in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})"] 
+        in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
         if BIAS_PARAMS[bias_type.split('(')[0]]
     ])
-    RUN_NAME = f"tensor_EASY_{run_suffix}"
+    RUN_NAME = f"EASY_{run_suffix}"
 
     set_wandb_project("GraphLLM")
     device = get_device()
