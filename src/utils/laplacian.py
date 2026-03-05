@@ -20,6 +20,8 @@ def get_laplacian_coordinates(G, m, random_sign_flips=False):
     # Check if the matrix is symmetric (it should be for an undirected graph)
     if not np.allclose(L.toarray(), L.toarray().T, atol=1e-8):
         warnings.warn("Laplacian matrix is not symmetric (because the graph is directed). This will produce unreliable eigenvalues/eigenvectors.")
+        # return a trivial embedding (all zeros) to avoid further issues
+        return {node: np.zeros(m) for node in node_list}
     
     # 2. Compute Eigenvalues
     if N < 200:

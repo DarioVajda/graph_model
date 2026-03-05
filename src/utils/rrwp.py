@@ -18,9 +18,17 @@ def compute_rrwp(graph: nx.Graph, max_distance: int = 4):
     # get adjacency matrix of the graph 
     A = nx.to_numpy_array(graph)
 
-    # get the degree matrix (and the inverse)
-    D = np.diag(A.sum(axis=1))
-    D_inv = np.diag(1 / (D.diagonal() + 1e-8))  # Add small value to avoid division by zero
+    # compute the out-degrees
+    out_degrees = A.sum(axis=1)
+
+    # Add self-loops to sink nodes (those with zero out-degree)
+    sink_nodes = np.where(out_degrees == 0)[0]
+    if len(sink_nodes) > 0:
+        A[sink_nodes, sink_nodes] = 1   # Add self-loops to sink nodes
+        out_degrees = A.sum(axis=1)     # Recompute out-degrees after adding self-loops
+
+    # compute the inverse out-degree matrix
+    D_inv = np.diag(1 / out_degrees)  # Add small value to avoid division by zero
 
     # compute the M matrix (transition probabilities)
     M = D_inv @ A
