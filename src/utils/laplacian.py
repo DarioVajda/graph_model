@@ -19,7 +19,7 @@ def get_laplacian_coordinates(G, m, random_sign_flips=False):
     
     # Check if the matrix is symmetric (it should be for an undirected graph)
     if not np.allclose(L.toarray(), L.toarray().T, atol=1e-8):
-        warnings.warn("Laplacian matrix is not symmetric (because the graph is directed). This will produce unreliable eigenvalues/eigenvectors.")
+        warnings.warn("Laplacian matrix is not symmetric (because the graph is directed). Setting all spectral coordinates to zero to avoid issues.")
         # return a trivial embedding (all zeros) to avoid further issues
         return {node: np.zeros(m) for node in node_list}
     

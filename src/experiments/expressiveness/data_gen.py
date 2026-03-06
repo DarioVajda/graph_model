@@ -11,7 +11,6 @@ LETTERS = [
     ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
 ]
 
-import random
 import networkx as nx
 import itertools
 
@@ -101,8 +100,8 @@ def generate_hard_graph(size=None, min_size=5, max_size=15, balanced=True):
         
     labels = list(range(size))
     
-    # Determine number of components K (between 2 and size // 2)
-    max_components = max(2, size // 2)
+    # Determine number of components K (between 2 and size // 5)
+    max_components = max(2, size // 3)
     K = random.randint(2, max_components)
     
     # Distribute nodes to components (guarantee at least 2 nodes per component)
@@ -249,9 +248,9 @@ def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, m
     return dataset, dataset_path
 
 if __name__ == "__main__":
-    DATASET_SIZE = 1
+    DATASET_SIZE = 500
     MIN_NODES = 10
-    MAX_NODES = 20
+    MAX_NODES = 25
     SPECTRAL_DIMS = 16
     model_name = "meta-llama/Llama-3.2-1B"
     EASY = False
@@ -282,4 +281,12 @@ if __name__ == "__main__":
     print("Example graph:")
     for key in loaded_ds[0].keys():
         print('--------------------------------')
-        print(f"{key}:\n{loaded_ds[0][key]}")
+        if key == 'shortest_path_dists':
+            spd = loaded_ds[0][key]
+            print(f"{key} (shape {spd.shape}):\n")
+            for i in range(spd.shape[0]):
+                for j in range(spd.shape[1]):
+                    print(f"{spd[i, j].item():6.0f}", end=' ')
+                print()
+        else:
+            print(f"{key}:\n{loaded_ds[0][key]}")

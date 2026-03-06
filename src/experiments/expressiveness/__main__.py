@@ -202,12 +202,12 @@ def calculate_label_distribution(dataset):
 if __name__ == "__main__":
     # set the flags for spd, laplacian, rwse, and rrwp
     BIAS_PARAMS = { 
-        "spd": False, 
-        "max_spd": 4, 
+        "spd": True, 
+        "max_spd": 8, 
         "laplacian": False, 
         "rwse": False, 
-        "rrwp": False, 
-        "max_rw_steps": 8,
+        "rrwp": True, 
+        "max_rw_steps": 16,
         "magnetic": True,
         "magnetic_dim": 32,
         "magnetic_q": 0.25
@@ -223,7 +223,9 @@ if __name__ == "__main__":
         in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
         if BIAS_PARAMS[bias_type.split('(')[0]]
     ])
-    RUN_NAME = f"EASY_{run_suffix}"
+    DIFFICULTY = "HARD"     # "EASY" (2 fully connected components, undirected prompt edges) or "HARD" (between 2 and size//5 connected components, directed prompt edges)
+    IS_EASY = DIFFICULTY == "EASY"
+    RUN_NAME = f"{DIFFICULTY}_{run_suffix}"
 
     set_wandb_project("GraphLLM")
     device = get_device()
@@ -233,20 +235,22 @@ if __name__ == "__main__":
     # --------------------------------------------------------------------------
     #region ----------------------- LOAD DATASETS ------------------------------
     # --------------------------------------------------------------------------
-    train_dataset_path, _ = dataset_path_and_size(TRAIN_DATASET_SIZE)
+    train_dataset_path, _ = dataset_path_and_size(TRAIN_DATASET_SIZE, easy=IS_EASY)
     if not os.path.exists(train_dataset_path):
         print(f"Dataset not found at {train_dataset_path}. Creating new dataset...")
-        create_and_save_dataset(dataset_size=TRAIN_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME, max_rrwp_steps=BIAS_PARAMS["max_rw_steps"])
+        create_and_save_dataset(dataset_size=TRAIN_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME, max_rrwp_steps=BIAS_PARAMS["max_rw_steps"], easy=IS_EASY)
 
     train_dataset = TextGraphDataset.load(train_dataset_path)
+    print(f"Loaded training dataset from {train_dataset_path} with {len(train_dataset)} examples.")
 
-    eval_dataset_path, _ = dataset_path_and_size(EVAL_DATASET_SIZE)
+    eval_dataset_path, _ = dataset_path_and_size(EVAL_DATASET_SIZE, easy=IS_EASY)
     if not os.path.exists(eval_dataset_path):
         print(f"Dataset not found at {eval_dataset_path}. Creating new dataset...")
-        create_and_save_dataset(dataset_size=EVAL_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME, max_rrwp_steps=BIAS_PARAMS["max_rw_steps"])
+        create_and_save_dataset(dataset_size=EVAL_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name=MODEL_NAME, max_rrwp_steps=BIAS_PARAMS["max_rw_steps"], easy=IS_EASY)
 
     eval_dataset = TextGraphDataset.load(eval_dataset_path)
-    
+    print(f"Loaded evaluation dataset from {eval_dataset_path} with {len(eval_dataset)} examples.")
+
     collator = GraphCollator()
 
     possible_labels = [" Yes", " No" ]
