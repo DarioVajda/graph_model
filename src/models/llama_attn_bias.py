@@ -1125,16 +1125,23 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         is_directory = os.path.isdir(pretrained_model_name_or_path)
+        print(f"is_directory: {is_directory}")
         is_lora = is_directory and os.path.exists(os.path.join(pretrained_model_name_or_path, "adapter_config.json"))
         is_bias_only = is_directory and os.path.exists(os.path.join(pretrained_model_name_or_path, "graph_bias_config.json"))
 
         # Scenario: LoRA adapter + Custom Biases
         if is_lora:
-            with(os.path.join(pretrained_model_name_or_path, "adapter_config.json")) as f:
+            print("Loading model with LoRA adapters and custom graph biases...")
+            with open(os.path.join(pretrained_model_name_or_path, "adapter_config.json")) as f:
                 base_model_name_or_path = json.load(f).get("base_model_name_or_path")
             
             # 1. Load the underlying base model
-            model = super().from_pretrained(base_model_path, *model_args, **kwargs)
+            config_path = os.path.join(pretrained_model_name_or_path, "config.json")
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            config = GraphLlamaConfig(**config)
+
+            model = super().from_pretrained(base_model_name_or_path, config=config, *model_args, **kwargs)
             # 2. Wrap it with the LoRA adapters
             if PeftModel is None:
                 raise ImportError("PEFT is required to load a LoRA checkpoint.")
@@ -1145,6 +1152,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
 
         # Scenario: Lightweight custom format (No LoRA, just base model + Custom Biases)
         elif is_bias_only:
+            print("Loading model with custom graph biases (no LoRA adapters)...")
             with open(os.path.join(pretrained_model_name_or_path, "graph_bias_config.json"), "r") as f:
                 base_model_path = json.load(f).get("base_model_name_or_path")
             
@@ -1162,6 +1170,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
 
         # Scenario: Standard Hugging Face loading
         else:
+            print("Loading model using standard Hugging Face loading (no custom graph biases)...")
             model = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
             # If it's a local directory that just happens to have our biases alongside the full weights
             if is_directory:

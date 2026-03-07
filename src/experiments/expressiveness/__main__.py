@@ -34,6 +34,7 @@ def select_active_params(model, active_params=None, lora=None):
     """
     # apply LoRA if configuration is provided
     if lora is not None:
+        print("Applying LoRA with config:", lora)
         lora_config = LoraConfig(
             r=lora.get("r", 8),
             lora_alpha=lora.get("lora_alpha", 16),
@@ -181,6 +182,7 @@ def training_run(
     num_epochs=3, 
     batch_size=8, 
     learning_rate=5e-5, 
+    bias_learning_rate=1e-3,
     accumulation_steps=4, 
     label_options=None, 
     pad_token_id=None,
@@ -240,6 +242,9 @@ def training_run(
 
         # set the active parameters for bias saving in the trainer callback
         active_params=active_params,
+
+        # set the custom bias learning rate to create two distinct parameter groups
+        bias_lr=bias_learning_rate,
     )
 
     trainer.train()
@@ -275,7 +280,8 @@ if __name__ == "__main__":
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
     ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
-    LR = 5e-4
+    LR = 4e-6
+    BIAS_LR=1e-3
 
     LORA_CONFIG = {
         "r": 4,
@@ -294,7 +300,7 @@ if __name__ == "__main__":
     ])
     DIFFICULTY = "HARD"     # "EASY" (2 fully connected components, undirected prompt edges) or "HARD" (between 2 and size//5 connected components, directed prompt edges)
     IS_EASY = DIFFICULTY == "EASY"
-    RUN_NAME = f"{DIFFICULTY}{'_lora' if LORA_CONFIG else ''}_{run_suffix}"
+    RUN_NAME = f"{DIFFICULTY}{'_lora' if LORA_CONFIG else ''}_{run_suffix}_v3"
 
     set_wandb_project("GraphLLM")
     device = get_device()
@@ -341,7 +347,7 @@ if __name__ == "__main__":
     #region ---------------- FINE TUNE SELECTED PARAMETERS ---------------------
     # --------------------------------------------------------------------------
     print("Fine-tuning these parameters: ", ACTIVE_PARAMS)
-    model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=None)
+    model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=LORA_CONFIG)
     print_trainable_parameters(model)
 
     training_run(
@@ -353,6 +359,7 @@ if __name__ == "__main__":
         num_epochs=10,
         batch_size=4,
         learning_rate=LR,
+        bias_learning_rate=BIAS_LR,
         accumulation_steps=8,
         label_options=tokenized_possible_labels,
         pad_token_id=pad_token_id,

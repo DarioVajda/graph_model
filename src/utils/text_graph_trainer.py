@@ -6,7 +6,7 @@ from peft import PeftModel
 from ..models.llama_utils import save_bias_parameters
 
 class GraphTrainer(Trainer):
-    def __init__(self, *args, custom_prediction_step=None, active_params=None,**kwargs):
+    def __init__(self, *args, custom_prediction_step=None, active_params=None, bias_lr=None, **kwargs):
         # 1. FORCE KEEP UNUSED COLUMNS
         # We intercept the TrainingArguments during initialization to ensure 
         # the Trainer never deletes our custom 'input_graph_batch' data.
@@ -15,6 +15,7 @@ class GraphTrainer(Trainer):
 
         self.custom_prediction_step = custom_prediction_step
         self.active_params = active_params
+        self.bias_lr = bias_lr
             
         super().__init__(*args, **kwargs)
 
@@ -71,22 +72,116 @@ class GraphTrainer(Trainer):
 
         if is_peft:
             super().save_model(output_dir)
-        else:
-            # save a configuration file that points to the base model
-            base_model_name = self.model.config._name_or_path
-            bias_config_data = {
-                "base_model_name_or_path": base_model_name
-            }
-            with open(os.path.join(output_dir, "graph_bias_config.json"), "w") as f:
-                json.dump(bias_config_data, f, indent=4)
-            
-            # save the regular model config file to preserve the custom configuration of the bias parameteres
-            config = self.model.config
-            config_path = os.path.join(output_dir, "config.json")
-            config.save_pretrained(output_dir)
+        
+        # save a configuration file that points to the base model
+        base_model_name = self.model.config._name_or_path
+        bias_config_data = {
+            "base_model_name_or_path": base_model_name
+        }
+        with open(os.path.join(output_dir, "graph_bias_config.json"), "w") as f:
+            json.dump(bias_config_data, f, indent=4)
+        
+        # save the regular model config file to preserve the custom configuration of the bias parameteres
+        config = self.model.config
+        config_path = os.path.join(output_dir, "config.json")
+        config.save_pretrained(output_dir)
 
         # In both cases: Extract and save the custom graph bias-related parameters
         save_bias_parameters(self.model, output_dir, params=self.active_params)
+
+    def create_optimizer(self):
+        """
+        Setup the optimizer with custom bias learning rates, perfectly 
+        mirroring Hugging Face's internal checks and fallbacks.
+        """
+        # 1. Handle potential SageMaker or distributed wrapping
+        from transformers.utils import is_sagemaker_mp_enabled
+        is_smp = is_sagemaker_mp_enabled()
+        opt_model = self.model_wrapped if is_smp else self.model
+
+        if self.optimizer is None:
+            # 2. Use HF's native, safer method to detect weight decay parameters
+            decay_parameters = self.get_decay_parameter_names(opt_model)
+            
+            # 3. Retrieve the correct optimizer class and arguments
+            if getattr(self, "optimizer_cls_and_kwargs", None) is not None:
+                optimizer_cls, optimizer_kwargs = self.optimizer_cls_and_kwargs
+            else:
+                optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
+
+            # 4. Custom Parameter Grouping
+            groups = {
+                "base_decay": [], "base_no_decay": [],
+                "bias_decay": [], "bias_no_decay": [],
+            }
+            
+            active_p = self.active_params or []
+            
+            for n, p in opt_model.named_parameters():
+                if not p.requires_grad:
+                    continue
+                
+                is_active = any(act in n for act in active_p)
+                has_decay = n in decay_parameters
+                
+                if is_active and has_decay: groups["bias_decay"].append(p)
+                elif is_active and not has_decay: groups["bias_no_decay"].append(p)
+                elif not is_active and has_decay: groups["base_decay"].append(p)
+                else: groups["base_no_decay"].append(p)
+
+            base_lr = self.args.learning_rate
+            bias_lr = self.bias_lr if self.bias_lr is not None else base_lr
+
+            optimizer_grouped_parameters = [
+                {"params": groups["base_decay"], "weight_decay": self.args.weight_decay, "lr": base_lr, "is_bias": False},
+                {"params": groups["base_no_decay"], "weight_decay": 0.0, "lr": base_lr, "is_bias": False},
+                {"params": groups["bias_decay"], "weight_decay": self.args.weight_decay, "lr": bias_lr, "is_bias": True},
+                {"params": groups["bias_no_decay"], "weight_decay": 0.0, "lr": bias_lr, "is_bias": True},
+            ]
+            
+            # Filter out empty groups to prevent optimizer crashes
+            optimizer_grouped_parameters = [g for g in optimizer_grouped_parameters if len(g["params"]) > 0]
+
+            # 5. Handle special HF optimizer overwrites (GaLore, LOMO, layer-wise dummy)
+            if "params" in optimizer_kwargs:
+                optimizer_grouped_parameters = optimizer_kwargs.pop("params")
+            if "model" in optimizer_kwargs:
+                optimizer_grouped_parameters = optimizer_kwargs.pop("model")
+            if "optimizer_dict" in optimizer_kwargs:
+                optimizer_grouped_parameters = optimizer_kwargs.pop("optimizer_dict")
+
+            self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+
+            # 6. Adam8bit compatibility (if you use bitsandbytes)
+            if optimizer_cls.__name__ == "Adam8bit":
+                import bitsandbytes
+                manager = bitsandbytes.optim.GlobalOptimManager.get_instance()
+                for module in opt_model.modules():
+                    if isinstance(module, torch.nn.Embedding): # Note: assumes torch is imported
+                        manager.register_module_override(module, "weight", {"optim_bits": 32})
+
+        # 7. Wrap for SageMaker if needed
+        if is_smp:
+            import smdistributed.modelparallel.torch as smp
+            self.optimizer = smp.DistributedOptimizer(self.optimizer)
+
+        return self.optimizer
+
+    def log(self, logs: dict, *args, **kwargs) -> None:
+        """
+        Intercepts the logging dictionary to add the bias learning rate 
+        only if a custom bias_lr was actually provided.
+        """
+        # Inject our custom learning rate into the logs dict
+        if self.optimizer is not None:
+            for group in self.optimizer.param_groups:
+                if group.get("is_bias", False):
+                    logs["bias_learning_rate"] = group["lr"]
+                    break
+        
+        # Pass the augmented logs, plus any extra arguments HF throws at us, back to the default logger
+        super().log(logs, *args, **kwargs)
+
 
 
 def set_wandb_project(project_name="GraphLLM"):

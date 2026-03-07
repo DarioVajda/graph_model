@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     # Load the model
     # trained_model_path = "./checkpoints/HARD_magnetic(dim=32,q=0.25)/checkpoint-3120"
-    trained_model_path = "./checkpoints/HARD_lora_rrwp(16)+magnetic(dim=32,q=0.25)/checkpoint-3120"
+    trained_model_path = "./checkpoints/HARD_lora_spd(8)+rrwp(16)+magnetic(dim=32,q=0.25)_v2/checkpoint-3120"
     model = GraphLlamaForCausalLM.from_pretrained(trained_model_path, attn_implementation="eager")
     print(f"Loaded model from {trained_model_path}")
 
