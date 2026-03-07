@@ -3,6 +3,7 @@ torch>=2.0.0
 transformers==4.50.3
 accelerate
 huggingface_hub[cli]==0.27.1
+peft
 
 # Datasets
 datasets>=2.19.0 

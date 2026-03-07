@@ -35,6 +35,7 @@
         - This bias is based on the magnetic Laplacian spectral coordinates of the nodes in the graph, which capture directed structural information.
 """
 
+import os
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -44,6 +45,8 @@ from transformers.cache_utils import DynamicCache
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 from ..utils.text_graph_dataset import TextGraphDataset, TextGraph, generate_text_graph_example, prepare_example_labels
+from .llama_utils import save_bias_parameters, load_bias_parameters
+from peft import PeftModel
 
 from transformers.models.llama.modeling_llama import (
     LlamaConfig,
@@ -185,6 +188,7 @@ class LlamaAttentionWithBias(LlamaAttention):
         
         # initialise all additional parameters needed for the attention bias
         graph_attn_bias_config = getattr(config, "graph_attn_bias", None)  # Get the graph_attn_bias config, or use defaults if not present
+
         if graph_attn_bias_config is None:
             raise ValueError("GraphLlamaConfig must contain a 'graph_attn_bias' attribute with the bias configuration.")
 
@@ -865,6 +869,9 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         super().__init__(config)
         self._init_requirements(config)
 
+        # Set the architectures attribute to GraphLlamaForCausalLM instead of LlamaForCauseLM
+        self.config.architectures = ["GraphLlamaForCausalLM"]
+
         # Swap the internal model
         self.model = LlamaModelWithBias(config)
 
@@ -1115,6 +1122,51 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             attentions=outputs.attentions,
         )
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        is_directory = os.path.isdir(pretrained_model_name_or_path)
+        is_lora = is_directory and os.path.exists(os.path.join(pretrained_model_name_or_path, "adapter_config.json"))
+        is_bias_only = is_directory and os.path.exists(os.path.join(pretrained_model_name_or_path, "graph_bias_config.json"))
+
+        # Scenario: LoRA adapter + Custom Biases
+        if is_lora:
+            with(os.path.join(pretrained_model_name_or_path, "adapter_config.json")) as f:
+                base_model_name_or_path = json.load(f).get("base_model_name_or_path")
+            
+            # 1. Load the underlying base model
+            model = super().from_pretrained(base_model_path, *model_args, **kwargs)
+            # 2. Wrap it with the LoRA adapters
+            if PeftModel is None:
+                raise ImportError("PEFT is required to load a LoRA checkpoint.")
+            model = PeftModel.from_pretrained(model, pretrained_model_name_or_path)
+            # 3. Inject our custom graph biases
+            load_bias_parameters(model, pretrained_model_name_or_path)
+            return model
+
+        # Scenario: Lightweight custom format (No LoRA, just base model + Custom Biases)
+        elif is_bias_only:
+            with open(os.path.join(pretrained_model_name_or_path, "graph_bias_config.json"), "r") as f:
+                base_model_path = json.load(f).get("base_model_name_or_path")
+            
+            # Load the GraphLlama config
+            config_path = os.path.join(pretrained_model_name_or_path, "config.json")
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            config = GraphLlamaConfig(**config)
+
+            # 1. Load the underlying base model
+            model = super().from_pretrained(base_model_path, config=config, *model_args, **kwargs)
+            # 2. Inject our custom graph biases
+            load_bias_parameters(model, pretrained_model_name_or_path)
+            return model
+
+        # Scenario: Standard Hugging Face loading
+        else:
+            model = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+            # If it's a local directory that just happens to have our biases alongside the full weights
+            if is_directory:
+                load_bias_parameters(model, pretrained_model_name_or_path)
+            return model
 
 if __name__ == "__main__":
     from transformers import AutoTokenizer

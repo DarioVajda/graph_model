@@ -63,21 +63,23 @@ def evaluate_model(model, test_dataset, label_options):
             correct_predictions += 1
 
     print(f"Accuracy: {correct_predictions}/{total_predictions} = {correct_predictions/total_predictions:.4f}")
-        
+
 
 
 if __name__ == "__main__":
     # Load the test dataset
     TEST_DATASET_SIZE = 1_000
-    test_dataset_path, _ = dataset_path_and_size(TEST_DATASET_SIZE)
+    EASY = False
+    test_dataset_path, _ = dataset_path_and_size(TEST_DATASET_SIZE, easy=EASY)
     if not os.path.exists(test_dataset_path):
         print(f"Test dataset not found at {test_dataset_path}. Creating new dataset...")
-        create_and_save_dataset(dataset_size=TEST_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name="meta-llama/Llama-3.2-1B")
+        create_and_save_dataset(dataset_size=TEST_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name="meta-llama/Llama-3.2-1B", easy=EASY)
     test_dataset = TextGraphDataset.load(test_dataset_path)
 
     # Load the model
-    trained_model_path = "./checkpoints/bias_only_combined/checkpoint-3120"
-    model = GraphLlamaForCausalLM.from_pretrained(trained_model_path, bias_type="combined", max_spd=4, attn_implementation="eager")
+    # trained_model_path = "./checkpoints/HARD_magnetic(dim=32,q=0.25)/checkpoint-3120"
+    trained_model_path = "./checkpoints/HARD_lora_rrwp(16)+magnetic(dim=32,q=0.25)/checkpoint-3120"
+    model = GraphLlamaForCausalLM.from_pretrained(trained_model_path, attn_implementation="eager")
     print(f"Loaded model from {trained_model_path}")
 
     # Load the tokenizer

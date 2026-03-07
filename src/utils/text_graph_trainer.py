@@ -1,8 +1,12 @@
+import os, json
 import torch
 from transformers import Trainer
+from peft import PeftModel
+
+from ..models.llama_utils import save_bias_parameters
 
 class GraphTrainer(Trainer):
-    def __init__(self, *args, custom_prediction_step=None, **kwargs):
+    def __init__(self, *args, custom_prediction_step=None, active_params=None,**kwargs):
         # 1. FORCE KEEP UNUSED COLUMNS
         # We intercept the TrainingArguments during initialization to ensure 
         # the Trainer never deletes our custom 'input_graph_batch' data.
@@ -10,6 +14,7 @@ class GraphTrainer(Trainer):
             kwargs["args"].remove_unused_columns = False
 
         self.custom_prediction_step = custom_prediction_step
+        self.active_params = active_params
             
         super().__init__(*args, **kwargs)
 
@@ -51,6 +56,38 @@ class GraphTrainer(Trainer):
             return self.custom_prediction_step(super().prediction_step, model, inputs, prediction_loss_only, ignore_keys)
         else:
             return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+
+    def save_model(self, output_dir=None, _internal_call=False):
+        """
+        Overrides the deafult Trainer save behavour to ensure lightweight checkpoints for both LoRA and non-LoRA custom fine-tuning.
+        """
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Check if the model is wrapped in PEFT/LoRA
+        is_peft = False
+        if PeftModel is not None:
+            is_peft = isinstance(self.model, PeftModel)
+
+        if is_peft:
+            super().save_model(output_dir)
+        else:
+            # save a configuration file that points to the base model
+            base_model_name = self.model.config._name_or_path
+            bias_config_data = {
+                "base_model_name_or_path": base_model_name
+            }
+            with open(os.path.join(output_dir, "graph_bias_config.json"), "w") as f:
+                json.dump(bias_config_data, f, indent=4)
+            
+            # save the regular model config file to preserve the custom configuration of the bias parameteres
+            config = self.model.config
+            config_path = os.path.join(output_dir, "config.json")
+            config.save_pretrained(output_dir)
+
+        # In both cases: Extract and save the custom graph bias-related parameters
+        save_bias_parameters(self.model, output_dir, params=self.active_params)
+
 
 def set_wandb_project(project_name="GraphLLM"):
     import os

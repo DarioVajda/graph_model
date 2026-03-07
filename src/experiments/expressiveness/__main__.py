@@ -6,11 +6,13 @@ from .data_gen import create_and_save_dataset, dataset_path_and_size
 import torch
 import os
 import random
-from transformers import TrainingArguments, AutoTokenizer
+from transformers import TrainingArguments, AutoTokenizer, TrainerCallback
+from peft import LoraConfig, get_peft_model
 
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+#region -------- Code for model intialization and parameter selection --------
 def init_model(model_name, device, bias_params):
     # model = GraphLlamaForCausalLM.from_pretrained(model_name, bias_type=bias_type, max_spd=max_spd, attn_implementation="eager")
     config = GraphLlamaConfig.from_pretrained(model_name, **bias_params)
@@ -23,23 +25,75 @@ def init_model(model_name, device, bias_params):
 
     return model, tokenizer
 
-def select_active_params(model, active_params=None):
+def select_active_params(model, active_params=None, lora=None):
     """
+    Applies LoRA if a configuration dictionary is provided.
     Sets requires_grad=True for parameters whose names contain any of the substrings in active_params.
-    If active_params is None, all parameters are frozen (requires_grad=False).
+    If active_params is None, no additional parameters are unfrozen.
     If active_params is "all", all parameters are set to requires_grad=True.
     """
-    if active_params is None:
-        active_params = [] # freeze all parameters
-    elif active_params == "all":
-        active_params = [""] # activate all parameters by matching any substring (empty string matches all names)
+    # apply LoRA if configuration is provided
+    if lora is not None:
+        lora_config = LoraConfig(
+            r=lora.get("r", 8),
+            lora_alpha=lora.get("lora_alpha", 16),
+            target_modules=lora.get("target_modules", ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]),
+            lora_dropout=lora.get("lora_dropout", 0.05),
+            bias=lora.get("bias", "none"),
+            task_type="CAUSAL_LM",
+        )
+        # wrap the model with Low-Rank Adapters
+        model = get_peft_model(model, lora_config)
 
-    for name, param in model.named_parameters():
-        if any(active_param in name for active_param in active_params):
+    # handle custom active paramters (usually those used for computing the graph-based attention biases)
+    if active_params == "all":
+        for param in model.parameters():
             param.requires_grad = True
-        else:
-            param.requires_grad = False
+    elif active_params is not None:
+        for name, param in model.named_parameters():
+            if any(active_param in name for active_param in active_params):
+                param.requires_grad = True
 
+    return model
+
+def print_trainable_parameters(model):
+    """
+    Prints the number of trainable parameters in the model, 
+    differentiating between LoRA adapters and custom active parameters.
+    """
+    trainable_lora_params = 0
+    trainable_custom_params = 0
+    all_param = 0
+    
+    print("List of custom active parameters (requires_grad=True):")
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        all_param += num_params
+        
+        if param.requires_grad:
+            # PEFT always includes 'lora' in the adapter weight names
+            if "lora" in name.lower():
+                trainable_lora_params += num_params
+                print(f" - {name} ({num_params:,} params) [LoRA Adapter]")
+            else:
+                trainable_custom_params += num_params
+                print(f" - {name} ({num_params:,} params)")
+                
+    total_trainable = trainable_lora_params + trainable_custom_params
+    
+    print("\n" + "="*50)
+    print("TRAINABLE PARAMETER SUMMARY")
+    print("="*50)
+    print(f"LoRA Adapters:       {trainable_lora_params:>15,}")
+    print(f"Custom Graph Biases: {trainable_custom_params:>15,}")
+    print("-" * 50)
+    print(f"Total Trainable:     {total_trainable:>15,}")
+    print(f"Total Model Params:  {all_param:>15,}")
+    print(f"Trainable %:         {100 * total_trainable / all_param:>14.4f}%")
+    print("="*50 + "\n")
+#endregion
+
+#region -------- Code for custom evaluation --------
 def smuggle_prediction_step(super_prediction_step, model, inputs, prediction_loss_only, ignore_keys=None):
     # Run the standard evaluation step
     loss, logits, labels = super_prediction_step(
@@ -116,6 +170,7 @@ class ComputeMetrics:
             "classification_accuracy": float(correct) / float(total) if total > 0 else 0.0,
             "positive_prediction_ratio": float(positive_prediction_count) / float(total) if total > 0 else 0.0,
         }
+#endregion
 
 def training_run(
     model, 
@@ -128,7 +183,8 @@ def training_run(
     learning_rate=5e-5, 
     accumulation_steps=4, 
     label_options=None, 
-    pad_token_id=None
+    pad_token_id=None,
+    active_params=None,
 ):
     if label_options is None or pad_token_id is None:
         raise ValueError("Label options and pad token ID must be provided for the training run.")
@@ -148,7 +204,7 @@ def training_run(
         eval_strategy="steps",                                  # Evaluate every eval_steps during training
         eval_steps=25,                                          # Number of steps between evaluations
         save_strategy="steps",                                  # Save a checkpoint based on save_steps
-        save_steps=100,                                         # Number of steps between saving checkpoints
+        save_steps=25,                                          # Number of steps between saving checkpoints
         metric_for_best_model="eval_classification_accuracy",   # Metric to use for selecting the best model
         greater_is_better=True,                                 # Higher classification_accuracy is better
         save_total_limit=5,                                     # Maximum number of checkpoints to store
@@ -181,6 +237,9 @@ def training_run(
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         custom_prediction_step=smuggle_prediction_step,
+
+        # set the active parameters for bias saving in the trainer callback
+        active_params=active_params,
     )
 
     trainer.train()
@@ -216,6 +275,16 @@ if __name__ == "__main__":
     EVAL_DATASET_SIZE = 500
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
     ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
+    LR = 5e-4
+
+    LORA_CONFIG = {
+        "r": 4,
+        "lora_alpha": 8,
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "lora_dropout": 0.00,
+        "bias": "none",
+    }
+    # LORA_CONFIG = None
 
     run_suffix = "+".join([ 
         bias_type
@@ -225,7 +294,7 @@ if __name__ == "__main__":
     ])
     DIFFICULTY = "HARD"     # "EASY" (2 fully connected components, undirected prompt edges) or "HARD" (between 2 and size//5 connected components, directed prompt edges)
     IS_EASY = DIFFICULTY == "EASY"
-    RUN_NAME = f"{DIFFICULTY}_{run_suffix}"
+    RUN_NAME = f"{DIFFICULTY}{'_lora' if LORA_CONFIG else ''}_{run_suffix}"
 
     set_wandb_project("GraphLLM")
     device = get_device()
@@ -272,16 +341,8 @@ if __name__ == "__main__":
     #region ---------------- FINE TUNE SELECTED PARAMETERS ---------------------
     # --------------------------------------------------------------------------
     print("Fine-tuning these parameters: ", ACTIVE_PARAMS)
-    select_active_params(model, active_params=ACTIVE_PARAMS)
-
-    print("List of active parameters (requires_grad=True):")
-    total_trainable_params = 0
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(f" - {name}")
-            total_trainable_params += param.numel()
-    print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable_params}")
-    print('-'*50)
+    model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=None)
+    print_trainable_parameters(model)
 
     training_run(
         model=model,
@@ -291,10 +352,11 @@ if __name__ == "__main__":
         run_name=RUN_NAME,
         num_epochs=10,
         batch_size=4,
-        learning_rate=1e-3,
+        learning_rate=LR,
         accumulation_steps=8,
         label_options=tokenized_possible_labels,
         pad_token_id=pad_token_id,
+        active_params=ACTIVE_PARAMS,
     )
 
     #endregion

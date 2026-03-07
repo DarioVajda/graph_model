@@ -5,7 +5,9 @@
 #    pip-compile requirements.in
 #
 accelerate==1.12.0
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   peft
 aiohappyeyeballs==2.6.1
     # via aiohttp
 aiohttp==3.13.3
@@ -82,6 +84,7 @@ huggingface-hub[cli]==0.27.1
     #   accelerate
     #   datasets
     #   huggingface-hub
+    #   peft
     #   tokenizers
     #   transformers
 idna==3.11
@@ -124,6 +127,7 @@ numpy==2.2.6
     #   datasets
     #   matplotlib
     #   pandas
+    #   peft
     #   scipy
     #   seaborn
     #   torch-geometric
@@ -173,12 +177,15 @@ packaging==26.0
     #   datasets
     #   huggingface-hub
     #   matplotlib
+    #   peft
     #   transformers
     #   wandb
 pandas==2.3.3
     # via
     #   datasets
     #   seaborn
+peft==0.18.1
+    # via -r requirements.in
 pfzy==0.3.4
     # via inquirerpy
 pillow==12.1.0
@@ -198,6 +205,7 @@ protobuf==6.33.5
 psutil==7.2.2
     # via
     #   accelerate
+    #   peft
     #   torch-geometric
 pyarrow==23.0.1
     # via datasets
@@ -222,6 +230,7 @@ pyyaml==6.0.3
     #   accelerate
     #   datasets
     #   huggingface-hub
+    #   peft
     #   transformers
     #   wandb
 regex==2026.1.15
@@ -236,6 +245,7 @@ requests==2.32.5
 safetensors==0.7.0
     # via
     #   accelerate
+    #   peft
     #   transformers
 scipy==1.15.3
     # via -r requirements.in
@@ -257,6 +267,7 @@ torch==2.10.0
     # via
     #   -r requirements.in
     #   accelerate
+    #   peft
 torch-geometric==2.7.0
     # via -r requirements.in
 tqdm==4.67.1
@@ -264,10 +275,13 @@ tqdm==4.67.1
     #   -r requirements.in
     #   datasets
     #   huggingface-hub
+    #   peft
     #   torch-geometric
     #   transformers
 transformers==4.50.3
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   peft
 triton==3.6.0
     # via torch
 typing-extensions==4.15.0
