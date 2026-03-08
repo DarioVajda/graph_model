@@ -3,16 +3,9 @@ from transformers import LlamaForCausalLM, LlamaConfig, AutoTokenizer
 
 import networkx as nx
 
-from ...models.llama_attn_bias import GraphLlamaForCausalLM
+from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
 from ...utils.text_graph_dataset import TextGraphDataset, prepare_example_labels
 from ...utils.text_graph_collator import GraphCollator
-
-def export_hf_token():
-    import os
-    # read the HF_TOKEN from the ./hf_token.txt file
-    with open(os.path.expanduser("./hf_token.txt"), "r") as f:
-        HF_TOKEN = f.read().strip()
-    os.environ["HF_TOKEN"] = HF_TOKEN
 
 def _load_default_model(model_name):
     config = LlamaConfig.from_pretrained(model_name)
@@ -20,7 +13,7 @@ def _load_default_model(model_name):
     return model
 
 def _load_graph_model(model_name):
-    config = LlamaConfig.from_pretrained(model_name)
+    config = GraphLlamaConfig.from_pretrained("./src/models/graph_llama1b_config.json")
     model = GraphLlamaForCausalLM.from_pretrained(model_name, config=config)
     return model
 
@@ -33,13 +26,14 @@ def generate_example(model_name, tokenizer):
 
     ds.compute_laplacian_coordinates()
     ds.compute_shortest_path_distances()
+    ds.compute_rwse()
+    ds.compute_rrwp(max_rrwp_steps=4)
+    ds.compute_magnetic_lap()
 
     ds.tokenize(tokenizer)
     return ds[0]
 
 if __name__ == "__main__":
-    export_hf_token()
-
     model_name = "meta-llama/Llama-3.2-1B"
     
     default_model = _load_default_model(model_name)

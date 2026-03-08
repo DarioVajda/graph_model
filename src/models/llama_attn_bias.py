@@ -300,96 +300,6 @@ class LlamaAttentionWithBias(LlamaAttention):
         if self.require_magnetic and (input_graph_batch is None or 'magnetic' not in input_graph_batch):
             raise ValueError("Magnetic bias is required but 'magnetic' is missing from input_graph_batch. It should be a tuple with the magnetic eigenvectors (shape BxNxNx2) and eigenvalues (shape N).")
 
-    def compute_bias_slow(
-        self,
-        query_states: torch.Tensor,                             # (batch_size, num_heads, q_len, head_dim)
-        key_states: torch.Tensor,                               # (batch_size, num_heads, kv_len, head_dim)
-        node_ids: Optional[torch.LongTensor],                   # (batch_size, seq_len)
-        shortest_path_distances: Optional[list[torch.Tensor]],  # batch_size x (num_nodes_i, num_nodes_i)
-        spectral_coordinates: Optional[list[torch.Tensor]],     # batch_size x (num_nodes_i, spec_dim)
-        rwse_emb: Optional[list[torch.Tensor]],                 # batch_size x (num_nodes_i, rwse_dim)
-        rrwp_emb: Optional[list[torch.Tensor]],                 # batch_size x (num_nodes_i, num_nodes_i, max_rw_steps)
-    ):
-        batch_size, q_len = query_states.shape[0], query_states.shape[2]
-        kv_len = key_states.shape[2]
-
-        using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp
-        if using_graph_bias and node_ids is not None:
-            device = query_states.device
-            dtype = query_states.dtype
-            # Initialize empty graph bias tensor: (batch_size, num_heads, q_len, kv_len)
-            graph_bias = torch.zeros(batch_size, self.num_heads, q_len, kv_len, device=device, dtype=dtype)
-
-            for batch_idx in range(batch_size):
-                # Accommodate text generation where q_len is 1 but kv_len is the full cached history
-                b_node_ids_q = node_ids[batch_idx, -q_len:]
-                b_node_ids_kv = node_ids[batch_idx, -kv_len:]
-
-                node_bias = 0
-                
-                # 1. Calculate SPD Bias
-                if self.require_spd and shortest_path_distances is not None:
-                    spd_mat = shortest_path_distances[batch_idx]
-                    
-                    # Create a mask for where distance is > 0 (False/0 on the diagonal; True/1 elsewhere)
-                    non_zero_mask = (spd_mat > 0)
-                    
-                    # Clamp and Shift - Distances [1...max] become indices [0...max-1] (max_spd == self.spd_weights.shape[0])
-                    spd_indices = torch.clamp(spd_mat - 1, min=0, max=self.spd_weights.shape[0] - 1)
-
-                    # Perform lookup
-                    spd_b = F.embedding(spd_indices, self.spd_weights).permute(2, 0, 1).to(dtype)
-                    
-                    # Zero out the entries where distance was originally 0 (non_zero_mask is (N, N), spd_b is (H, N, N))
-                    spd_b = spd_b * non_zero_mask.unsqueeze(0)
-                    node_bias = node_bias + spd_b
-
-                # 2. Calculate Laplacian Bias
-                if self.require_laplacian and spectral_coordinates is not None:
-                    spec_coords = spectral_coordinates[batch_idx] # (num_nodes, spec_dim)
-                    
-                    # Compute pairwise L2 distance -> (num_nodes, num_nodes)
-                    spec_dist = torch.cdist(spec_coords, spec_coords, p=2.0)
-                    
-                    # Multiply by learned weights per head -> (num_heads, num_nodes, num_nodes)
-                    spec_b = spec_dist.unsqueeze(0) * self.laplacian_weights.view(-1, 1, 1).to(dtype)
-                    node_bias = node_bias + spec_b
-
-                # 3. Calculate Random Walk Structural Encoding (RWSE) Bias
-                if self.require_rwse and rwse_emb is not None:
-                    rwse = rwse_emb[batch_idx] # (num_nodes, rwse_dim)
-                    
-                    # Compute pairwise L2 distance -> (num_nodes, num_nodes)
-                    rwse_dist = torch.cdist(rwse, rwse, p=2.0)
-                    
-                    # Multiply by learned weights per head -> (num_heads, num_nodes, num_nodes)
-                    rwse_b = rwse_dist.unsqueeze(0) * self.rwse_weights.view(-1, 1, 1).to(dtype)
-                    node_bias = node_bias + rwse_b
-
-                # 4. Calculate Relative Random Walk Probability (RRWP) Bias
-                if self.require_rrwp and rrwp_emb is not None:
-                    rrwp_features = rrwp_emb[batch_idx] # (num_nodes, num_nodes, max_rw_steps)
-                    
-                    # Compute the RRWP biases
-                    rrwp_b = self.rrwp_proj(rrwp_features).permute(2, 0, 1) # (num_heads, num_nodes, num_nodes)
-                    
-                    # Zero out the diagonal entries where i=j
-                    diag_mask = torch.eye(rrwp_b.shape[-1], device=device, dtype=torch.bool)
-                    rrwp_b.masked_fill_(diag_mask, 0.0)
-                    node_bias = node_bias + rrwp_b
-
-                # 5. Expand Node-level bias to Token-level using advanced indexing
-                if isinstance(node_bias, torch.Tensor):
-                    idx_q = b_node_ids_q.unsqueeze(1)   # Shape: (q_len, 1)
-                    idx_kv = b_node_ids_kv.unsqueeze(0) # Shape: (1, kv_len)
-                    
-                    # This broadcasts the N x N node matrix into the T x T token matrix
-                    token_bias = node_bias[:, idx_q, idx_kv] # Shape: (num_heads, q_len, kv_len)
-
-                    graph_bias[batch_idx] = token_bias
-
-        return graph_bias if using_graph_bias else None
-
     def compute_bias(
         self,
         query_states: torch.Tensor,                             # (batch_size, num_heads, q_len, head_dim)
@@ -401,21 +311,10 @@ class LlamaAttentionWithBias(LlamaAttention):
         rwse_emb: Optional[torch.Tensor],                       # (batch_size, max_num_nodes, rwse_dim)
         rrwp_emb: Optional[torch.Tensor],                       # (batch_size, max_num_nodes, max_num_nodes, max_rw_steps)
         magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]],  # (batch_size, max_num_nodes, max_num_nodes, 2), (batch_size, max_num_nodes)
+        input_graph_batch: Optional[TextGraph] = None,          # the full graph batch, used for caching the computed bias to avoid redundant O(N^2) calculations during generation
     ):
         magnetic_V = magnetic[0] if magnetic is not None else None          # (batch_size, max_num_nodes, max_num_nodes, 2)
         magnetic_lambdas = magnetic[1] if magnetic is not None else None    # (batch_size, max_num_nodes)
-
-        # print("Shapes of all inputs:")
-        # print("query_states:", query_states.shape)
-        # print("key_states:", key_states.shape)
-        # print("node_ids:", node_ids.shape if node_ids is not None else None)
-        # print("shortest_path_distances:", shortest_path_distances.shape if shortest_path_distances is not None else None)
-        # print("laplacian_coordinates:", laplacian_coordinates.shape if laplacian_coordinates is not None else None)
-        # print("rwse_emb:", rwse_emb.shape if rwse_emb is not None else None)
-        # print("rrwp_emb:", rrwp_emb.shape if rrwp_emb is not None else None)
-        # print("magnetic_V:", magnetic_V.shape if magnetic_V is not None else None)
-        # print("magnetic_lambdas:", magnetic_lambdas.shape if magnetic_lambdas is not None else None)
-        # exit()
 
         using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp or self.require_magnetic
         if not using_graph_bias:
@@ -424,82 +323,93 @@ class LlamaAttentionWithBias(LlamaAttention):
             raise ValueError("Graph-based bias is required but 'node_ids' is not provided.")
 
         dtype = query_states.dtype
-        node_bias = 0
         device = query_states.device
+        
+        cache_key = f'cached_node_bias_{self.layer_idx}'
+        
+        # Bypass O(N^2) node calculations during generation if already cached
+        if input_graph_batch is not None and cache_key in input_graph_batch:
+            node_bias = input_graph_batch[cache_key]
+        else:
+            node_bias = 0
 
-        if self.require_spd:
-            if shortest_path_distances is None: raise ValueError("Shortest Path Distance bias is required but 'shortest_path_distances' is not provided.")
-            non_zero_mask = (shortest_path_distances > 0)
-            spd_indices = torch.clamp(shortest_path_distances - 1, min=0, max=self.spd_weights.shape[0] - 1) # mapping D -> D-1 for indexing in spd_weights
-            
-            spd_bias = F.embedding(spd_indices, self.spd_weights).permute(0, 3, 1, 2).to(dtype=dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
-            spd_bias = spd_bias * non_zero_mask.unsqueeze(1)  # Zero out entries where distance was originally 0
-            node_bias = node_bias + spd_bias
+            if self.require_spd:
+                if shortest_path_distances is None: raise ValueError("Shortest Path Distance bias is required but 'shortest_path_distances' is not provided.")
+                non_zero_mask = (shortest_path_distances > 0)
+                spd_indices = torch.clamp(shortest_path_distances - 1, min=0, max=self.spd_weights.shape[0] - 1) # mapping D -> D-1 for indexing in spd_weights
+                
+                spd_bias = F.embedding(spd_indices, self.spd_weights).permute(0, 3, 1, 2).to(dtype=dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                spd_bias = spd_bias * non_zero_mask.unsqueeze(1)  # Zero out entries where distance was originally 0
+                node_bias = node_bias + spd_bias
 
-        if self.require_laplacian:
-            if laplacian_coordinates is None: raise ValueError("Laplacian bias is required but 'laplacian_coordinates' is not provided.")
-            lap_dist = torch.cdist(laplacian_coordinates, laplacian_coordinates, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
-            lap_bias = lap_dist.unsqueeze(1) * self.laplacian_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
-            node_bias = node_bias + lap_bias
+            if self.require_laplacian:
+                if laplacian_coordinates is None: raise ValueError("Laplacian bias is required but 'laplacian_coordinates' is not provided.")
+                lap_dist = torch.cdist(laplacian_coordinates, laplacian_coordinates, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
+                lap_bias = lap_dist.unsqueeze(1) * self.laplacian_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                node_bias = node_bias + lap_bias
 
-        if self.require_rwse:
-            if rwse_emb is None: raise ValueError("RWSE bias is required but 'rwse_emb' is not provided.")
-            rwse_dist = torch.cdist(rwse_emb, rwse_emb, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
-            rwse_bias = rwse_dist.unsqueeze(1) * self.rwse_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
-            node_bias = node_bias + rwse_bias
+            if self.require_rwse:
+                if rwse_emb is None: raise ValueError("RWSE bias is required but 'rwse_emb' is not provided.")
+                rwse_dist = torch.cdist(rwse_emb, rwse_emb, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
+                rwse_bias = rwse_dist.unsqueeze(1) * self.rwse_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                node_bias = node_bias + rwse_bias
 
-        if self.require_rrwp:
-            if rrwp_emb is None: raise ValueError("RRWP bias is required but 'rrwp_emb' is not provided.")
-            rrwp_bias = self.rrwp_proj(rrwp_emb).permute(0, 3, 1, 2) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
-            diag_mask = torch.eye(rrwp_bias.shape[-1], device=device, dtype=torch.bool)
-            rrwp_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # Zero out diagonal entries where i=j
-            node_bias = node_bias + rrwp_bias
+            if self.require_rrwp:
+                if rrwp_emb is None: raise ValueError("RRWP bias is required but 'rrwp_emb' is not provided.")
+                rrwp_bias = self.rrwp_proj(rrwp_emb).permute(0, 3, 1, 2) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                diag_mask = torch.eye(rrwp_bias.shape[-1], device=device, dtype=torch.bool)
+                rrwp_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # Zero out diagonal entries where i=j
+                node_bias = node_bias + rrwp_bias
 
-        if self.require_magnetic:
-            if magnetic_V is None or magnetic_lambdas is None: raise ValueError("Magnetic bias is required but 'magnetic' data is not provided.")
-            # compute the eigenvalue-based features
-            h_i = self.magnetic_lambda_lin(magnetic_lambdas.unsqueeze(-1)) # (batch_size, max_num_nodes, head_dim)
+            if self.require_magnetic:
+                if magnetic_V is None or magnetic_lambdas is None: raise ValueError("Magnetic bias is required but 'magnetic' data is not provided.")
+                # compute the eigenvalue-based features
+                h_i = self.magnetic_lambda_lin(magnetic_lambdas.unsqueeze(-1)) # (batch_size, max_num_nodes, head_dim)
 
-            # create a boolean mask of valid nodes: shape (batch_size, max_num_nodes)
-            valid_mask = torch.arange(magnetic_lambdas.shape[1], device=h_i.device).expand(len(num_nodes), -1) < num_nodes.unsqueeze(1) # (batch_size, max_num_nodes) bool
+                # create a boolean mask of valid nodes: shape (batch_size, max_num_nodes)
+                valid_mask = torch.arange(magnetic_lambdas.shape[1], device=h_i.device).expand(len(num_nodes), -1) < num_nodes.unsqueeze(1) # (batch_size, max_num_nodes) bool
 
-            # mask the invalid nodes out of the sum
-            h_i_masked = h_i * valid_mask.unsqueeze(-1) 
+                # mask the invalid nodes out of the sum
+                h_i_masked = h_i * valid_mask.unsqueeze(-1) 
 
-            # compute the average of the h_i features (only across the valid nodes)
-            h_avg = h_i_masked.sum(dim=1, keepdim=True) / num_nodes.view(-1, 1, 1).to(h_i.dtype) # (batch_size, 1, head_dim) / (batch_size, 1, 1) -> (batch_size, 1, head_dim)
-            h_avg_expanded = h_avg.expand(-1, magnetic_lambdas.shape[1], -1) # (batch_size, max_num_nodes, head_dim)
+                # compute the average of the h_i features (only across the valid nodes)
+                h_avg = h_i_masked.sum(dim=1, keepdim=True) / num_nodes.view(-1, 1, 1).to(h_i.dtype) # (batch_size, 1, head_dim) / (batch_size, 1, 1) -> (batch_size, 1, head_dim)
+                h_avg_expanded = h_avg.expand(-1, magnetic_lambdas.shape[1], -1) # (batch_size, max_num_nodes, head_dim)
 
-            # compute the magnetic features using a deep set architecture to ensure permutation equivariance
-            deep_set_input = torch.cat([h_i, h_avg_expanded], dim=-1) # (batch_size, max_num_nodes, head_dim*2)
-            phi_lambdas = self.magnetic_lambda_deep_set(deep_set_input) # (batch_size, max_num_nodes, magnetic_dim)
+                # compute the magnetic features using a deep set architecture to ensure permutation equivariance
+                deep_set_input = torch.cat([h_i, h_avg_expanded], dim=-1) # (batch_size, max_num_nodes, head_dim*2)
+                phi_lambdas = self.magnetic_lambda_deep_set(deep_set_input) # (batch_size, max_num_nodes, magnetic_dim)
 
-            # compute the edge-level embeddings using the magnetic eigenvectors and the phi_lambdas features
-            V_real = magnetic_V[..., 0] # (batch_size, max_num_nodes, max_num_nodes)
-            V_imag = magnetic_V[..., 1] # (batch_size, max_num_nodes, max_num_nodes)
+                # compute the edge-level embeddings using the magnetic eigenvectors and the phi_lambdas features
+                V_real = magnetic_V[..., 0] # (batch_size, max_num_nodes, max_num_nodes)
+                V_imag = magnetic_V[..., 1] # (batch_size, max_num_nodes, max_num_nodes)
 
-            # Compute V @ diag(phi) @ conj(V.T) efficiently using Einstein summation
-            # Real Part: (V_R * Phi * V_R.T) + (V_I * Phi * V_I.T)
-            real_part = torch.einsum('bil, bjl, blk -> bijk', V_real, V_real, phi_lambdas) + torch.einsum('bil, bjl, blk -> bijk', V_imag, V_imag, phi_lambdas)
-            
-            # Imaginary Part: (V_I * Phi * V_R.T) - (V_R * Phi * V_I.T)
-            imag_part = torch.einsum('bil, bjl, blk -> bijk', V_imag, V_real, phi_lambdas) - torch.einsum('bil, bjl, blk -> bijk', V_real, V_imag, phi_lambdas)
+                # Compute V @ diag(phi) @ conj(V.T) efficiently using Einstein summation
+                # Real Part: (V_R * Phi * V_R.T) + (V_I * Phi * V_I.T)
+                real_part = torch.einsum('bil, bjl, blk -> bijk', V_real, V_real, phi_lambdas) + torch.einsum('bil, bjl, blk -> bijk', V_imag, V_imag, phi_lambdas)
+                
+                # Imaginary Part: (V_I * Phi * V_R.T) - (V_R * Phi * V_I.T)
+                imag_part = torch.einsum('bil, bjl, blk -> bijk', V_imag, V_real, phi_lambdas) - torch.einsum('bil, bjl, blk -> bijk', V_real, V_imag, phi_lambdas)
 
-            # Concatenate real and imaginary parts to form the stable 2m-dim edge features
-            magnetic_edge_features = torch.cat([real_part, imag_part], dim=-1) # (batch_size, max_num_nodes, max_num_nodes, magnetic_dim * 2)
+                # Concatenate real and imaginary parts to form the stable 2m-dim edge features
+                magnetic_edge_features = torch.cat([real_part, imag_part], dim=-1) # (batch_size, max_num_nodes, max_num_nodes, magnetic_dim * 2)
 
-            # Project the edge features to scalar bias values for each attention head
-            magnetic_bias = self.magnetic_bias_proj(magnetic_edge_features) # (batch_size, max_num_nodes, max_num_nodes, num_heads)
+                # Project the edge features to scalar bias values for each attention head
+                magnetic_bias = self.magnetic_bias_proj(magnetic_edge_features) # (batch_size, max_num_nodes, max_num_nodes, num_heads)
 
-            # Permute to match standard Transformer attention mask shape: (B, H, N, N)
-            magnetic_bias = magnetic_bias.permute(0, 3, 1, 2)
+                # Permute to match standard Transformer attention mask shape: (B, H, N, N)
+                magnetic_bias = magnetic_bias.permute(0, 3, 1, 2)
 
-            # mask the diagonal entries where i=j to 0, since we don't want self-loops to contribute to the bias
-            diag_mask = torch.eye(magnetic_bias.shape[-1], device=device, dtype=torch.bool)
-            magnetic_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0)
+                # mask the diagonal entries where i=j to 0, since we don't want self-loops to contribute to the bias
+                diag_mask = torch.eye(magnetic_bias.shape[-1], device=device, dtype=torch.bool)
+                magnetic_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0)
 
-            # Add the magnetic bias to the total node_bias
-            node_bias = node_bias + magnetic_bias
+                # Add the magnetic bias to the total node_bias
+                node_bias = node_bias + magnetic_bias
+
+            # Save to graph batch cache so we don't recompute on token generation steps > 0
+            if input_graph_batch is not None:
+                input_graph_batch[cache_key] = node_bias
 
         # Expanding the node-level biases to token-level biases using advanced indexing
         batch_size, q_len = query_states.shape[0], query_states.shape[2]
@@ -576,6 +486,7 @@ class LlamaAttentionWithBias(LlamaAttention):
             rwse_emb=rwse_emb,
             rrwp_emb=rrwp_emb,
             magnetic=magnetic,
+            input_graph_batch=input_graph_batch,
         ) # (batch_size, num_heads, seq_len, seq_len)
         if custom_bias is not None and attention_mask is not None:
             attention_mask = attention_mask + custom_bias
@@ -735,27 +646,29 @@ class LlamaModelWithBias(LlamaModel):
             attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
         )
 
+        # APPLY BIDIRECTIONAL PREFIX MASK ON TOP OF CAUSAL MASK
+        # HF creates a strict causal lower-triangle mask. We need to unmask the prefix-to-prefix region.
+        if causal_mask is not None and node_ids is not None and input_graph_batch is not None:
+            prompt_node = input_graph_batch.get("prompt_node")
+            if prompt_node is not None:
+                B, _, q_len, kv_len = causal_mask.shape
+                # Get the node ids for the current Q and KV tokens
+                node_ids_q = node_ids[:, -q_len:].unsqueeze(2) # (B, q_len, 1)
+                node_ids_kv = node_ids[:, -kv_len:].unsqueeze(1) # (B, 1, kv_len)
+                prompt_node_expanded = prompt_node.view(B, 1, 1).to(node_ids.device)
+                
+                # Mask where both Q and K are from prefix nodes
+                is_prefix_q = node_ids_q != prompt_node_expanded # (B, q_len, kv_len)
+                is_prefix_k = node_ids_kv != prompt_node_expanded # (B, q_len, kv_len)
+                both_prefix = is_prefix_q & is_prefix_k # (B, q_len, kv_len)
+                
+                # Unmask (set to 0.0) where both are prefix nodes so they can attend bidirectionally
+                causal_mask = causal_mask.masked_fill(both_prefix.unsqueeze(1), 0.0) # (B, 1, q_len, kv_len)
+
         hidden_states = inputs_embeds
 
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-
-        #region DEBUGGING PRINTS (inspecting the attention masks)
-        # print("DEBUG: Inside LlamaModelWithBias.forward")
-        # print("Causal Mask shape:", causal_mask.shape)
-        # for batch_i in range(causal_mask.shape[0]):
-        #     print(f"Causal Mask for element {batch_i}:")
-        #     for i in range(causal_mask.shape[2]):
-        #         for j in range(causal_mask.shape[3]):
-        #             if causal_mask[batch_i, 0, i, j] == 0:
-        #                 print("1", end="")
-        #             elif causal_mask[batch_i, 0, i, j] == float('-inf'):
-        #                 print("0", end="")
-        #             else:
-        #                 raise ValueError(f"Unexpected value in causal mask: {causal_mask[batch_i, 0, i, j]}")
-        #         print()
-        # exit()
-        #endregion
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -778,7 +691,6 @@ class LlamaModelWithBias(LlamaModel):
                     cache_position,
                     position_embeddings,
 
-                    # Graph data used for calculating the attention bias
                     node_ids,
                     input_graph_batch,
                 )
@@ -888,9 +800,10 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         self.require_laplacian = getattr(config, 'laplacian', False)
 
     def _prepare_inputs(
-        self, 
-        input_ids, 
-        prompt_node
+        self,
+        input_ids,
+        prompt_node,
+        padding_side="right"
     ) -> Dict[str, Any]:
         """
             Prepare input_ids and position_ids for the model based on the prompt node.
@@ -898,12 +811,13 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             Arguments:
                 input_ids   --> List of lists of tensors with shape (seq_len,) for each node in each graph in the batch
                 prompt_node --> Tensor of shape (batch_size,) containing the index of the prompt node for each graph in the batch
+                padding_side--> "left" for inference, "right" for training
             Returns:
                 Dictionary containing:
                 - prepared_input_ids --> Tensor of shape (batch_size, max_total_seq_length) with input_ids properly arranged
                 - position_ids       --> Tensor of shape (batch_size, max_total_seq_length) with position ids (eg. [0 1 2 3 0 1 2 0 1 2 3 4 ...])
                 - node_ids           --> Tensor of shape (batch_size, max_total_seq_length) indicating which node each token belongs to (eg. [0 0 0 0 1 1 1 2 2 2 2 2 ...])
-                - attention_mask     --> Tensor of shape (batch_size, 1, max_total_seq_length, max_total_seq_length) with bidirection attention mask on prefix nodes and causal mask on prompt node
+                - attention_mask     --> Tensor of shape (batch_size, max_total_seq_length) (2D standard HF pad mask)
                 - prefix_lengths     --> List of length batch_size containing the prefix length for each graph (number of tokens in non-prompt nodes)
                 - prompt_lengths     --> List of length batch_size containing the prompt length for each graph (number of tokens in the prompt node)
         """
@@ -926,7 +840,10 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         node_ids_list = []
         prefix_lengths = []
         prompt_lengths = []
-        attention_mask = torch.full((batch_size, 1, max_total_seq_len, max_total_seq_len), float('-inf'), device=device)
+        
+        # attention_mask = torch.full((batch_size, 1, max_total_seq_len, max_total_seq_len), float('-inf'), device=device)
+        attention_mask = torch.zeros((batch_size, max_total_seq_len), dtype=torch.long, device=device)
+        
         for i in range(batch_size):
             graph_input_ids = input_ids[i] # list of num_nodes tensors of shape (seq_len_j,)
             prompt_idx = prompt_node[i].item()
@@ -954,54 +871,26 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             prefix_lengths.append(prefix_length)
             prompt_lengths.append(prompt_length)
 
-            # Update attention mask for this graph
-            attention_mask[i, 0, :prefix_length, :prefix_length] = 0  # Prefix nodes can attend to each other
-            attention_mask[i, 0, prefix_length:prefix_length+prompt_length, :prefix_length] = 0  # Prompt node can attend to prefix nodes
-            attention_mask[i, 0, prefix_length:prefix_length+prompt_length, prefix_length:prefix_length+prompt_length] = torch.full((prompt_length, prompt_length), float('-inf'), device=device).triu(diagonal=1)  # Prompt node has causal attention to itself
-            attention_mask[i, 0, prefix_length+prompt_length:, prefix_length+prompt_length:] = torch.full((max_total_seq_len - prefix_length - prompt_length, max_total_seq_len - prefix_length - prompt_length), float('-inf'), device=device).fill_diagonal_(0.0)  # Padding tokens can attend only to themselves to avoid NaNs in attention weights
-
         prepared_token_ids = torch.full((batch_size, max_total_seq_len), self.pad_token_id, dtype=torch.long, device=device)
         prepared_position_ids = torch.zeros((batch_size, max_total_seq_len), dtype=torch.long, device=device)
-        prepared_node_ids = torch.full((batch_size, max_total_seq_len), 0, dtype=torch.long, device=device)
+        prepared_node_ids = torch.zeros((batch_size, max_total_seq_len), dtype=torch.long, device=device)
+        
         for i in range(batch_size):
             seq_len = token_ids_list[i].shape[0]
-            prepared_token_ids[i, :seq_len] = token_ids_list[i]
-            prepared_position_ids[i, :seq_len] = position_ids_list[i]
 
-            prepared_node_ids[i, :] = prompt_node[i].item()     # Set all tokens to the prompt node id by default
-            prepared_node_ids[i, :seq_len] = node_ids_list[i]   # Then overwrite with the correct node ids for the actual tokens
-
-        #region DEBUGGING PRINTS
-        # print("MAX TOTAL SEQ LEN:", max_total_seq_len)
-        # print('-' * 50)
-        # for i in range(batch_size):
-        #     print(f"Graph {i}:")
-        #     print(f"  Prompt Node Index: {prompt_node[i].item()}")
-        #     print(f"  Prefix Length: {prefix_lengths[i]}")
-        #     print(f"  Prompt Length: {prompt_lengths[i]}")
-        #     print(f"  Input IDs:")
-        #     for j, node_input_ids in enumerate(input_ids[i]):
-        #         print(f"    Node {j}: {node_input_ids.tolist()}")
-        #     print(f"  Position IDs:")
-        #     for j, node_position_ids in enumerate(graph_position_ids[i]):
-        #         print(f"    Node {j}: {node_position_ids.tolist()}")
-        #     print(f"  Prepared Input IDs:\n {prepared_token_ids[i].tolist()}")
-        #     print(f"  Prepared Position IDs:\n {prepared_position_ids[i].tolist()}")
-        #     print(f"  Node IDs:\n {prepared_node_ids[i].tolist()}")
-        #     print(f"  Prepared Attention Mask Shape: {attention_mask[i].shape}")
-        #     for j in range(max_total_seq_len):
-        #         print("{:4d}: ".format(j), end="")
-        #         for k in range(max_total_seq_len):
-        #             if attention_mask[i, 0, j, k] == 0:
-        #                 print("1", end="")
-        #             elif attention_mask[i, 0, j, k] == float('-inf'):
-        #                 print(f"0", end="")
-        #             else:
-        #                 raise ValueError(f"Unexpected value in attention mask: {attention_mask[i, 0, j, k]}")
-        #         print()
-        #     print("-" * 50)
-        # exit()
-        #endregion
+            if padding_side == "right":
+                prepared_token_ids[i, :seq_len] = token_ids_list[i]
+                prepared_position_ids[i, :seq_len] = position_ids_list[i]
+                prepared_node_ids[i, :] = prompt_node[i].item()
+                prepared_node_ids[i, :seq_len] = node_ids_list[i]
+                attention_mask[i, :seq_len] = 1
+            else: # left padding for batched inference/generation
+                pad_len = max_total_seq_len - seq_len
+                prepared_token_ids[i, pad_len:] = token_ids_list[i]
+                prepared_position_ids[i, pad_len:] = position_ids_list[i]
+                prepared_node_ids[i, :] = prompt_node[i].item()
+                prepared_node_ids[i, pad_len:] = node_ids_list[i]
+                attention_mask[i, pad_len:] = 1
 
         return {
             'input_ids': prepared_token_ids,
@@ -1010,6 +899,60 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             'attention_mask': attention_mask,
             'prefix_lengths': prefix_lengths,
             'prompt_lengths': prompt_lengths,
+        }
+
+    @torch.no_grad()
+    def generate(self, input_graph_batch=None, **kwargs):
+        """Override standard HF generate to intercept graph kwargs and structure inputs safely."""
+        if input_graph_batch is not None:
+            device = next(self.parameters()).device
+            input_graph_batch = send_to_device(input_graph_batch, device)
+            prepared_inputs = self._prepare_inputs(input_graph_batch['input_ids'], input_graph_batch['prompt_node'], padding_side="left")
+            kwargs['input_ids'] = prepared_inputs['input_ids']
+            kwargs['attention_mask'] = prepared_inputs['attention_mask']
+            kwargs['position_ids'] = prepared_inputs['position_ids']
+            kwargs['node_ids'] = prepared_inputs['node_ids']
+            kwargs['input_graph_batch'] = input_graph_batch
+        return super().generate(**kwargs)
+
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs):
+        """Ensures that the new token generated at step t respects the graph's node structure and KV length."""
+        position_ids = kwargs.get("position_ids", None)
+        original_node_ids = kwargs.get("node_ids", None)
+        input_graph_batch = kwargs.get("input_graph_batch", None)
+
+        # 1. Reconstruct the full node_ids tensor up to the current KV sequence length
+        node_ids = original_node_ids
+        if original_node_ids is not None and input_graph_batch is not None:
+            current_seq_len = input_ids.shape[1]
+            orig_seq_len = original_node_ids.shape[1]
+            if current_seq_len > orig_seq_len:
+                # Pad the node_ids with the prompt_node ID for all newly generated tokens
+                prompt_node = input_graph_batch['prompt_node'].view(-1, 1).to(original_node_ids.device)
+                num_new_tokens = current_seq_len - orig_seq_len
+                padding = prompt_node.expand(-1, num_new_tokens)
+                node_ids = torch.cat([original_node_ids, padding], dim=1)
+
+        # 2. Standard KV cache slicing for input_ids and position_ids
+        if past_key_values is not None:
+            past_length = past_key_values.get_seq_length()
+            if input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                remove_prefix_length = input_ids.shape[1] - 1
+            input_ids = input_ids[:, remove_prefix_length:]
+
+            if position_ids is not None:
+                position_ids = position_ids[:, -input_ids.shape[1]:]
+
+        return {
+            "input_ids": input_ids,
+            "position_ids": position_ids,
+            "past_key_values": past_key_values,
+            "use_cache": kwargs.get("use_cache"),
+            "attention_mask": attention_mask,
+            "node_ids": node_ids, # Pass the FULL length node_ids so compute_bias can slice it correctly
+            "input_graph_batch": input_graph_batch,
         }
 
     def forward(
@@ -1030,52 +973,45 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         # graph-specific inputs
         input_graph_batch: Optional[TextGraph] = None,
 
+        # kwargs needed for generation
+        node_ids: Optional[torch.LongTensor] = None,
+
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         """
             Modified forward method to accept the text attributed graph as input.
-
-            Arguments:
-                input_ids          --> None (will be overridden)
-                attention_mask     --> None (will be overridden)
-                position_ids       --> None (will be overridden)
-                labels             --> Labels for calculating the loss on the prompt node tokens only. Shoudl be a list of batch_size elements, each being a tensor of shape (prompt_node_seq_len,) containing the labels for the prompt node tokens in each graph.
-                input_graph_batch  --> A dictionary containing the batched graph information for the current batch, expected to have keys like:
-                    'text'                  - the raw text input (not tokenized)        ---> List of batch_size elements, each being a string of the raw text for the graph
-                    'num_nodes'             - number of nodes in the graph              ---> Tensor of shape (batch_size,) containing the number of nodes for each graph in the batch
-                    'prompt_node'           - index of the prompt node in the graph     ---> Tensor of shape (batch_size,) containing the index of the prompt node for each graph in the batch
-                    'input_ids'             - tokenized input ids for the text          ---> List of batch_size elements, each being a list of shape num_nodes elements, each being a tensor of shape (seq_len_i_j) representing the tokenized input for each node
-                    'edges'                 - list of edges in the graph                ---> List of batch_size elements, each being a tensor of shape (num_edges, 2) representing the edges between nodes
-                    'laplacian_coordinates' - precomputed laplacian coordinates         ---> List of batch_size elements, each being a tensor of shape (num_nodes, spectral_dim)
-                    'shortest_path_dists'   - precomputed shortest path distances       ---> List of batch_size elements, each being a tensor of shape (num_nodes, num_nodes) representing the pairwise shortest path distances between nodes
-                ...(other arguments are the same as the original forward method)
+            ...
         """
         device = next(self.parameters()).device
-        input_graph_batch = send_to_device(input_graph_batch, device)
 
-        prompt_node = input_graph_batch.get('prompt_node', None)
-        if prompt_node is None:
-            raise ValueError("input_graph_batch must contain 'prompt_node' key with the index of the prompt node for each graph in the batch.")
+        if input_graph_batch is not None:
+            input_graph_batch = send_to_device(input_graph_batch, device)
 
-        input_ids = input_graph_batch.get('input_ids', None)
-        if input_ids is None:
-            raise ValueError("input_graph_batch must contain 'input_ids' key with the tokenized input ids for each node in each graph in the batch.")
-
-
-        # Prepare the inputs for the forward pass
-        prepared_inputs = self._prepare_inputs(input_ids, prompt_node)
-        prepared_input_ids = prepared_inputs['input_ids']
-        prepared_position_ids = prepared_inputs['position_ids']
-        node_ids = prepared_inputs['node_ids']
-        attention_mask = prepared_inputs['attention_mask']
-        prefix_lengths = prepared_inputs['prefix_lengths']
-        prompt_lengths = prepared_inputs['prompt_lengths']
+        prompt_node = input_graph_batch.get('prompt_node', None) if input_graph_batch is not None else None
+        
+        if node_ids is None: # Meaning we are at generation step 0 or training
+            input_ids_from_graph = input_graph_batch.get('input_ids', None) if input_graph_batch is not None else None
+            if input_ids_from_graph is None and input_ids is None:
+                raise ValueError("input_graph_batch must contain 'input_ids' or input_ids must be provided.")
+            
+            prepared_inputs = self._prepare_inputs(input_ids_from_graph, prompt_node, padding_side="right")
+            prepared_input_ids = prepared_inputs['input_ids']
+            prepared_position_ids = prepared_inputs['position_ids']
+            node_ids = prepared_inputs['node_ids']
+            attention_mask = prepared_inputs['attention_mask']
+            prefix_lengths = prepared_inputs['prefix_lengths']
+            prompt_lengths = prepared_inputs['prompt_lengths']
+        else: # Autoregressive generation step > 0 (inputs already prepared via prepare_inputs_for_generation)
+            prepared_input_ids = input_ids
+            prepared_position_ids = position_ids
+            prefix_lengths = [0] * prepared_input_ids.shape[0] # Not needed during generation loss bypass
+            prompt_lengths = [0] * prepared_input_ids.shape[0] # Not needed during generation loss bypass
         
         # Pass the custom argument to the model
         outputs = self.model(
-            input_ids=prepared_input_ids,               # <-- concatenated tokens of all nodes in the graph
-            attention_mask=attention_mask,              # <-- custom attention mask based on graph structure
-            position_ids=prepared_position_ids,         # <-- position ids that reset for each node
+            input_ids=prepared_input_ids,               # concatenated tokens of all nodes in the graph
+            attention_mask=attention_mask,              # custom attention mask based on graph structure
+            position_ids=prepared_position_ids,         # position ids that reset for each node
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
@@ -1085,8 +1021,8 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             cache_position=cache_position,
             
             # CUSTOM ARGUMENTS
-            node_ids=node_ids,                               # <-- node ids indicating which node each token belongs to (used for calculating attention bias)
-            input_graph_batch=input_graph_batch,             # <-- pass the whole graph batch in case it's needed for more complex bias calculations
+            node_ids=node_ids,                               # node ids indicating which node each token belongs to (used for calculating attention bias)
+            input_graph_batch=input_graph_batch,             # pass the whole graph batch in case it's needed for more complex bias calculations
 
             **kwargs,
         )
@@ -1200,7 +1136,8 @@ if __name__ == "__main__":
     config = GraphLlamaConfig.from_pretrained("./src/models/graph_llama1b_config.json")
     print(config.graph_attn_bias)
     # model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", config=config)
-    model = GraphLlamaForCausalLM(config=config)
+    model = GraphLlamaForCausalLM(config=config).to("cuda")
+    
     print('=' * 70)
     outputs = model(input_graph_batch=input_graph_batch, labels=example_labels)
     print("Loss:", outputs.loss)
@@ -1208,4 +1145,5 @@ if __name__ == "__main__":
 
 
     # run the model to generate 5 tokens autoregressively
-    # TODO: test once generation is implemented in the model
+    generated_ids = model.generate(input_graph_batch=input_graph_batch, max_new_tokens=5)
+    print("Generated IDs:", generated_ids)

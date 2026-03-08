@@ -300,7 +300,7 @@ if __name__ == "__main__":
     ])
     DIFFICULTY = "HARD"     # "EASY" (2 fully connected components, undirected prompt edges) or "HARD" (between 2 and size//5 connected components, directed prompt edges)
     IS_EASY = DIFFICULTY == "EASY"
-    RUN_NAME = f"{DIFFICULTY}{'_lora' if LORA_CONFIG else ''}_{run_suffix}_v3"
+    RUN_NAME = f"{DIFFICULTY}{'_lora' if LORA_CONFIG else ''}_{run_suffix}_v4"
 
     set_wandb_project("GraphLLM")
     device = get_device()
