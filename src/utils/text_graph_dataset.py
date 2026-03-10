@@ -36,7 +36,24 @@ class TextGraphDataset(Dataset):
             graphs: List of NetworkX graphs. Nodes must have 'text' attribute.
             _hf_dataset: (Internal use only) Used by .load() to bypass re-initialization.
         """
-        self.graphs = graphs
+        self.graphs = []
+        for g in graphs:
+            # 1. Create a mapping from old labels (e.g., tuples, strings) to integers 0..N-1
+            # Using default iteration order avoids the sorting crash
+            mapping = {old_label: new_int for new_int, old_label in enumerate(g.nodes())}
+            
+            # 2. Relabel the nodes using our mapping
+            g_int = nx.relabel_nodes(g, mapping, copy=True)
+            
+            # 3. Save the original IDs inside the node data just in case you need them later
+            nx.set_node_attributes(g_int, {new_int: old for old, new_int in mapping.items()}, "original_id")
+            
+            # 4. Update the prompt_node attribute to its new integer index
+            old_prompt = g_int.graph.get('prompt_node', None)
+            if old_prompt != -1 and old_prompt in mapping:
+                g_int.graph['prompt_node'] = mapping[old_prompt]
+                
+            self.graphs.append(g_int)
         
         if _hf_dataset is not None:
             self._hf_dataset = _hf_dataset
@@ -53,9 +70,6 @@ class TextGraphDataset(Dataset):
         }
 
         for g in tqdm(self.graphs, desc="Reading Graphs"):
-            # Ensure 0..N-1 indexing for safety
-            g = nx.convert_node_labels_to_integers(g, ordering="sorted")
-            
             # Extract text
             texts = [g.nodes[i].get('text', "") for i in range(g.number_of_nodes())]
             
@@ -95,7 +109,11 @@ class TextGraphDataset(Dataset):
         item['num_nodes'] = g.number_of_nodes()
         item['prompt_node'] = g.graph.get('prompt_node', -1)
 
-        # 3. Post-process specific fields if they exist in the dataset
+        # 3. Retrieve the node mapping to original IDs (if needed for debugging or future use)
+        original_id_mapping = {g.nodes[i]['original_id']: i for i in range(g.number_of_nodes())}
+        item['original_ids'] = original_id_mapping
+
+        # 4. Post-process specific fields if they exist in the dataset
         
         # Handle Laplacian Coordinates (Convert list back to torch tensor)
         if 'laplacian_coordinates' in item and item['laplacian_coordinates'] is not None:
@@ -142,44 +160,55 @@ class TextGraphDataset(Dataset):
     # Feature Computation Methods
     # ------------------------------------------------------------------------
     
-    def tokenize(self, tokenizer, max_length=512):
-        """Tokenizes text and adds the 'input_ids' column."""
+    def tokenize(self, tokenizer, max_length=512, add_eos=False):
+        """
+        Tokenizes text and adds the 'input_ids' column.
+        If add_eos is True, append the tokenizer's EOS token to the prompt node's text after tokenization.
+        """
         if 'input_ids' in self._hf_dataset.column_names:
             print("Dataset already tokenized. Skipping.")
             return
-
-        print("Tokenizing dataset...")
         
-        def _tokenize_batch(examples):
-            all_input_ids = []
+        # Safety check: ensure the tokenizer actually has an EOS token defined
+        if add_eos and tokenizer.eos_token_id is None:
+            raise ValueError("add_eos is True, but the provided tokenizer does not have an eos_token_id.")
+        
+        def _tokenize_single(example):
+            # example['text'] is a list of strings corresponding to the nodes in ONE graph
+            enc = tokenizer(
+                example['text'], 
+                padding=False, 
+                truncation=True, 
+                max_length=max_length,
+                add_special_tokens=False,
+            )
             
-            for graph_texts in examples['text']:
-                enc = tokenizer(
-                    graph_texts, 
-                    padding=False, 
-                    truncation=True, 
-                    max_length=max_length,
-                    add_special_tokens=False,
-                )
-                all_input_ids.append(enc['input_ids'])
-               
-            return {"input_ids": all_input_ids}
+            # Extract the token IDs for this graph
+            graph_input_ids = enc['input_ids']
+            
+            if add_eos:
+                prompt_node = example.get('prompt_node', None)
+                
+                # Check if a valid prompt node exists for this specific graph
+                if prompt_node is not None:
+                    # Append the EOS token ID to that specific node's sequence
+                    graph_input_ids[prompt_node].append(tokenizer.eos_token_id)
+                    
+            return {"input_ids": graph_input_ids}
 
+        # Set batched=False to process exactly one graph at a time
         self._hf_dataset = self._hf_dataset.map(
-            _tokenize_batch, 
-            batched=True, 
-            batch_size=10, 
+            _tokenize_single, 
+            batched=False, 
             desc="Tokenizing"
         )
 
     def compute_laplacian_coordinates(self, embedding_dim=16):
         """Computes Laplacian Eigenmaps and adds 'laplacian_coordinates' column."""
-        print(f"Computing Laplacian Coordinates (dim={embedding_dim})...")
-        
         coords_list = []
         for g in tqdm(self.graphs, desc="Eigen-decomposition"):
             # Ensure standardized node labels 0..N-1
-            g_int = nx.convert_node_labels_to_integers(g, ordering="sorted")
+            g_int = g
             n = g_int.number_of_nodes()
             
             # Call user function
@@ -218,9 +247,7 @@ class TextGraphDataset(Dataset):
         self._hf_dataset = self._hf_dataset.add_column("laplacian_coordinates", coords_list)
 
     def compute_shortest_path_distances(self, cutoff=None):
-        """Computes APSP and adds 'shortest_path_dists' column (flattened)."""
-        print("Computing Shortest Path Distances...")
-        
+        """Computes APSP and adds 'shortest_path_dists' column (flattened)."""       
         spd_list = []
         for g in tqdm(self.graphs, desc="Floyd-Warshall / BFS"):
             n = g.number_of_nodes()
@@ -246,7 +273,6 @@ class TextGraphDataset(Dataset):
 
     def compute_rwse(self, max_rwse_steps=8):
         """Computes Random Walk Structural Encoding and adds 'rwse' column."""
-        print("Computing Random Walk Structural Encoding (RWSE)...")
         rwse_dataset_list = []
         for g in tqdm(self.graphs, desc=f"Computing RWSE (max steps: {max_rwse_steps})"):
             rwse_dict = compute_rwse(g, max_rwse_steps)
@@ -257,44 +283,81 @@ class TextGraphDataset(Dataset):
         self._hf_dataset = self._hf_dataset.add_column("rwse", rwse_dataset_list)
 
     def compute_rrwp(self, max_rrwp_steps=8):
-        """Computes Relative Random Walk Probabilities (RRWP) and adds 'rrwp' column."""
-        print("Computing Relative Random Walk Probabilities (RRWP)...")
-        rrwp_dataset_list = []
-        for g in tqdm(self.graphs, desc=f"Computing RRWP (max steps: {max_rrwp_steps})"):
-            rrwp_dict = compute_rrwp(g, max_distance=max_rrwp_steps)
-            rrwp_list = [ rrwp_dict[(i,j)] for i in range(g.number_of_nodes()) for j in range(g.number_of_nodes()) ]
-            rrwp_dataset_list.append(rrwp_list)
+        """Computes Relative Random Walk Probabilities (RRWP) and adds 'rrwp' column."""        
+        # 1. Clean up old column if it exists to prevent schema conflicts
         if "rrwp" in self._hf_dataset.column_names:
             self._hf_dataset = self._hf_dataset.remove_columns("rrwp")
-        self._hf_dataset = self._hf_dataset.add_column("rrwp", rrwp_dataset_list)
+
+        # 2. Define the batching function
+        def _compute_batch(batch, indices):
+            rrwp_batch = []
+            
+            for idx in indices:
+                # Retrieve the specific graph from RAM
+                g = self.graphs[idx]
+                n = g.number_of_nodes()
+                
+                # Compute original logic
+                rrwp_dict = compute_rrwp(g, max_distance=max_rrwp_steps)
+                
+                # Flatten into a strict 1D list so PyArrow writes it instantly
+                rrwp_flat = []
+                for i in range(n):
+                    for j in range(n):
+                        rrwp_flat.extend(rrwp_dict[(i, j)])
+                        
+                rrwp_batch.append(rrwp_flat)
+                
+            return {"rrwp": rrwp_batch}
+
+        # 3. Stream data to the dataset in chunks
+        self._hf_dataset = self._hf_dataset.map(
+            _compute_batch,
+            with_indices=True,
+            batched=True,
+            batch_size=10,
+            desc=f"Computing RRWP (max steps: {max_rrwp_steps})"
+        )
 
     def compute_magnetic_lap(self, q=0.25):
-        """Computes Magnetic Laplacian eigenvalues and eigenvectors and adds 'magnetic_V' and 'magnetic_lambdas' columns."""
-        print(f"Computing Magnetic Spectral Coordinates (q={q})...")
-        
-        V_list = []
-        lambdas_list = []
-        for g in tqdm(self.graphs, desc="Magnetic Eigen-decomposition"):
-            g_int = nx.convert_node_labels_to_integers(g, ordering="sorted")
-            n = g_int.number_of_nodes()
-            
-            # Use the function from magnetic_lap.py, which returns a dict mapped by node
-            V, lambdas = get_magnetic_laplacian_coords(g_int, q=q)
-            V_list.append(V.tolist())
-            lambdas_list.append(lambdas.tolist())
+        """Computes Magnetic Laplacian eigenvalues and eigenvectors and adds 'magnetic_V' and 'magnetic_lambdas' columns."""       
+        # 1. Clean up old columns if they exist
+        cols_to_remove = [c for c in ["magnetic_V", "magnetic_lambdas"] if c in self._hf_dataset.column_names]
+        if cols_to_remove:
+            self._hf_dataset = self._hf_dataset.remove_columns(cols_to_remove)
 
-        if "magnetic_V" in self._hf_dataset.column_names:
-            self._hf_dataset = self._hf_dataset.remove_columns("magnetic_V")
-        if "magnetic_lambdas" in self._hf_dataset.column_names:
-            self._hf_dataset = self._hf_dataset.remove_columns("magnetic_lambdas")
+        # 2. Define the batching function
+        def _compute_batch(batch, indices):
+            v_batch = []
+            lambdas_batch = []
             
-        self._hf_dataset = self._hf_dataset.add_column("magnetic_V", V_list)
-        self._hf_dataset = self._hf_dataset.add_column("magnetic_lambdas", lambdas_list)
+            for idx in indices:
+                g_int = self.graphs[idx]
+                
+                # Use the function from magnetic_lap.py
+                V, lambdas = get_magnetic_laplacian_coords(g_int, q=q)
+                
+                # Flatten V for lightning-fast Arrow storage
+                if isinstance(V, torch.Tensor):
+                    v_batch.append(V.flatten().tolist())
+                else: # Fallback for NumPy
+                    v_batch.append(V.reshape(-1).tolist())
+                    
+                lambdas_batch.append(lambdas.tolist())
+                
+            return {"magnetic_V": v_batch, "magnetic_lambdas": lambdas_batch}
+
+        # 3. Stream data to the dataset in chunks
+        self._hf_dataset = self._hf_dataset.map(
+            _compute_batch,
+            with_indices=True,
+            batched=True,
+            batch_size=10,
+            desc=f"Magnetic Eigen-decomposition (q={q})"
+        )
 
     def compute_labels(self, get_graph_labels):
-        """Computes labels for each graph using the provided function and adds 'labels' column."""
-        print("Computing Labels...")
-        
+        """Computes labels for each graph using the provided function and adds 'labels' column."""       
         labels_list = []
         for i in tqdm(range(len(self)), desc="Generating Labels"):
             item = self[i]
