@@ -31,7 +31,7 @@ The custom attention layer supports five distinct types of graph-aware biases:
 * **Shortest Path Distance (SPD) Bias:** A learned lookup table mapping the shortest path distance (SPD) of the corresponding nodes to an attention bias. 
 
 $$
-b_{ij} = \text{spd\_weights}[d_{ij}] \quad \text{if } d_{ij} > 0 \text{ else } 0
+b_{ij} = \text{spd-weights}[d_{ij}] \quad \text{if } d_{ij} > 0 \text{ else } 0
 $$
 
 * **Laplacian Bias:** This bias term is proportional to the $L_2$-distance of the Laplacian embeddings...
