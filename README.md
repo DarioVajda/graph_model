@@ -30,13 +30,15 @@ The custom attention layer supports five distinct types of graph-aware biases:
 
 * **Shortest Path Distance (SPD) Bias:** A learned lookup table mapping the shortest path distance (SPD) of the corresponding nodes to an attention bias. 
   $$b_{ij} = \text{spd\_weights}[d_{ij}] \quad \text{if } d_{ij} > 0 \text{ else } 0$$
-* **Laplacian Bias:** This bias term is proportional to the L2-distance of the Laplacian embeddings of the corresponding nodes, where the proportionality constant is a learned parameter. 
-  $$b_{ij} = w_k \cdot D_{L2}(s_i, s_j)$$
-* **Random Walk Structural Encoding (RWSE) Bias:** Maps the L2 distance between the random walk structural features of two nodes into a scalar bias value.
-  $$b_{ij} = w_k \cdot D_{L2}(r_i, r_j)$$
+
+* **Laplacian Bias:** This bias term is proportional to the $L_2$-distance of the Laplacian embeddings of the corresponding nodes, where the proportionality constant is a learned parameter. 
+  $$b_{ij} = w_k \cdot D_{L_2}(s_i, s_j)$$
+
+* **Random Walk Structural Encoding (RWSE) Bias:** Maps the $L_2$ distance between the random walk structural features of two nodes into a scalar bias value.
+  $$b_{ij} = w_k \cdot D_{L_2}(r_i, r_j)$$
+
 * **Relative Random Walk Probability (RRWP) Bias:** Based on the multi-hop probability of a random walk starting at node $i$ and landing on node $j$. A 2-layer MLP maps the vector of transition probabilities directly to the attention heads.
   $$b_{ij} = \text{MLP}(\text{RRWP}_{ij}) \quad \text{if } i \neq j \text{ else } 0$$
-* **Magnetic Laplacian Bias:** Utilizes the magnetic Laplacian spectral coordinates to capture directed structural information. It uses a deep set architecture for permutation equivariance before projecting the edge features to scalar bias values via an MLP.
 
 ## Intended Use Cases
 By fundamentally changing how the LLM perceives input context, this model unlocks several capabilities:
