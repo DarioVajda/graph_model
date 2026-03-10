@@ -29,10 +29,16 @@ Where $b_{graph}$ represents the sum of selected graph-aware attention biases. T
 The custom attention layer supports five distinct types of graph-aware biases:
 
 * **Shortest Path Distance (SPD) Bias:** A learned lookup table mapping the shortest path distance (SPD) of the corresponding nodes to an attention bias. 
-  $$b_{ij} = \text{spd\_weights}[d_{ij}] \quad \text{if } d_{ij} > 0 \text{ else } 0$$
 
-* **Laplacian Bias:** This bias term is proportional to the $L_2$-distance of the Laplacian embeddings of the corresponding nodes, where the proportionality constant is a learned parameter. 
-  $$b_{ij} = w_k \cdot D_{L_2}(s_i, s_j)$$
+$$
+b_{ij} = \text{spd\_weights}[d_{ij}] \quad \text{if } d_{ij} > 0 \text{ else } 0
+$$
+
+* **Laplacian Bias:** This bias term is proportional to the $L_2$-distance of the Laplacian embeddings...
+
+$$
+b_{ij} = w_k \cdot D_{L_2}(s_i, s_j)
+$$
 
 * **Random Walk Structural Encoding (RWSE) Bias:** Maps the $L_2$ distance between the random walk structural features of two nodes into a scalar bias value.
   $$b_{ij} = w_k \cdot D_{L_2}(r_i, r_j)$$
