@@ -1061,7 +1061,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         is_directory = os.path.isdir(pretrained_model_name_or_path)
-        print(f"is_directory: {is_directory}")
         is_lora = is_directory and os.path.exists(os.path.join(pretrained_model_name_or_path, "adapter_config.json"))
         is_bias_only = is_directory and os.path.exists(os.path.join(pretrained_model_name_or_path, "graph_bias_config.json"))
 

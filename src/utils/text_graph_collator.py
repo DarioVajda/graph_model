@@ -4,9 +4,8 @@ from torch.nn.utils.rnn import pad_sequence
 from .text_graph_dataset import TextGraph
 
 class GraphCollator:
-    def __init__(self, tokenizer=None, padding_type="right"):
+    def __init__(self, tokenizer=None):
         self.tokenizer = tokenizer
-        self.padding_type = padding_type
 
     def __call__(self, batch: list[TextGraph]):
         """

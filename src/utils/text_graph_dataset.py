@@ -3,10 +3,11 @@ import shutil
 import pickle
 import networkx as nx
 import torch
-from datasets import Dataset as HFDataset, load_from_disk
+from datasets import Dataset as HFDataset, load_from_disk, concatenate_datasets
 from torch.utils.data import Dataset
 from typing import List, Dict, Optional, Any, Union
 from tqdm import tqdm
+import random
 
 from .laplacian import get_laplacian_coordinates
 from .rwse import compute_rwse
@@ -30,13 +31,18 @@ class TextGraphDataset(Dataset):
     Backend: Hugging Face Datasets (Arrow) + NetworkX (Topology).
     """
 
-    def __init__(self, graphs: List[nx.Graph], _hf_dataset: Optional[HFDataset] = None):
+    def __init__(self, graphs: List[nx.Graph], _hf_dataset: Optional[HFDataset] = None, dataset_label: Optional[str] = None):
         """
         Args:
             graphs: List of NetworkX graphs. Nodes must have 'text' attribute.
             _hf_dataset: (Internal use only) Used by .load() to bypass re-initialization.
+            dataset_label: Optional label for the dataset.
         """
         self.graphs = []
+
+        # if the graph is unnamed, append a random 6 capital letter string to the dataset name to ensure uniqueness
+        dataset_name = dataset_label if dataset_label is not None else f"ds_{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=6))}"
+
         for g in graphs:
             # 1. Create a mapping from old labels (e.g., tuples, strings) to integers 0..N-1
             # Using default iteration order avoids the sorting crash
@@ -57,16 +63,21 @@ class TextGraphDataset(Dataset):
         
         if _hf_dataset is not None:
             self._hf_dataset = _hf_dataset
+            if dataset_label is not None:
+                self.assign_label(dataset_label)
         else:
-            self._build_initial_dataset()
+            self._build_initial_dataset(dataset_label)
 
-    def _build_initial_dataset(self):
-        """Converts NetworkX node text attributes to a HF Dataset."""
+    def _build_initial_dataset(self, dataset_label):
+        """
+        Converts NetworkX node text attributes to a HF Dataset and saves a list of dataset labels to each item to preserve the item origin when merging datasets.
+        """
         print("Initializing dataset storage from graphs...")
         data_dict = {
             "text": [],
             "num_nodes": [],
             "prompt_node": [], # Indicates which node is the 'prompt' (if -1 then all nodes can be a valid prompt node)
+            "ds_label": [] # Label for the dataset to preserve item origin when merging datasets
         }
 
         for g in tqdm(self.graphs, desc="Reading Graphs"):
@@ -76,6 +87,7 @@ class TextGraphDataset(Dataset):
             data_dict["text"].append(texts)
             data_dict["num_nodes"].append(g.number_of_nodes())
             data_dict["prompt_node"].append(g.graph.get('prompt_node', -1)) # Default to -1 if not specified
+            data_dict["ds_label"].append(dataset_label) # Add the dataset label
 
         # Create the Arrow Dataset
         self._hf_dataset = HFDataset.from_dict(data_dict)
@@ -125,8 +137,8 @@ class TextGraphDataset(Dataset):
 
         # Handle Magnetic Spectral Coordinates (Convert list back to torch tensor)
         if 'magnetic_V' in item and item['magnetic_V'] is not None and 'magnetic_lambdas' in item and item['magnetic_lambdas'] is not None:
-            item['magnetic_V'] = torch.tensor(item['magnetic_V'], dtype=torch.float32)
-            item['magnetic_lambdas'] = torch.tensor(item['magnetic_lambdas'], dtype=torch.float32)
+            item['magnetic_V'] = torch.tensor(item['magnetic_V'], dtype=torch.float32).reshape((item['num_nodes'], item['num_nodes'], 2)) # reshape back to (num_nodes, num_nodes, 2)
+            item['magnetic_lambdas'] = torch.tensor(item['magnetic_lambdas'], dtype=torch.float32).reshape((item['num_nodes'],)) # reshape back to (num_nodes,)
             
         # Handle SPD (Reshape flattened array back to Matrix)
         if 'shortest_path_dists' in item and item['shortest_path_dists'] is not None:
@@ -156,8 +168,36 @@ class TextGraphDataset(Dataset):
 
         return item
 
+    def __add__(self, other: 'TextGraphDataset') -> 'TextGraphDataset':
+        """Allows merging two TextGraphDatasets using the '+' operator."""
+        if not isinstance(other, TextGraphDataset):
+            return NotImplemented
+            
+        # Safety check: Ensure both datasets have computed the same features
+        if set(self._hf_dataset.column_names) != set(other._hf_dataset.column_names):
+            raise ValueError(
+                f"Cannot merge datasets with different feature columns.\n"
+                f"Left dataset columns: {self._hf_dataset.column_names}\n"
+                f"Right dataset columns: {other._hf_dataset.column_names}"
+            )
+
+        # 1. Merge the raw NetworkX graphs (standard Python list concatenation)
+        merged_graphs = self.graphs + other.graphs
+        
+        # 2. Merge the Hugging Face arrow tables
+        merged_hf = concatenate_datasets([self._hf_dataset, other._hf_dataset])
+        
+        # 3. Return a new instance using your existing internal constructor
+        return TextGraphDataset(graphs=merged_graphs, _hf_dataset=merged_hf)
+
+    def assign_label(self, label: str):
+        """Assigns a label to the entire dataset."""
+        if "ds_label" in self._hf_dataset.column_names:
+            self._hf_dataset = self._hf_dataset.remove_columns("ds_label")
+        self._hf_dataset = self._hf_dataset.add_column("ds_label", [label] * len(self))
+
     # ------------------------------------------------------------------------
-    # Feature Computation Methods
+    #region Feature Computation Methods
     # ------------------------------------------------------------------------
     
     def tokenize(self, tokenizer, max_length=512, add_eos=False):
@@ -389,9 +429,12 @@ class TextGraphDataset(Dataset):
             self._hf_dataset = self._hf_dataset.remove_columns("labels")
             
         self._hf_dataset = self._hf_dataset.add_column("labels", labels_list)
+    
+    #endregion
+    # ------------------------------------------------------------------------
 
     # ------------------------------------------------------------------------
-    # Saving and Loading
+    #region Saving and Loading
     # ------------------------------------------------------------------------
 
     @classmethod
@@ -409,24 +452,31 @@ class TextGraphDataset(Dataset):
             features/       <-- Hugging Face Dataset (Arrow format)
             graphs.pkl      <-- List of NetworkX graphs (raw topology in RAM)
         """
+        temp_path = self.gtds_path(path + "_temp")
         path = self.gtds_path(path)        
 
-        if os.path.exists(path):
-            print(f"Warning: Directory {path} exists. Overwriting...")
-            shutil.rmtree(path)
+        # 1. Save to a temporary directory first to avoid memory-mapping conflicts
+        os.makedirs(temp_path, exist_ok=True)
+        print(f"Saving features to temporary path {temp_path}/features...")
+        self._hf_dataset.save_to_disk(os.path.join(temp_path, "features"))
         
-        os.makedirs(path)
-        print(f"Saving features to {path}/features...")
-        self._hf_dataset.save_to_disk(os.path.join(path, "features"))
-        
-        print(f"Saving graphs to {path}/graphs.pkl...")
-        with open(os.path.join(path, "graphs.pkl"), "wb") as f:
+        print(f"Saving graphs to {temp_path}/graphs.pkl...")
+        with open(os.path.join(temp_path, "graphs.pkl"), "wb") as f:
             pickle.dump(self.graphs, f)
-        print("Save complete.")
+            
+        # 2. Safely swap the directories
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        os.rename(temp_path, path)
+        
+        # 3. REFRESH MEMORY MAP: Point the active dataset to the new files
+        self._hf_dataset = load_from_disk(os.path.join(path, "features"))
+        
+        print(f"Save complete to {path}.")
 
     @classmethod
     def load(cls, path: str) -> 'TextGraphDataset':
-        """Loads from disk."""
+        """Loads from disk and ensures legacy compatibility."""
         path = cls.gtds_path(path)
 
         features_path = os.path.join(path, "features")
@@ -435,13 +485,24 @@ class TextGraphDataset(Dataset):
         if not os.path.exists(features_path) or not os.path.exists(graphs_path):
             raise FileNotFoundError(f"Could not find valid dataset at {path}")
             
-        print(f"Loading graphs from {graphs_path}...")
+        print(f"Loading dataset from {graphs_path}...")
+
         with open(graphs_path, "rb") as f:
             graphs = pickle.load(f)
             
-        print(f"Loading features from {features_path}...")
         hf_dataset = load_from_disk(features_path)
+        
+        # Support legacy datasets which did not have the 'ds_label' column by injecting a random label
+        if "ds_label" not in hf_dataset.column_names:
+            fallback_label = f"ds_{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=6))}"
+            print(f"Legacy dataset detected at {path}. Injecting random 'ds_label': {fallback_label}")
+            hf_dataset = hf_dataset.add_column("ds_label", [fallback_label] * len(hf_dataset))
+            
         return cls(graphs=graphs, _hf_dataset=hf_dataset)
+    #endregion
+    # ------------------------------------------------------------------------
+
+
 
 def generate_text_graph_example(dataset_size=3, base_num_nodes=5, calc_attributes=False, tokenizer=None, spec_emb_dim=4, max_rwse_steps=4, max_rrwp_steps=6, graph_type="undirected") -> TextGraphDataset:
     graphs = []

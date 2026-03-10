@@ -55,8 +55,49 @@ class GraphTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         if self.custom_prediction_step is not None:
             return self.custom_prediction_step(super().prediction_step, model, inputs, prediction_loss_only, ignore_keys)
-        else:
-            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+
+        # 1. Grab the labels before compute_loss pops them out of `inputs`!
+        raw_labels = inputs.get("labels")
+        
+        # 2. Standard forward pass
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                
+        if prediction_loss_only:
+            return (loss, None, None)
+            
+        logits = outputs.logits  # Shape: (batch_size, max_total_seq_len, vocab_size)
+        
+        # 3. Re-calculate prefix and prompt lengths to know WHERE the prompt is
+        prepared = model._prepare_inputs(inputs['input_ids'], inputs['prompt_node'], padding_side="right")
+        prefix_lengths = prepared['prefix_lengths']
+        prompt_lengths = prepared['prompt_lengths']
+        
+        # 4. Convert logits to predictions and shift them (logit at t predicts t+1)
+        preds = torch.argmax(logits, dim=-1)
+        shifted_preds = torch.full_like(preds, fill_value=-100)
+        shifted_preds[:, 1:] = preds[:, :-1]
+        
+        # 5. Extract ONLY the prompt predictions and pad everything cleanly
+        batch_size = preds.shape[0]
+        max_prompt_len = max(prompt_lengths) if prompt_lengths else 0
+        
+        prompt_preds = torch.full((batch_size, max_prompt_len), fill_value=-100, device=preds.device)
+        padded_labels = torch.full((batch_size, max_prompt_len), fill_value=-100, device=preds.device)
+        
+        for i in range(batch_size):
+            start = prefix_lengths[i]
+            end = start + prompt_lengths[i]
+            
+            # Slice the exact predictions for the prompt
+            prompt_preds[i, :prompt_lengths[i]] = shifted_preds[i, start:end]
+            
+            # Pad the raw labels so HF Trainer can safely accumulate them
+            if raw_labels is not None and i < len(raw_labels):
+                padded_labels[i, :raw_labels[i].shape[0]] = raw_labels[i]
+                
+        return (loss, prompt_preds, padded_labels)
 
     def save_model(self, output_dir=None, _internal_call=False):
         """

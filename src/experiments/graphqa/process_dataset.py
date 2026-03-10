@@ -260,8 +260,8 @@ def process_dataset(dataset_dir, output_dir, graph_type="standard", problem_type
         test_graphs.append(example_to_graph(example, graph_type=graph_type, problem_type=problem_type))
 
     # Initialize TextGraphDataset instances for training and testing datasets
-    train_ds = TextGraphDataset(train_graphs)
-    test_ds = TextGraphDataset(test_graphs)
+    train_ds = TextGraphDataset(train_graphs, dataset_label=f"{graph_type}/{problem_type}")
+    test_ds = TextGraphDataset(test_graphs, dataset_label=f"{graph_type}/{problem_type}")
 
     # This represents --> "A:"
     question_end = [ 32, 25 ] 
