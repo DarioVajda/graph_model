@@ -185,7 +185,7 @@ def training_run(
         learning_rate=learning_rate,                            # The initial learning rate for Adam
         lr_scheduler_type="cosine_with_min_lr",                 # Type of learning rate scheduler to use
         lr_scheduler_kwargs={"min_lr": learning_rate/10},       # Additional arguments for the learning rate scheduler
-        warmup_steps=STEPS_PER_EPOCH,                           # Number of steps for the warmup phase (when the learning rate is increasing linearly)
+        warmup_steps=STEPS_PER_EPOCH*2,                           # Number of steps for the warmup phase (when the learning rate is increasing linearly)
         weight_decay=0.1,                                       # Weight decay to apply (if not zero)
     )
 
@@ -212,7 +212,7 @@ def training_run(
 
     trainer.train()
 
-def save_run_metadata(run_name, bias_params, train_dataset, eval_dataset, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
+def save_run_metadata(run_name, bias_params, graph_type, train_dataset, eval_dataset, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
     """
     Save the metadata of the training run to the run_metadata.json file with the run_name being the key (if there are multiple runs with the same base name, append "_v2", "_v3", etc. to the run name).
 
@@ -242,6 +242,7 @@ def save_run_metadata(run_name, bias_params, train_dataset, eval_dataset, base_m
         run_name: {
             "date_time": date_time,
             "bias_params": bias_params,
+            "graph_type": graph_type,
             "train_dataset": train_dataset,
             "eval_dataset": eval_dataset,
             "base_model": base_model,
@@ -278,12 +279,13 @@ if __name__ == "__main__":
         "magnetic_q": 0.25
     }
     # Options: [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ]
-    TRAIN_DATASET_TASKS =   [ "connected_nodes", "disconnected_nodes" ]
-    EVAL_DATASET_TASKS  =   [ "connected_nodes", "disconnected_nodes" ]
+    GRAPH_TYPE = "incidence" # options: "standard" or "incidence"
+    TRAIN_DATASET_TASKS =   [ "node_degree" ]
+    EVAL_DATASET_TASKS  =   [ "node_degree" ]
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
     ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
-    LR = 3e-6
-    BIAS_LR=1e-3
+    LR = 3e-5
+    BIAS_LR=5e-3
     NUM_EPOCHS = 20
 
     LORA_R = 8
@@ -296,18 +298,20 @@ if __name__ == "__main__":
     }
     # LORA_CONFIG = None
 
-    run_suffix = "+".join([ 
-        bias_type
-        for bias_type 
-        in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
-        if BIAS_PARAMS[bias_type.split('(')[0]]
-    ])
+    # run_suffix = "+".join([ 
+    #     bias_type
+    #     for bias_type 
+    #     in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
+    #     if BIAS_PARAMS[bias_type.split('(')[0]]
+    # ])
+    run_suffix = "+".join(TRAIN_DATASET_TASKS)
 
     # Create a unique run name and save the run metadata
-    RUN_NAME = f"GraphQA{'_lora' if LORA_CONFIG else ''}_{run_suffix}"
+    RUN_NAME = f"GraphQA_{GRAPH_TYPE}{'_lora' if LORA_CONFIG else ''}_{run_suffix}"
     RUN_NAME = save_run_metadata(
         run_name=RUN_NAME,
         bias_params=BIAS_PARAMS,
+        graph_type=GRAPH_TYPE,
         train_dataset=TRAIN_DATASET_TASKS,
         eval_dataset=EVAL_DATASET_TASKS,
         base_model=MODEL_NAME,
@@ -329,7 +333,7 @@ if __name__ == "__main__":
     #region ----------------------- LOAD DATASETS ------------------------------
     # --------------------------------------------------------------------------
     datasets_dir = "./src/experiments/graphqa/processed_datasets"
-    train_dataset, eval_dataset = load_graphqa_datasets(datasets_dir, TRAIN_DATASET_TASKS, EVAL_DATASET_TASKS, graph_type="standard")
+    train_dataset, eval_dataset = load_graphqa_datasets(datasets_dir, TRAIN_DATASET_TASKS, EVAL_DATASET_TASKS, graph_type=GRAPH_TYPE)
 
     collator = GraphCollator()
 
@@ -353,7 +357,7 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
         collator=collator,
         run_name=RUN_NAME,
-        num_epochs=10,
+        num_epochs=NUM_EPOCHS,
         batch_size=4,
         learning_rate=LR,
         bias_learning_rate=BIAS_LR,
