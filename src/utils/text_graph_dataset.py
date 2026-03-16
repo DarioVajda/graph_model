@@ -211,8 +211,7 @@ class TextGraphDataset(Dataset):
         If add_eos is True, append the tokenizer's EOS token to the prompt node's text after tokenization.
         """
         if 'input_ids' in self._hf_dataset.column_names:
-            print("Dataset already tokenized. Skipping.")
-            return
+            print("Warning: Dataset already tokenized. Retokenization will overwrite the existing 'input_ids' column.")
         
         # Safety check: ensure the tokenizer actually has an EOS token defined
         if add_eos and tokenizer.eos_token_id is None:

@@ -98,7 +98,7 @@ def get_neighborhood(data, node, subset, edge_index, distances, max_nodes=25, ma
 
 def save_text_graph_dataset(graphs, path, params=None, per_graph_versions=1):
     dataset = TextGraphDataset(graphs, per_graph_versions=per_graph_versions)
-    dataset.tokenize(params['tokenizer'], max_length=params['max_length'])
+    dataset.tokenize(params['tokenizer'], max_length=params['max_length'], add_eos=True)
     dataset.compute_shortest_path_distances()
     dataset.compute_rrwp(max_rrwp_steps=params['max_rrwp_steps'])
     dataset.compute_magnetic_lap(q=params['magnetic_q'])

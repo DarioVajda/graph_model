@@ -5,6 +5,13 @@ This is a research project I am working on as student and a Machine Learning res
 
 I believe this original model architecture will help solve LLM hallucinations, and also bridge the gap between foundation models for sequential text, Geometric Deep Learning and Relational Deep Learning.
 
+## TODO List
+1. Evaluate the model (1B) on OGBN-Arxiv, Cora, Reddit, and Pubmed datasets.
+2. Test the model with different sized neighbourhoods.
+3. Perform a leave-one-out ablation study on all benchmarks for the PEs.
+4. Test scaling with respect to model size (probably the meta-llama/Llama-3.1-8B model).
+
+
 ## This Codebase
 
 This is a repository with all of the code used for my research – it includes low-level architecture implementations, data processing, experiments, and evaluation scripts. Moreover, it captures the entire raw research process I am going through and is ready for straight-forward reproduction.
