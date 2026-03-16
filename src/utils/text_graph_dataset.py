@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from typing import List, Dict, Optional, Any, Union
 from tqdm import tqdm
 import random
+import json
 
 from .laplacian import get_laplacian_coordinates
 from .rwse import compute_rwse
@@ -31,42 +32,37 @@ class TextGraphDataset(Dataset):
     Backend: Hugging Face Datasets (Arrow) + NetworkX (Topology).
     """
 
-    def __init__(self, graphs: List[nx.Graph], _hf_dataset: Optional[HFDataset] = None, dataset_label: Optional[str] = None):
+    def __init__(self, graphs: List[nx.Graph], _hf_dataset: Optional[HFDataset] = None, dataset_label: Optional[str] = None, per_graph_versions=1):
         """
         Args:
-            graphs: List of NetworkX graphs. Nodes must have 'text' attribute.
+            graphs: List of NetworkX graphs. Nodes must have 'text' attribute. Should have N x per_graph_versions graphs structured like this: [g1_v1,... g1_vk, g2_v1,... g2_vk, ...] where k=per_graph_versions. The prompt node index should be stored in graph.graph['prompt_node']
             _hf_dataset: (Internal use only) Used by .load() to bypass re-initialization.
             dataset_label: Optional label for the dataset.
+            per_graph_versions: Number of versions of each graph, item i will return one of the versions of graph i (used for data augmentation, default=1 means no augmentation)
         """
-        self.graphs = []
+        self.per_graph_versions = per_graph_versions
 
-        # if the graph is unnamed, append a random 6 capital letter string to the dataset name to ensure uniqueness
-        dataset_name = dataset_label if dataset_label is not None else f"ds_{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=6))}"
-
-        for g in graphs:
-            # 1. Create a mapping from old labels (e.g., tuples, strings) to integers 0..N-1
-            # Using default iteration order avoids the sorting crash
-            mapping = {old_label: new_int for new_int, old_label in enumerate(g.nodes())}
-            
-            # 2. Relabel the nodes using our mapping
-            g_int = nx.relabel_nodes(g, mapping, copy=True)
-            
-            # 3. Save the original IDs inside the node data just in case you need them later
-            nx.set_node_attributes(g_int, {new_int: old for old, new_int in mapping.items()}, "original_id")
-            
-            # 4. Update the prompt_node attribute to its new integer index
-            old_prompt = g_int.graph.get('prompt_node', None)
-            if old_prompt != -1 and old_prompt in mapping:
-                g_int.graph['prompt_node'] = mapping[old_prompt]
-                
-            self.graphs.append(g_int)
-        
         if _hf_dataset is not None:
+            self.graphs = graphs
             self._hf_dataset = _hf_dataset
             if dataset_label is not None:
                 self.assign_label(dataset_label)
         else:
-            self._build_initial_dataset(dataset_label)
+            self.graphs = []
+            dataset_name = dataset_label if dataset_label is not None else f"ds_{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=6))}"
+
+            for g in graphs:
+                mapping = {old_label: new_int for new_int, old_label in enumerate(g.nodes())}
+                g_int = nx.relabel_nodes(g, mapping, copy=True)
+                nx.set_node_attributes(g_int, {new_int: old for old, new_int in mapping.items()}, "original_id")
+                
+                old_prompt = g_int.graph.get('prompt_node', -1)
+                if old_prompt != -1 and old_prompt in mapping:
+                    g_int.graph['prompt_node'] = mapping[old_prompt]
+                    
+                self.graphs.append(g_int)
+            
+            self._build_initial_dataset(dataset_name)
 
     def _build_initial_dataset(self, dataset_label):
         """
@@ -93,7 +89,9 @@ class TextGraphDataset(Dataset):
         self._hf_dataset = HFDataset.from_dict(data_dict)
 
     def __len__(self):
-        return len(self._hf_dataset)
+        if len(self._hf_dataset) % self.per_graph_versions != 0:
+            raise ValueError(f"Dataset length {len(self._hf_dataset)} is not divisible by per_graph_versions {self.per_graph_versions}. Check your dataset construction.")
+        return len(self._hf_dataset) // self.per_graph_versions
 
     def __getitem__(self, idx):
         """
@@ -103,15 +101,19 @@ class TextGraphDataset(Dataset):
          - 'num_nodes'                  ---> Integer (number of nodes in the graph)
          - 'prompt_node'                ---> Integer (index of the prompt node, or -1 if not specified)
          - 'edges'                      ---> List of tuples (edges between nodes, retrieved from RAM)
-         - 'laplacian_coordinates'           ---> Tensor of shape (num_nodes, spectral_dim)
+         - 'laplacian_coordinates'      ---> Tensor of shape (num_nodes, spectral_dim)
          - 'shortest_path_dists'        ---> Tensor of shape (num_nodes, num_nodes)
          - 'rwse'                       ---> Tensor of shape (num_nodes, max_rwse_steps)
          - 'rrwp'                       ---> Tensor of shape (num_nodes, num_nodes, max_rrwp_steps)
          - 'magnetic_V'                 ---> Tensor of shape (num_nodes, num_nodes, 2) containing real and imaginary parts of the magnetic eigenvectors
-         - 'magnetic_lambdas'          ---> Tensor of shape (num_nodes) containing the magnetic eigenvalues (which are real-valued, as the magnetic Laplacian is Hermitian matrix)
+         - 'magnetic_lambdas'           ---> Tensor of shape (num_nodes) containing the magnetic eigenvalues (which are real-valued, as the magnetic Laplacian is Hermitian matrix)
          - 'input_ids'                  ---> List of num_nodes lists of token ids (tokenized input for each node)
          - 'labels'                     ---> Tensor of labels for the prompt node
         """
+        # 0. Calculate the actual index in the underlying dataset considering per_graph_versions
+        version = random.randint(0, self.per_graph_versions - 1)
+        idx = idx * self.per_graph_versions + version # eg. if idx=52, per_graph_versions=4 => new idx can be 208, 209, 210, or 211 (randomly selected) which correspond to different versions of the same graph
+
         # 1. Get the base item from Arrow (fast load)
         item = self._hf_dataset[idx]
         
@@ -172,6 +174,9 @@ class TextGraphDataset(Dataset):
         """Allows merging two TextGraphDatasets using the '+' operator."""
         if not isinstance(other, TextGraphDataset):
             return NotImplemented
+
+        if self.per_graph_versions != other.per_graph_versions:
+            raise ValueError(f"Cannot merge datasets with different per_graph_versions. Left: {self.per_graph_versions}, Right: {other.per_graph_versions}")
             
         # Safety check: Ensure both datasets have computed the same features
         if set(self._hf_dataset.column_names) != set(other._hf_dataset.column_names):
@@ -188,13 +193,13 @@ class TextGraphDataset(Dataset):
         merged_hf = concatenate_datasets([self._hf_dataset, other._hf_dataset])
         
         # 3. Return a new instance using your existing internal constructor
-        return TextGraphDataset(graphs=merged_graphs, _hf_dataset=merged_hf)
+        return TextGraphDataset(graphs=merged_graphs, _hf_dataset=merged_hf, per_graph_versions=self.per_graph_versions)
 
     def assign_label(self, label: str):
         """Assigns a label to the entire dataset."""
         if "ds_label" in self._hf_dataset.column_names:
             self._hf_dataset = self._hf_dataset.remove_columns("ds_label")
-        self._hf_dataset = self._hf_dataset.add_column("ds_label", [label] * len(self))
+        self._hf_dataset = self._hf_dataset.add_column("ds_label", [label] * len(self._hf_dataset))
 
     # ------------------------------------------------------------------------
     #region Feature Computation Methods
@@ -399,8 +404,14 @@ class TextGraphDataset(Dataset):
     def compute_labels(self, get_graph_labels):
         """Computes labels for each graph using the provided function and adds 'labels' column."""       
         labels_list = []
-        for i in tqdm(range(len(self)), desc="Generating Labels"):
-            item = self[i]
+        # Iterate over the raw flattened length
+        for i in tqdm(range(len(self._hf_dataset)), desc="Generating Labels"):
+            item = self._hf_dataset[i]
+            g = self.graphs[i] 
+            
+            # Manually inject what get_graph_labels needs
+            item['num_nodes'] = g.number_of_nodes()
+            item['prompt_node'] = g.graph.get('prompt_node', -1)
             
             if 'input_ids' not in item:
                 raise ValueError("Dataset must be tokenized before computing labels.")
@@ -429,7 +440,6 @@ class TextGraphDataset(Dataset):
             self._hf_dataset = self._hf_dataset.remove_columns("labels")
             
         self._hf_dataset = self._hf_dataset.add_column("labels", labels_list)
-    
     #endregion
     # ------------------------------------------------------------------------
 
@@ -463,6 +473,10 @@ class TextGraphDataset(Dataset):
         print(f"Saving graphs to {temp_path}/graphs.pkl...")
         with open(os.path.join(temp_path, "graphs.pkl"), "wb") as f:
             pickle.dump(self.graphs, f)
+
+        metadata = { "per_graph_versions": self.per_graph_versions }
+        with open(os.path.join(temp_path, "metadata.json"), "w") as f:
+            json.dump(metadata, f)
             
         # 2. Safely swap the directories
         if os.path.exists(path):
@@ -481,6 +495,7 @@ class TextGraphDataset(Dataset):
 
         features_path = os.path.join(path, "features")
         graphs_path = os.path.join(path, "graphs.pkl")
+        metadata_path = os.path.join(path, "metadata.json")
         
         if not os.path.exists(features_path) or not os.path.exists(graphs_path):
             raise FileNotFoundError(f"Could not find valid dataset at {path}")
@@ -491,6 +506,14 @@ class TextGraphDataset(Dataset):
             graphs = pickle.load(f)
             
         hf_dataset = load_from_disk(features_path)
+
+        per_graph_versions = 1
+        if os.path.exists(metadata_path):
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+                per_graph_versions = metadata.get("per_graph_versions", 1)
+        else:
+            print(f"Legacy dataset detected (no metadata.json). Defaulting per_graph_versions to 1.")
         
         # Support legacy datasets which did not have the 'ds_label' column by injecting a random label
         if "ds_label" not in hf_dataset.column_names:
@@ -498,7 +521,41 @@ class TextGraphDataset(Dataset):
             print(f"Legacy dataset detected at {path}. Injecting random 'ds_label': {fallback_label}")
             hf_dataset = hf_dataset.add_column("ds_label", [fallback_label] * len(hf_dataset))
             
-        return cls(graphs=graphs, _hf_dataset=hf_dataset)
+        return cls(graphs=graphs, _hf_dataset=hf_dataset, per_graph_versions=per_graph_versions)
+    #endregion
+    # ------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------
+    #region Utils for printing and representation
+    # ------------------------------------------------------------------------
+    def __repr__(self) -> str:
+        """
+        Defines the string representation of the dataset for clean printing.
+        """
+        if self._hf_dataset is None:
+            return "<TextGraphDataset: Uninitialized>"
+            
+        # Safely extract the dataset label if it exists
+        features = self._hf_dataset.column_names
+        
+        # Calculate dataset statistics
+        total_items = len(self)
+        total_graphs = len(self.graphs)
+        
+        # Format the features into a readable string wrapper
+        formatted_features = ", ".join(features)
+        
+        return (
+            f"TextGraphDataset(\n"
+            f"  Total Items: {total_items}\n"
+            f"  Versions per Item: {self.per_graph_versions}\n"
+            f"  Total Graphs: {total_graphs}\n"
+            f"  Computed Features: [{formatted_features}]\n"
+            f")"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
     #endregion
     # ------------------------------------------------------------------------
 

@@ -16,6 +16,9 @@ protobuf
 torch-geometric
 networkx
 scipy
+--find-links https://data.pyg.org/whl/torch-2.10.0+cu128.html
+torch-sparse
+torch-scatter
 
 # Utilities & Visualization
 numpy

@@ -1,4 +1,51 @@
 {
+    "GraphQA_standard_lora_node_classification_v2": {
+        "date_time": "2026-03-14 17:51:41",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "graph_type": "standard",
+        "train_dataset": [
+            "node_classification"
+        ],
+        "eval_dataset": [
+            "node_classification"
+        ],
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 8,
+            "lora_alpha": 16,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
     "GraphQA_incidence_lora_node_degree_v2": {
         "date_time": "2026-03-13 22:03:35",
         "bias_params": {

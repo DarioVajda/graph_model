@@ -279,9 +279,9 @@ if __name__ == "__main__":
         "magnetic_q": 0.25
     }
     # Options: [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ]
-    GRAPH_TYPE = "incidence" # options: "standard" or "incidence"
-    TRAIN_DATASET_TASKS =   [ "node_degree" ]
-    EVAL_DATASET_TASKS  =   [ "node_degree" ]
+    GRAPH_TYPE = "standard" # options: "standard" or "incidence"
+    TRAIN_DATASET_TASKS =   [ "node_classification" ]
+    EVAL_DATASET_TASKS  =   [ "node_classification" ]
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
     ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
     LR = 3e-5
