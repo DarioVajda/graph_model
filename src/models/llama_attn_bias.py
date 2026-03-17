@@ -356,9 +356,9 @@ class LlamaAttentionWithBias(LlamaAttention):
 
             if self.require_rrwp:
                 if rrwp_emb is None: raise ValueError("RRWP bias is required but 'rrwp_emb' is not provided.")
-                rrwp_bias = self.rrwp_proj(rrwp_emb).permute(0, 3, 1, 2) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                rrwp_bias = self.rrwp_proj(rrwp_emb).permute(0, 3, 1, 2).contiguous() # <--- Added .contiguous()
                 diag_mask = torch.eye(rrwp_bias.shape[-1], device=device, dtype=torch.bool)
-                rrwp_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # Zero out diagonal entries where i=j
+                rrwp_bias = rrwp_bias.masked_fill(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # <--- Removed the underscore
                 node_bias = node_bias + rrwp_bias
 
             if self.require_magnetic:
@@ -367,7 +367,7 @@ class LlamaAttentionWithBias(LlamaAttention):
                 h_i = self.magnetic_lambda_lin(magnetic_lambdas.unsqueeze(-1)) # (batch_size, max_num_nodes, head_dim)
 
                 # create a boolean mask of valid nodes: shape (batch_size, max_num_nodes)
-                valid_mask = torch.arange(magnetic_lambdas.shape[1], device=h_i.device).expand(len(num_nodes), -1) < num_nodes.unsqueeze(1) # (batch_size, max_num_nodes) bool
+                valid_mask = torch.arange(magnetic_lambdas.shape[1], device=h_i.device).expand(num_nodes.shape[0], -1) < num_nodes.unsqueeze(1) # (batch_size, max_num_nodes) bool
 
                 # mask the invalid nodes out of the sum
                 h_i_masked = h_i * valid_mask.unsqueeze(-1) 
@@ -398,11 +398,11 @@ class LlamaAttentionWithBias(LlamaAttention):
                 magnetic_bias = self.magnetic_bias_proj(magnetic_edge_features) # (batch_size, max_num_nodes, max_num_nodes, num_heads)
 
                 # Permute to match standard Transformer attention mask shape: (B, H, N, N)
-                magnetic_bias = magnetic_bias.permute(0, 3, 1, 2)
+                magnetic_bias = magnetic_bias.permute(0, 3, 1, 2).contiguous() # <--- Added .contiguous()
 
                 # mask the diagonal entries where i=j to 0, since we don't want self-loops to contribute to the bias
                 diag_mask = torch.eye(magnetic_bias.shape[-1], device=device, dtype=torch.bool)
-                magnetic_bias.masked_fill_(diag_mask.unsqueeze(0).unsqueeze(0), 0.0)
+                magnetic_bias = magnetic_bias.masked_fill(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # <--- Removed the underscore
 
                 # Add the magnetic bias to the total node_bias
                 node_bias = node_bias + magnetic_bias
@@ -410,6 +410,9 @@ class LlamaAttentionWithBias(LlamaAttention):
             # Save to graph batch cache so we don't recompute on token generation steps > 0
             if input_graph_batch is not None:
                 input_graph_batch[cache_key] = node_bias
+
+        if type(node_bias) == int and node_bias == 0:
+            return None  # No bias was actually computed, return None to indicate this
 
         # Expanding the node-level biases to token-level biases using advanced indexing
         batch_size, q_len = query_states.shape[0], query_states.shape[2]
@@ -982,7 +985,8 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             Modified forward method to accept the text attributed graph as input.
             ...
         """
-        device = next(self.parameters()).device
+        # get the device from the input_ids in the input_graph_batch
+        device = input_graph_batch['input_ids'][0][0].device if input_graph_batch is not None else next(self.parameters()).device
 
         if input_graph_batch is not None:
             input_graph_batch = send_to_device(input_graph_batch, device)
@@ -1006,7 +1010,7 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             prepared_position_ids = position_ids
             prefix_lengths = [0] * prepared_input_ids.shape[0] # Not needed during generation loss bypass
             prompt_lengths = [0] * prepared_input_ids.shape[0] # Not needed during generation loss bypass
-        
+                
         # Pass the custom argument to the model
         outputs = self.model(
             input_ids=prepared_input_ids,               # concatenated tokens of all nodes in the graph

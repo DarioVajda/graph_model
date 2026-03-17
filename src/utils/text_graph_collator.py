@@ -11,19 +11,15 @@ class GraphCollator:
         """
         Collates a list of TextGraph dictionaries into a batch.
         """
-
-        sizes = torch.tensor([item['num_nodes'] for item in batch], dtype=torch.long)
-        texts = [item['text'] for item in batch] # texts will be kept as they are
-        prompt_nodes = torch.tensor([item['prompt_node'] for item in batch], dtype=torch.long)
-        edges = [torch.tensor(item['edges'], dtype=torch.long) for item in batch]
         
-        if "input_ids" in batch[0]:
-            input_ids = [
-                [torch.tensor(ids, dtype=torch.long) for ids in item['input_ids']]
-                for item in batch
-            ]
-        else:
-            input_ids = None
+        sizes = torch.tensor([item['num_nodes'] for item in batch], dtype=torch.long)
+        prompt_nodes = torch.tensor([item['prompt_node'] for item in batch], dtype=torch.long)
+        # edges = [torch.tensor(item['edges'], dtype=torch.long) for item in batch]
+        
+        input_ids = [
+            [torch.tensor(ids, dtype=torch.long) for ids in item['input_ids']]
+            for item in batch
+        ]
 
         labels = [ item['labels'] for item in batch ] if "labels" in batch[0] else None
 
@@ -70,9 +66,8 @@ class GraphCollator:
 
         return {
             'num_nodes': sizes,
-            'text': texts,
             'prompt_node': prompt_nodes,
-            'edges': edges,
+            # 'edges': edges,
             'input_ids': input_ids,
             'labels': labels,
             'laplacian_coordinates': laplacian_coordinates,

@@ -24,20 +24,25 @@ def load_dataset(path, train=True, val=True, test=True):
         print()
     return datasets
 
-def calc_total_len(graph):
-    total_len = 0
-    for node in range(graph['num_nodes']):
-        total_len += len(graph['input_ids'][node])
-    return total_len
-
-def calc_avg_total_len(ds):
-    total_len = 0
-    num_samples = min(1000, len(ds))  # Limit to first 1000 samples for efficiency
-    for i in tqdm(range(num_samples)):
-        total_len += calc_total_len(ds[i])
-    return total_len / num_samples if num_samples > 0 else 0
 
 if __name__ == '__main__':
+    def calc_total_len(graph):
+        total_len = 0
+        for node in range(graph['num_nodes']):
+            total_len += len(graph['input_ids'][node])
+        return total_len, graph['num_nodes']
+
+    def calc_avg_total_len(ds):
+        total_len = 0
+        node_count = 0
+        num_samples = min(1000, len(ds))  # Limit to first 1000 samples for efficiency
+        for i in tqdm(range(num_samples)):
+            tl, nc = calc_total_len(ds[i])
+            total_len += tl
+            node_count += nc
+        return total_len / num_samples if num_samples > 0 else 0, total_len / node_count if node_count > 0 else 0
+
+
     paths = [
         './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors30',
         './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30',
@@ -48,13 +53,7 @@ if __name__ == '__main__':
         datasets = load_dataset(path, train=True, val=False, test=False)
         print(datasets['train'])
 
-        avg_len = calc_avg_total_len(datasets['train'])
-        print(f"Dataset: {os.path.basename(path)}, Average Total Length: {avg_len}")
+        avg_per_graph_len, avg_per_node_len = calc_avg_total_len(datasets['train'])
+        print(f"Dataset: {os.path.basename(path)}, Average Total Length: {avg_per_graph_len}, Average Length per Node: {avg_per_node_len}")
         print('='*80)
         print('='*80)
-
-    # Results:
-    # Dataset: pubmed_hops2_neighbors30,        Average Total Length: 947.23
-    # Dataset: cora_hops2_neighbors30,          Average Total Length: 529.341
-    # Dataset: ogbn-arxiv_hops2_neighbors30,    Average Total Length: 806.641
-    # Dataset: reddit_hops2_neighbors15,        Average Total Length: 2756.897
