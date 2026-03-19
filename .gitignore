@@ -5,6 +5,8 @@ hf_token.txt
 .graph_llama_report.jsonl
 *llama_report.jsonl
 
+src/kernels/
+
 *.gtds/
 
 wandb_login.sh

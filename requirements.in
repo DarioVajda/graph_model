@@ -4,6 +4,7 @@ transformers==4.50.3
 accelerate
 huggingface_hub[cli]==0.27.1
 peft
+triton
 
 # Datasets
 datasets>=2.19.0 
@@ -25,6 +26,8 @@ numpy
 matplotlib
 tqdm
 wandb
+tabulate
+pytest
 
 # Interpretability
 seaborn
