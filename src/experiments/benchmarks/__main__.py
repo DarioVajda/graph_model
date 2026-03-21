@@ -17,7 +17,13 @@ def get_device():
 #region -------- Code for model intialization and parameter selection --------
 def init_model(model_name, device, bias_params):
     config = GraphLlamaConfig.from_pretrained(model_name, **bias_params)
-    model = GraphLlamaForCausalLM.from_pretrained(model_name, config=config, attn_implementation="sdpa")
+    model = GraphLlamaForCausalLM.from_pretrained(
+        model_name, 
+        config=config, 
+        attn_implementation="sdpa",
+        allowed_seq_lens=[1024, 2048, 4096],
+        allowed_node_counts=[32, 64, 128],
+    )
     model.to(device)
     for param in model.parameters():
         param.requires_grad = False
@@ -164,8 +170,9 @@ def training_run(
         logging_steps=1,                                        # Log training metrics every 5 steps
         per_device_train_batch_size=batch_size,                 # Batch size per device during training
         gradient_accumulation_steps=accumulation_steps,         # Number of steps to accumulate gradients before performing an optimizer step
-        gradient_checkpointing=False,                           # Gradient checkpointing to save memory
         # torch_compile=True,                                     # Use PyTorch 2.0's torch.compile for potential speedup (requires PyTorch 2.0+)
+        gradient_checkpointing=True,                            # Enable gradient checkpointing to save memory (trades compute for memory)
+        gradient_checkpointing_kwargs={"use_reentrant": False}, # Use non-reentrant checkpointing to be compatible with PyTorch 2.0's torch.compile and avoid issues with certain operations (like in our custom attention)
 
         # Evaluation arguments:
         eval_strategy="steps",                                  # Evaluate every eval_steps during training

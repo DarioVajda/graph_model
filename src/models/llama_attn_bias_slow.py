@@ -39,7 +39,7 @@ import os
 import torch
 from torch import nn
 import torch.nn.functional as F
-from typing import Optional, Tuple, Union, List, Dict, Any, Callable
+from typing import Optional, Tuple, Union, List, Dict, Any
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.cache_utils import DynamicCache
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
@@ -71,11 +71,6 @@ import json
 from transformers import LlamaConfig
 from accelerate.utils import send_to_device
 
-from ..graph_attn.flex_attn import graph_flex_attention
-
-compiled_graph_flex_attention = torch.compile(graph_flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
-# compiled_graph_flex_attention = torch.compile(graph_flex_attention)
-
 #region Graph Llama Config
 class GraphAttnBiasConfig:
     def __init__(self, spd=False, laplacian=False, max_spd=32, rwse=False, rrwp=False, max_rw_steps=8, magnetic=False, magnetic_dim=32, magnetic_q=0.25):
@@ -87,7 +82,7 @@ class GraphAttnBiasConfig:
         self.max_rw_steps = max_rw_steps
         self.magnetic = magnetic
         self.magnetic_dim = magnetic_dim
-        self.magnetic_q = magnetic_q
+        self.magnetic_q = 0.25
 
     def to_dict(self):
         return {
@@ -119,7 +114,6 @@ class GraphLlamaConfig(LlamaConfig):
         graph_attn_bias=None, 
         magnetic=False,
         magnetic_dim=32,
-        magnetic_q=0.25,
         **kwargs
     ):
         # 1. Initialize standard Llama parameters
@@ -140,8 +134,7 @@ class GraphLlamaConfig(LlamaConfig):
                 rrwp=rrwp,
                 max_rw_steps=max_rw_steps,
                 magnetic=magnetic,
-                magnetic_dim=magnetic_dim,
-                magnetic_q=magnetic_q
+                magnetic_dim=magnetic_dim
             )
 
     def to_dict(self):
@@ -307,6 +300,141 @@ class LlamaAttentionWithBias(LlamaAttention):
         if self.require_magnetic and (input_graph_batch is None or 'magnetic' not in input_graph_batch):
             raise ValueError("Magnetic bias is required but 'magnetic' is missing from input_graph_batch. It should be a tuple with the magnetic eigenvectors (shape BxNxNx2) and eigenvalues (shape N).")
 
+    def compute_bias(
+        self,
+        query_states: torch.Tensor,                             # (batch_size, num_heads, q_len, head_dim)
+        key_states: torch.Tensor,                               # (batch_size, num_heads, kv_len, head_dim)
+        node_ids: Optional[torch.LongTensor],                   # (batch_size, seq_len)
+        num_nodes: Optional[torch.Tensor],                      # (batch_size,)
+        shortest_path_distances: Optional[torch.Tensor],        # (batch_size, max_num_nodes, max_num_nodes)
+        laplacian_coordinates: Optional[torch.Tensor],          # (batch_size, max_num_nodes, spec_dim)
+        rwse_emb: Optional[torch.Tensor],                       # (batch_size, max_num_nodes, rwse_dim)
+        rrwp_emb: Optional[torch.Tensor],                       # (batch_size, max_num_nodes, max_num_nodes, max_rw_steps)
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]],  # (batch_size, max_num_nodes, max_num_nodes, 2), (batch_size, max_num_nodes)
+        input_graph_batch: Optional[TextGraph] = None,          # the full graph batch, used for caching the computed bias to avoid redundant O(N^2) calculations during generation
+    ):
+        magnetic_V = magnetic[0] if magnetic is not None else None          # (batch_size, max_num_nodes, max_num_nodes, 2)
+        magnetic_lambdas = magnetic[1] if magnetic is not None else None    # (batch_size, max_num_nodes)
+
+        using_graph_bias = self.require_spd or self.require_laplacian or self.require_rwse or self.require_rrwp or self.require_magnetic
+        if not using_graph_bias:
+            return None  # No bias needed, return None to indicate this
+        if node_ids is None:
+            raise ValueError("Graph-based bias is required but 'node_ids' is not provided.")
+
+        dtype = query_states.dtype
+        device = query_states.device
+        
+        cache_key = f'cached_node_bias_{self.layer_idx}'
+        
+        # Bypass O(N^2) node calculations during generation if already cached
+        if input_graph_batch is not None and cache_key in input_graph_batch:
+            node_bias = input_graph_batch[cache_key]
+        else:
+            node_bias = 0
+
+            if self.require_spd:
+                if shortest_path_distances is None: raise ValueError("Shortest Path Distance bias is required but 'shortest_path_distances' is not provided.")
+                non_zero_mask = (shortest_path_distances > 0)
+                spd_indices = torch.clamp(shortest_path_distances - 1, min=0, max=self.spd_weights.shape[0] - 1) # mapping D -> D-1 for indexing in spd_weights
+                
+                spd_bias = F.embedding(spd_indices, self.spd_weights).permute(0, 3, 1, 2).to(dtype=dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                spd_bias = spd_bias * non_zero_mask.unsqueeze(1)  # Zero out entries where distance was originally 0
+                node_bias = node_bias + spd_bias
+
+            if self.require_laplacian:
+                if laplacian_coordinates is None: raise ValueError("Laplacian bias is required but 'laplacian_coordinates' is not provided.")
+                lap_dist = torch.cdist(laplacian_coordinates, laplacian_coordinates, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
+                lap_bias = lap_dist.unsqueeze(1) * self.laplacian_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                node_bias = node_bias + lap_bias
+
+            if self.require_rwse:
+                if rwse_emb is None: raise ValueError("RWSE bias is required but 'rwse_emb' is not provided.")
+                rwse_dist = torch.cdist(rwse_emb, rwse_emb, p=2.0) # (batch_size, max_num_nodes, max_num_nodes)
+                rwse_bias = rwse_dist.unsqueeze(1) * self.rwse_weights.view(-1, 1, 1).to(dtype) # (batch_size, num_heads, max_num_nodes, max_num_nodes)
+                node_bias = node_bias + rwse_bias
+
+            if self.require_rrwp:
+                if rrwp_emb is None: raise ValueError("RRWP bias is required but 'rrwp_emb' is not provided.")
+                rrwp_bias = self.rrwp_proj(rrwp_emb).permute(0, 3, 1, 2).contiguous() # <--- Added .contiguous()
+                diag_mask = torch.eye(rrwp_bias.shape[-1], device=device, dtype=torch.bool)
+                rrwp_bias = rrwp_bias.masked_fill(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # <--- Removed the underscore
+                node_bias = node_bias + rrwp_bias
+
+            if self.require_magnetic:
+                if magnetic_V is None or magnetic_lambdas is None: raise ValueError("Magnetic bias is required but 'magnetic' data is not provided.")
+                # compute the eigenvalue-based features
+                h_i = self.magnetic_lambda_lin(magnetic_lambdas.unsqueeze(-1)) # (batch_size, max_num_nodes, head_dim)
+
+                # create a boolean mask of valid nodes: shape (batch_size, max_num_nodes)
+                valid_mask = torch.arange(magnetic_lambdas.shape[1], device=h_i.device).expand(num_nodes.shape[0], -1) < num_nodes.unsqueeze(1) # (batch_size, max_num_nodes) bool
+
+                # mask the invalid nodes out of the sum
+                h_i_masked = h_i * valid_mask.unsqueeze(-1) 
+
+                # compute the average of the h_i features (only across the valid nodes)
+                h_avg = h_i_masked.sum(dim=1, keepdim=True) / num_nodes.view(-1, 1, 1).to(h_i.dtype) # (batch_size, 1, head_dim) / (batch_size, 1, 1) -> (batch_size, 1, head_dim)
+                h_avg_expanded = h_avg.expand(-1, magnetic_lambdas.shape[1], -1) # (batch_size, max_num_nodes, head_dim)
+
+                # compute the magnetic features using a deep set architecture to ensure permutation equivariance
+                deep_set_input = torch.cat([h_i, h_avg_expanded], dim=-1) # (batch_size, max_num_nodes, head_dim*2)
+                phi_lambdas = self.magnetic_lambda_deep_set(deep_set_input) # (batch_size, max_num_nodes, magnetic_dim)
+
+                # compute the edge-level embeddings using the magnetic eigenvectors and the phi_lambdas features
+                V_real = magnetic_V[..., 0] # (batch_size, max_num_nodes, max_num_nodes)
+                V_imag = magnetic_V[..., 1] # (batch_size, max_num_nodes, max_num_nodes)
+
+                # Compute V @ diag(phi) @ conj(V.T) efficiently using Einstein summation
+                # Real Part: (V_R * Phi * V_R.T) + (V_I * Phi * V_I.T)
+                real_part = torch.einsum('bil, bjl, blk -> bijk', V_real, V_real, phi_lambdas) + torch.einsum('bil, bjl, blk -> bijk', V_imag, V_imag, phi_lambdas)
+                
+                # Imaginary Part: (V_I * Phi * V_R.T) - (V_R * Phi * V_I.T)
+                imag_part = torch.einsum('bil, bjl, blk -> bijk', V_imag, V_real, phi_lambdas) - torch.einsum('bil, bjl, blk -> bijk', V_real, V_imag, phi_lambdas)
+
+                # Concatenate real and imaginary parts to form the stable 2m-dim edge features
+                magnetic_edge_features = torch.cat([real_part, imag_part], dim=-1) # (batch_size, max_num_nodes, max_num_nodes, magnetic_dim * 2)
+
+                # Project the edge features to scalar bias values for each attention head
+                magnetic_bias = self.magnetic_bias_proj(magnetic_edge_features) # (batch_size, max_num_nodes, max_num_nodes, num_heads)
+
+                # Permute to match standard Transformer attention mask shape: (B, H, N, N)
+                magnetic_bias = magnetic_bias.permute(0, 3, 1, 2).contiguous() # <--- Added .contiguous()
+
+                # mask the diagonal entries where i=j to 0, since we don't want self-loops to contribute to the bias
+                diag_mask = torch.eye(magnetic_bias.shape[-1], device=device, dtype=torch.bool)
+                magnetic_bias = magnetic_bias.masked_fill(diag_mask.unsqueeze(0).unsqueeze(0), 0.0) # <--- Removed the underscore
+
+                # Add the magnetic bias to the total node_bias
+                node_bias = node_bias + magnetic_bias
+
+            # Save to graph batch cache so we don't recompute on token generation steps > 0
+            if input_graph_batch is not None:
+                input_graph_batch[cache_key] = node_bias
+
+        if type(node_bias) == int and node_bias == 0:
+            return None  # No bias was actually computed, return None to indicate this
+
+        # Expanding the node-level biases to token-level biases using advanced indexing
+        batch_size, q_len = query_states.shape[0], query_states.shape[2]
+        kv_len = key_states.shape[2]
+
+        # Slice node_ids to match the current query and key lengths
+        node_ids_q = node_ids[:, -q_len:]
+        node_ids_kv = node_ids[:, -kv_len:]
+
+        B = batch_size
+        _, H, _, _ = node_bias.shape
+        device = node_ids.device
+
+        batch_idx = torch.arange(B, device=device).view(B, 1, 1, 1) # Shape: (B, 1, 1, 1)
+        head_idx = torch.arange(H, device=device).view(1, H, 1, 1)  # Shape: (1, H, 1, 1)
+        q_idx = node_ids_q.view(B, 1, q_len, 1)                     # Shape: (B, 1, q_len, 1)
+        k_idx = node_ids_kv.view(B, 1, 1, kv_len)                   # Shape: (B, 1, 1, kv_len)
+
+        token_bias = node_bias[batch_idx, head_idx, q_idx, k_idx]   # Shape: (B, H, q_len, kv_len)
+
+        return token_bias.to(dtype=query_states.dtype)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -318,10 +446,6 @@ class LlamaAttentionWithBias(LlamaAttention):
         # CUSTOM ARGUMENTS
         node_ids: Optional[torch.LongTensor] = None,
         input_graph_batch: Optional[TextGraph] = None,
-        layer_node_bias: Optional[torch.Tensor] = None,
-        valid_start: Optional[torch.Tensor] = None,
-        valid_end: Optional[torch.Tensor] = None,
-        prefix_end: Optional[torch.Tensor] = None,
         
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
@@ -355,63 +479,42 @@ class LlamaAttentionWithBias(LlamaAttention):
         # =====================================================================
         # CUSTOM LOGIC: Construct and add the graph bias
         # =====================================================================
-        batch_size, q_len = query_states.shape[0], query_states.shape[2]
+        custom_bias = self.compute_bias(
+            query_states=query_states,
+            key_states=key_states,
+            node_ids=node_ids,
+            num_nodes=num_nodes,
+            shortest_path_distances=shortest_path_distances,
+            laplacian_coordinates=laplacian_coordinates,
+            rwse_emb=rwse_emb,
+            rrwp_emb=rrwp_emb,
+            magnetic=magnetic,
+            input_graph_batch=input_graph_batch,
+        ) # (batch_size, num_heads, seq_len, seq_len)
+        if custom_bias is not None and attention_mask is not None:
+            attention_mask = attention_mask + custom_bias
+        # =====================================================================
 
-        if q_len > 1 and layer_node_bias is not None and valid_start is not None:
-            # USE FLEX ATTENTION FOR PREFILL / TRAINING
-            attn_output = compiled_graph_flex_attention(
-                query_states,
-                key_states,
-                value_states,
-                layer_node_bias,
-                node_ids,
-                valid_start,
-                valid_end,
-                prefix_end
-            )
-            attn_weights = None
-        else:
-            # USE STANDARD ATTENTION WITH CUSTOM CACHED MASK FOR DECODE STEP
-            custom_bias = None
-            if layer_node_bias is not None and node_ids is not None:
-                # Expanding the node-level biases to token-level biases using advanced indexing
-                kv_len = key_states.shape[2]
-                node_ids_q = node_ids[:, -q_len:]
-                node_ids_kv = node_ids[:, -kv_len:]
-                B = batch_size
-                H = layer_node_bias.shape[1]
-                device = node_ids.device
-                batch_idx = torch.arange(B, device=device).view(B, 1, 1, 1)
-                head_idx = torch.arange(H, device=device).view(1, H, 1, 1)
-                q_idx = node_ids_q.view(B, 1, q_len, 1)
-                k_idx = node_ids_kv.view(B, 1, 1, kv_len)
-                token_bias = layer_node_bias[batch_idx, head_idx, q_idx, k_idx]
-                custom_bias = token_bias.to(dtype=query_states.dtype)
-                
-            if custom_bias is not None and attention_mask is not None:
-                attention_mask = attention_mask + custom_bias
-            # =====================================================================
+        attention_interface: Callable = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
+                logger.warning_once(
+                    "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
+                    'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+                )
+            else:
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
-            attention_interface: Callable = eager_attention_forward
-            if self.config._attn_implementation != "eager":
-                if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
-                    logger.warning_once(
-                        "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
-                        'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
-                    )
-                else:
-                    attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-
-            attn_output, attn_weights = attention_interface(
-                self,
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                dropout=0.0 if not self.training else self.attention_dropout,
-                scaling=self.scaling,
-                **kwargs,
-            )
+        attn_output, attn_weights = attention_interface(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            **kwargs,
+        )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -441,10 +544,6 @@ class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
         # CUSTOM ARGUMENT propagated here
         node_ids: Optional[torch.LongTensor] = None,
         input_graph_batch: Optional[TextGraph] = None,
-        layer_node_bias: Optional[torch.Tensor] = None,
-        valid_start: Optional[torch.Tensor] = None,
-        valid_end: Optional[torch.Tensor] = None,
-        prefix_end: Optional[torch.Tensor] = None,
 
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
@@ -466,10 +565,6 @@ class LlamaDecoderLayerWithBias(LlamaDecoderLayer):
             # CUSTOM ARGUMENTS
             node_ids=node_ids,
             input_graph_batch=input_graph_batch,
-            layer_node_bias=layer_node_bias,
-            valid_start=valid_start,
-            valid_end=valid_end,
-            prefix_end=prefix_end,
 
             **kwargs,
         )
@@ -500,121 +595,6 @@ class LlamaModelWithBias(LlamaModel):
         ])
         self.post_init()
 
-    def precompute_node_biases(self, input_graph_batch, dtype, device):
-        if input_graph_batch is None:
-            return None
-            
-        cache_key = 'cached_full_node_bias_list' # Changed to reflect it stores a list
-        if cache_key in input_graph_batch:
-            return input_graph_batch[cache_key]
-            
-        config = self.config.graph_attn_bias
-        using_graph_bias = getattr(config, 'spd', False) or getattr(config, 'laplacian', False) or getattr(config, 'rwse', False) or getattr(config, 'rrwp', False) or getattr(config, 'magnetic', False)
-        if not using_graph_bias:
-            return None
-            
-        num_nodes = input_graph_batch.get('num_nodes', None)
-        
-        # ====================================================================
-        # PREPARE SPECTRAL FEATURES AND DISTANCES NEEDED FOR BIAS CALCULATION
-        # ====================================================================
-        shortest_path_distances = input_graph_batch.get('shortest_path_dists', None) if getattr(config, 'spd', False) else None
-        if shortest_path_distances is not None:
-            non_zero_mask = (shortest_path_distances > 0)
-            spd_indices = torch.clamp(shortest_path_distances - 1, min=0, max=config.max_spd - 1)
-            
-        laplacian_coordinates = input_graph_batch.get('laplacian_coordinates', None) if getattr(config, 'laplacian', False) else None
-        if laplacian_coordinates is not None:
-            lap_dist = torch.cdist(laplacian_coordinates, laplacian_coordinates, p=2.0)
-            
-        rwse_emb = input_graph_batch.get('rwse', None) if getattr(config, 'rwse', False) else None
-        if rwse_emb is not None:
-            rwse_dist = torch.cdist(rwse_emb, rwse_emb, p=2.0)
-            
-        rrwp_emb = input_graph_batch.get('rrwp', None) if getattr(config, 'rrwp', False) else None
-        
-        magnetic = input_graph_batch.get('magnetic', None) if getattr(config, 'magnetic', False) else None
-        if magnetic is not None:
-            magnetic_V, magnetic_lambdas = magnetic[0], magnetic[1]
-            V_real = magnetic_V[..., 0]
-            V_imag = magnetic_V[..., 1]
-            valid_mask = torch.arange(magnetic_lambdas.shape[1], device=device).expand(num_nodes.shape[0], -1) < num_nodes.unsqueeze(1)
-        
-        # ====================================================================
-        # LAYER-SPECIFIC BIAS COMPUTATION
-        # ====================================================================
-        layer_biases = []
-        
-        for layer in self.layers:
-            attn = layer.self_attn
-            node_bias = 0
-            
-            if getattr(config, 'spd', False):
-                spd_bias = F.embedding(spd_indices, attn.spd_weights).permute(0, 3, 1, 2).to(dtype=dtype)
-                spd_bias = spd_bias * non_zero_mask.unsqueeze(1)
-                node_bias = node_bias + spd_bias
-                
-            if getattr(config, 'laplacian', False):
-                lap_bias = lap_dist.unsqueeze(1) * attn.laplacian_weights.view(-1, 1, 1).to(dtype)
-                node_bias = node_bias + lap_bias
-                
-            if getattr(config, 'rwse', False):
-                rwse_bias = rwse_dist.unsqueeze(1) * attn.rwse_weights.view(-1, 1, 1).to(dtype)
-                node_bias = node_bias + rwse_bias
-                
-            if getattr(config, 'rrwp', False):
-                rrwp_bias = attn.rrwp_proj(rrwp_emb).permute(0, 3, 1, 2).contiguous()
-                diag_mask = torch.eye(rrwp_bias.shape[-1], device=device, dtype=torch.bool)
-                rrwp_bias = rrwp_bias.masked_fill(diag_mask.unsqueeze(0).unsqueeze(0), 0.0)
-                node_bias = node_bias + rrwp_bias
-                
-            if getattr(config, 'magnetic', False):
-                h_i = attn.magnetic_lambda_lin(magnetic_lambdas.unsqueeze(-1))
-                h_i_masked = h_i * valid_mask.unsqueeze(-1)
-                h_avg = h_i_masked.sum(dim=1, keepdim=True) / num_nodes.view(-1, 1, 1).to(h_i.dtype)
-                h_avg_expanded = h_avg.expand(-1, magnetic_lambdas.shape[1], -1)
-                
-                deep_set_input = torch.cat([h_i, h_avg_expanded], dim=-1)
-                phi_lambdas = attn.magnetic_lambda_deep_set(deep_set_input)
-                
-                real_part = torch.einsum('bil, bjl, blk -> bijk', V_real, V_real, phi_lambdas) + torch.einsum('bil, bjl, blk -> bijk', V_imag, V_imag, phi_lambdas)
-                imag_part = torch.einsum('bil, bjl, blk -> bijk', V_imag, V_real, phi_lambdas) - torch.einsum('bil, bjl, blk -> bijk', V_real, V_imag, phi_lambdas)
-                
-                magnetic_edge_features = torch.cat([real_part, imag_part], dim=-1)
-                magnetic_bias = attn.magnetic_bias_proj(magnetic_edge_features)
-                magnetic_bias = magnetic_bias.permute(0, 3, 1, 2).contiguous()
-                
-                diag_mask = torch.eye(magnetic_bias.shape[-1], device=device, dtype=torch.bool)
-                magnetic_bias = magnetic_bias.masked_fill(diag_mask.unsqueeze(0).unsqueeze(0), 0.0)
-                node_bias = node_bias + magnetic_bias
-                
-            if type(node_bias) == int and node_bias == 0:
-                layer_biases.append(None)
-            else:
-                layer_biases.append(node_bias)
-                
-        # ====================================================================
-        # BUCKET NODE BIAS SHAPES TO PREVENT RECOMPILATION
-        # ====================================================================
-        valid_biases = [b for b in layer_biases if b is not None]
-        if valid_biases and hasattr(self, 'allowed_node_counts'):
-            N = valid_biases[0].shape[-1]
-            N_bucket = next((n for n in self.allowed_node_counts if n >= N), N)
-            # print(f"Max node count: {N}, bucketed to: {N_bucket}")
-            if N_bucket > N:
-                pad_len = N_bucket - N
-                for i in range(len(layer_biases)):
-                    if layer_biases[i] is not None:
-                        # F.pad pads the last two dims (Left, Right, Top, Bottom)
-                        layer_biases[i] = F.pad(layer_biases[i], (0, pad_len, 0, pad_len), value=0.0)
-                        
-        # If all layers generated no bias, return None to save memory
-        if all(b is None for b in layer_biases):
-            layer_biases = None
-            
-        input_graph_batch[cache_key] = layer_biases
-        return layer_biases
-    
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -628,12 +608,9 @@ class LlamaModelWithBias(LlamaModel):
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         
-        # Pass graph information as custom arguments to the model
+        # Pass graph information as a custom argument to the model
         node_ids: Optional[torch.LongTensor] = None,
         input_graph_batch: Optional[TextGraph] = None,
-        valid_start: Optional[torch.Tensor] = None,
-        valid_end: Optional[torch.Tensor] = None,
-        prefix_end: Optional[torch.Tensor] = None,
 
         **flash_attn_kwargs,
     ):
@@ -668,15 +645,9 @@ class LlamaModelWithBias(LlamaModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        # Compute the causal mask only if flex attention is not being used (i.e. during
-        # decoding when q_len=1) since during training the flex attention implementation
-        # will handle the masking internally based on the valid/prefix indices.
-        if (inputs_embeds.shape[1] > 1) and valid_start is not None and valid_end is not None and prefix_end is not None:
-            causal_mask = None
-        else:
-            causal_mask = self._update_causal_mask(
-                attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-            )
+        causal_mask = self._update_causal_mask(
+            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        )
 
         # APPLY BIDIRECTIONAL PREFIX MASK ON TOP OF CAUSAL MASK
         # HF creates a strict causal lower-triangle mask. We need to unmask the prefix-to-prefix region.
@@ -701,18 +672,13 @@ class LlamaModelWithBias(LlamaModel):
 
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        
-        full_node_bias = self.precompute_node_biases(input_graph_batch, inputs_embeds.dtype, inputs_embeds.device)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
 
         # LOOP THROUGH LAYERS
-        for i, decoder_layer in enumerate(self.layers):
-            
-            layer_node_bias = full_node_bias[i] if full_node_bias is not None else None
-            
+        for decoder_layer in self.layers:
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -730,10 +696,6 @@ class LlamaModelWithBias(LlamaModel):
 
                     node_ids,
                     input_graph_batch,
-                    layer_node_bias,
-                    valid_start,
-                    valid_end,
-                    prefix_end,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -749,10 +711,6 @@ class LlamaModelWithBias(LlamaModel):
                     # Graph data used for calculating the attention bias
                     node_ids=node_ids,
                     input_graph_batch=input_graph_batch,
-                    layer_node_bias=layer_node_bias,
-                    valid_start=valid_start,
-                    valid_end=valid_end,
-                    prefix_end=prefix_end,
 
                     **flash_attn_kwargs,
                 )
@@ -783,18 +741,14 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
         config: GraphLlamaConfig,
         bias_type: Optional[str] = None,
         max_spd: Optional[int] = None,
-        allowed_seq_lens: Optional[List[int]] = None,
-        allowed_node_counts: Optional[List[int]] = None,
     ):
         """
             Custom LlamaForCausalLM that integrates the LlamaModelWithBias to handle graph-based attention biases.
 
             Arguments:
-                config              --> GraphLlamaConfig object containing the model configuration (from Llama config) and additional parameters related to the attention bias computation
-                bias_type           --> Optional string to specify the type of bias to use. If provided, it will override the corresponding values in the config. Must be one of 'spd', 'laplacian', 'combined' (using those two), 'none', or simply don't specify it and leave as None to use the config values.
-                max_spd             --> Optional int to specify the maximum shortest path distance to consider for the SPD bias. If provided, it will override the max_spd value in the config. This is only relevant if bias_type is 'spd' or 'combined'.
-                allowed_seq_lens    --> Optional list of input lengths the inputs should be padded to for efficient flex attention kernel compilation.
-                allowed_node_counts --> Optional list of node counts the node bias matrices should be padded to for efficient flex attention kernel compilation.
+                config      --> GraphLlamaConfig object containing the model configuration (from Llama config) and additional parameters related to the attention bias computation
+                bias_type   --> Optional string to specify the type of bias to use. If provided, it will override the corresponding values in the config. Must be one of 'spd', 'laplacian', 'combined' (using those two), 'none', or simply don't specify it and leave as None to use the config values.
+                max_spd     --> Optional int to specify the maximum shortest path distance to consider for the SPD bias. If provided, it will override the max_spd value in the config. This is only relevant if bias_type is 'spd' or 'combined'.
         """
         # keep everything backward compatible with earlier versions by allowing the use of bias_type and max_spd arguments and saving the parameter values in the config
         if bias_type is not None:
@@ -828,14 +782,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             config.max_spd = max_spd
 
         super().__init__(config)
-        
-        # Instance-level allowed sequence lengths so they aren't stored in HF configs
-        self.allowed_seq_lens = allowed_seq_lens if allowed_seq_lens is not None else [1024, 2048, 4096, 8192, 16384, 32768]
-        self.allowed_seq_lens.sort()
-
-        self.allowed_node_counts = allowed_node_counts if allowed_node_counts is not None else [32, 64, 128, 256, 512]
-        self.allowed_node_counts.sort()
-        
         self._init_requirements(config)
 
         # Set the architectures attribute to GraphLlamaForCausalLM instead of LlamaForCauseLM
@@ -843,7 +789,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
 
         # Swap the internal model
         self.model = LlamaModelWithBias(config)
-        self.model.allowed_node_counts = self.allowed_node_counts
 
         self.pad_token_id = config.pad_token_id if config.pad_token_id is not None else config.eos_token_id
         
@@ -878,9 +823,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                 - attention_mask     --> Tensor of shape (batch_size, max_total_seq_length) (2D standard HF pad mask)
                 - prefix_lengths     --> List of length batch_size containing the prefix length for each graph (number of tokens in non-prompt nodes)
                 - prompt_lengths     --> List of length batch_size containing the prompt length for each graph (number of tokens in the prompt node)
-                - valid_start        --> Tensor of shape (batch_size,) indicating where valid tokens begin in the padded tensor
-                - valid_end          --> Tensor of shape (batch_size,) indicating where valid tokens end in the padded tensor
-                - prefix_end         --> Tensor of shape (batch_size,) indicating where the prefix portion ends
         """
         batch_size = len(input_ids)
         device = input_ids[0][0].device  # A
@@ -893,20 +835,14 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                 seq_len = node_input_ids.shape[0]
                 graph_position_ids[i].append(torch.arange(seq_len, device=device))
 
-        # Find the maximum total sequence length across all graphs in the batch and bucketing logic
-        raw_max_total_seq_len = max([sum([ids.shape[0] for ids in graph_input_ids]) for graph_input_ids in input_ids])
-        max_total_seq_len = next((length for length in self.allowed_seq_lens if length >= raw_max_total_seq_len), raw_max_total_seq_len)
-        # print(f"Max total sequence length: {raw_max_total_seq_len}, bucketed to: {max_total_seq_len}")
+        # Find the maximum total sequence length across all graphs in the batch
+        max_total_seq_len = max([sum([ids.shape[0] for ids in graph_input_ids]) for graph_input_ids in input_ids])
 
         token_ids_list = []
         position_ids_list = []
         node_ids_list = []
         prefix_lengths = []
         prompt_lengths = []
-        
-        valid_start_list = []
-        valid_end_list = []
-        prefix_end_list = []
         
         # attention_mask = torch.full((batch_size, 1, max_total_seq_len, max_total_seq_len), float('-inf'), device=device)
         attention_mask = torch.zeros((batch_size, max_total_seq_len), dtype=torch.long, device=device)
@@ -951,10 +887,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                 prepared_node_ids[i, :] = prompt_node[i].item()
                 prepared_node_ids[i, :seq_len] = node_ids_list[i]
                 attention_mask[i, :seq_len] = 1
-                
-                valid_start_list.append(0)
-                valid_end_list.append(seq_len)
-                prefix_end_list.append(prefix_lengths[i])
             else: # left padding for batched inference/generation
                 pad_len = max_total_seq_len - seq_len
                 prepared_token_ids[i, pad_len:] = token_ids_list[i]
@@ -962,14 +894,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
                 prepared_node_ids[i, :] = prompt_node[i].item()
                 prepared_node_ids[i, pad_len:] = node_ids_list[i]
                 attention_mask[i, pad_len:] = 1
-                
-                valid_start_list.append(pad_len)
-                valid_end_list.append(max_total_seq_len)
-                prefix_end_list.append(pad_len + prefix_lengths[i])
-
-        valid_start = torch.tensor(valid_start_list, dtype=torch.long, device=device)
-        valid_end = torch.tensor(valid_end_list, dtype=torch.long, device=device)
-        prefix_end = torch.tensor(prefix_end_list, dtype=torch.long, device=device)
 
         return {
             'input_ids': prepared_token_ids,
@@ -978,9 +902,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             'attention_mask': attention_mask,
             'prefix_lengths': prefix_lengths,
             'prompt_lengths': prompt_lengths,
-            'valid_start': valid_start,
-            'valid_end': valid_end,
-            'prefix_end': prefix_end,
         }
 
     @torch.no_grad()
@@ -994,12 +915,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             kwargs['attention_mask'] = prepared_inputs['attention_mask']
             kwargs['position_ids'] = prepared_inputs['position_ids']
             kwargs['node_ids'] = prepared_inputs['node_ids']
-            
-            # Carry over the flex attention constraints for the prefill step
-            kwargs['valid_start'] = prepared_inputs['valid_start']
-            kwargs['valid_end'] = prepared_inputs['valid_end']
-            kwargs['prefix_end'] = prepared_inputs['prefix_end']
-            
             kwargs['input_graph_batch'] = input_graph_batch
         return super().generate(**kwargs)
 
@@ -1063,9 +978,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
 
         # kwargs needed for generation
         node_ids: Optional[torch.LongTensor] = None,
-        valid_start: Optional[torch.Tensor] = None,
-        valid_end: Optional[torch.Tensor] = None,
-        prefix_end: Optional[torch.Tensor] = None,
 
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
@@ -1093,10 +1005,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             attention_mask = prepared_inputs['attention_mask']
             prefix_lengths = prepared_inputs['prefix_lengths']
             prompt_lengths = prepared_inputs['prompt_lengths']
-            
-            valid_start = prepared_inputs['valid_start']
-            valid_end = prepared_inputs['valid_end']
-            prefix_end = prepared_inputs['prefix_end']
         else: # Autoregressive generation step > 0 (inputs already prepared via prepare_inputs_for_generation)
             prepared_input_ids = input_ids
             prepared_position_ids = position_ids
@@ -1119,9 +1027,6 @@ class GraphLlamaForCausalLM(LlamaForCausalLM):
             # CUSTOM ARGUMENTS
             node_ids=node_ids,                               # node ids indicating which node each token belongs to (used for calculating attention bias)
             input_graph_batch=input_graph_batch,             # pass the whole graph batch in case it's needed for more complex bias calculations
-            valid_start=valid_start,
-            valid_end=valid_end,
-            prefix_end=prefix_end,
 
             **kwargs,
         )
@@ -1229,20 +1134,18 @@ if __name__ == "__main__":
     collator = GraphCollator(tokenizer=tokenizer)
     input_graph_batch = collator([ graph_dataset_sample[i] for i in range(len(graph_dataset_sample)) ])
 
+    # model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", bias_type="combined")
+    # config = GraphLlamaConfig.from_pretrained("meta-llama/Llama-3.2-1B", spd=True, laplacian=True, max_spd=8, rwse=True)
     config = GraphLlamaConfig.from_pretrained("./src/models/graph_llama1b_config.json")
     print(config.graph_attn_bias)
-    
-    # Example initialization showing how the newly added lists work
-    model = GraphLlamaForCausalLM(
-        config=config,
-        allowed_seq_lens=[1024, 2048, 4096, 8192],       # Your desired sequence buckets
-        allowed_node_counts=[16, 32, 64, 128, 256]       # Your new node buckets
-    ).to("cuda")
+    # model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", config=config)
+    model = GraphLlamaForCausalLM(config=config).to("cuda")
     
     print('=' * 70)
     outputs = model(input_graph_batch=input_graph_batch, labels=example_labels)
     print("Loss:", outputs.loss)
     print("Logits shape:", outputs.logits.shape)
+
 
     # run the model to generate 5 tokens autoregressively
     generated_ids = model.generate(input_graph_batch=input_graph_batch, max_new_tokens=5)

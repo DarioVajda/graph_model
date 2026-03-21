@@ -15,6 +15,7 @@ from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 #     dynamic=False, 
 #     mode="max-autotune-no-cudagraphs"
 # )
+# compiled_flex_attention = torch.compile(flex_attention)
 compiled_flex_attention = flex_attention # because compilation is being done at a higher level
 
 # ==============================================================================
@@ -96,7 +97,8 @@ def graph_flex_attention(
         key, 
         value, 
         score_mod=graph_bias_mod, 
-        block_mask=block_mask
+        block_mask=block_mask,
+        enable_gqa=True
     )
     
     return attn_output
