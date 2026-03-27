@@ -1,5 +1,5 @@
 from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
+from ...models.llama_attn_bias_slow import GraphLlamaForCausalLM, GraphLlamaConfig
 
 from .load_data import load_dataset
 
@@ -21,8 +21,8 @@ def init_model(model_name, device, bias_params):
         model_name, 
         config=config, 
         attn_implementation="sdpa",
-        allowed_seq_lens=[1024, 2048, 4096],
-        allowed_node_counts=[32, 64, 128],
+        # allowed_seq_lens=[1024, 2048, 4096, 8192],
+        # allowed_node_counts=[64, 128],
     )
     model.to(device)
     for param in model.parameters():
@@ -156,12 +156,19 @@ def training_run(
     accumulation_steps=4, 
     pad_token_id=None,
     active_params=None,
+    eval_every=40,
+    gradient_checkpointing=True,
 ):
     # if label_options is None or pad_token_id is None:
     #     raise ValueError("Label options and pad token ID must be provided for the training run.")
+    if gradient_checkpointing:
+        print("Gradient checkpointing is ENABLED. This will save memory but may increase training time.")
+    else:
+        print("Gradient checkpointing is DISABLED. This may lead to out-of-memory errors if the model or batch size is too large.")
 
     STEPS_PER_EPOCH = len(train_dataset) // batch_size // accumulation_steps
-    EVAL_EVERY = 20
+    TOTAL_STEPS = STEPS_PER_EPOCH * num_epochs
+    EVAL_EVERY = eval_every
 
     training_args = TrainingArguments(
         # Basic training arguments:
@@ -171,8 +178,8 @@ def training_run(
         per_device_train_batch_size=batch_size,                 # Batch size per device during training
         gradient_accumulation_steps=accumulation_steps,         # Number of steps to accumulate gradients before performing an optimizer step
         # torch_compile=True,                                     # Use PyTorch 2.0's torch.compile for potential speedup (requires PyTorch 2.0+)
-        gradient_checkpointing=True,                            # Enable gradient checkpointing to save memory (trades compute for memory)
-        gradient_checkpointing_kwargs={"use_reentrant": False}, # Use non-reentrant checkpointing to be compatible with PyTorch 2.0's torch.compile and avoid issues with certain operations (like in our custom attention)
+        gradient_checkpointing=gradient_checkpointing,          # Enable gradient checkpointing to save memory (trades compute for memory)
+        gradient_checkpointing_kwargs={"use_reentrant": False} if gradient_checkpointing else None,
 
         # Evaluation arguments:
         eval_strategy="steps",                                  # Evaluate every eval_steps during training
@@ -192,7 +199,7 @@ def training_run(
         learning_rate=learning_rate,                            # The initial learning rate for Adam
         lr_scheduler_type="cosine_with_min_lr",                 # Type of learning rate scheduler to use
         lr_scheduler_kwargs={"min_lr": learning_rate/10},       # Additional arguments for the learning rate scheduler
-        warmup_steps=STEPS_PER_EPOCH*2,                           # Number of steps for the warmup phase (when the learning rate is increasing linearly)
+        warmup_steps=TOTAL_STEPS // 10,                         # Number of steps for the warmup phase (when the learning rate is increasing linearly)
         weight_decay=0.1,                                       # Weight decay to apply (if not zero)
     )
 
@@ -218,6 +225,8 @@ def training_run(
     )
 
     trainer.train()
+    # resume training from a checkpoint
+    # trainer.train(resume_from_checkpoint="/shared/workspace/povejmo/graph_model/checkpoints/cora_hops2_neighbors30_random_abstracts_p0.2_lora/checkpoint-240")
 
 def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
     """
@@ -268,31 +277,63 @@ def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_pa
     
     return run_name
 
+
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Fine-tune GraphLLaMA on a specified dataset with configurable parameters.")
+
+    # general parameters
+    parser.add_argument("--dataset_name", type=str, default="cora_hops2_neighbors60_target_abstract", help="Directory containing the processed dataset.")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B", help="Pre-trained model name or path.")
+    parser.add_argument("--num_epochs", type=int, default=10, help="Number of training epochs.")
+    parser.add_argument("--batch_size", type=int, default=4, help="Training batch size.")
+    parser.add_argument("--accumulation_steps", type=int, default=8, help="Number of steps to accumulate gradients before performing an optimizer step.")
+    parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
+    parser.add_argument("--bias_learning_rate", type=float, default=4e-2, help="Learning rate for the bias parameters.")
+    parser.add_argument("--eval_every", type=int, default=40, help="Number of steps between evaluations.")
+    parser.add_argument("--no_gradient_checkpointing", action="store_true", help="Disable gradient checkpointing (useful for debugging or if memory is not a concern).")
+
+    # which parameters to activate and train
+    parser.add_argument("--active_params", nargs="+", default=["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"], help="List of parameter name substrings to activate for training. Use 'all' to activate all parameters.")
+    parser.add_argument("--lora_r", type=int, default=32, help="Rank for LoRA adapters. If not using LoRA, set to 0.")
+
+    # bias related parameters
+    parser.add_argument("--no_spd", action="store_true", help="Whether to use the shortest path distance bias in the model.")
+    parser.add_argument("--no_laplacian", action="store_true", help="Whether to use the Laplacian eigenvector bias in the model.")
+    parser.add_argument("--no_rwse", action="store_true", help="Whether to use the random walk structural encoding bias in the model.")
+    parser.add_argument("--no_rrwp", action="store_true", help="Whether to use the random walk with restart probability bias in the model.")
+    parser.add_argument("--no_magnetic", action="store_true", help="Whether to use the magnetic bias in the model.")
+
+    args = parser.parse_args()
+    return args
+
 if __name__ == "__main__":
+    # parse command line arguments
+    args = parse_args()
+
     # --------------------------------------------------------------------------
     #region ----------------------- CONFIGURATION ------------------------------
     # --------------------------------------------------------------------------
-    dataset_dir = "./src/experiments/benchmarks/processed_data/cora_hops2_neighbors30"
+    dataset_dir = f"./src/experiments/benchmarks/processed_data/{args.dataset_name}"
     dataset_name = dataset_dir.split("/")[-1]
     BIAS_PARAMS = { 
-        "spd": True, 
+        "spd": not args.no_spd, 
         "max_spd": 8, 
-        "laplacian": False, 
-        "rwse": False, 
-        "rrwp": True, 
+        "laplacian": not args.no_laplacian, 
+        "rwse": not args.no_rwse, 
+        "rrwp": not args.no_rrwp, 
         "max_rw_steps": 16,
-        "magnetic": True,
+        "magnetic": not args.no_magnetic,
         "magnetic_dim": 32,
         "magnetic_q": 0.25
     }
-    # MODEL_NAME = "meta-llama/Llama-3.1-8B"
-    MODEL_NAME = "meta-llama/Llama-3.2-1B"
-    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
-    LR = 3e-5
-    BIAS_LR=5e-3
-    NUM_EPOCHS = 20
+    MODEL_NAME = args.model_name
+    ACTIVE_PARAMS = args.active_params
+    LR = args.learning_rate
+    BIAS_LR=args.bias_learning_rate
+    NUM_EPOCHS = args.num_epochs
 
-    LORA_R = 8
+    LORA_R = args.lora_r
     LORA_CONFIG = {
         "r": LORA_R,
         "lora_alpha": LORA_R*2,
@@ -300,10 +341,11 @@ if __name__ == "__main__":
         "lora_dropout": 0.00,
         "bias": "none",
     }
-    # LORA_CONFIG = None
+    if LORA_R == 0: # if rank is set to 0, don't use LoRA at all
+        LORA_CONFIG = None
 
     # Create a unique run name and save the run metadata
-    RUN_NAME = f"{dataset_name}_{'_lora' if LORA_CONFIG else ''}"
+    RUN_NAME = f"{dataset_name}{'_lora' if LORA_CONFIG else ''}"
     RUN_NAME = save_run_metadata(
         run_name=RUN_NAME,
         bias_params=BIAS_PARAMS,
@@ -315,6 +357,7 @@ if __name__ == "__main__":
         num_epochs=NUM_EPOCHS,
         lora_config=LORA_CONFIG,
     )
+    EVAL_EVERY = args.eval_every
     #endregion
     # --------------------------------------------------------------------------
 
@@ -353,11 +396,13 @@ if __name__ == "__main__":
         collator=collator,
         run_name=RUN_NAME,
         num_epochs=NUM_EPOCHS,
-        batch_size=4,
+        batch_size=args.batch_size,
         learning_rate=LR,
         bias_learning_rate=BIAS_LR,
-        accumulation_steps=8,
+        accumulation_steps=args.accumulation_steps,
         active_params=ACTIVE_PARAMS,
+        eval_every=EVAL_EVERY,
+        gradient_checkpointing=not args.no_gradient_checkpointing,
     )
 
     #endregion

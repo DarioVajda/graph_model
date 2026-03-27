@@ -36,7 +36,7 @@ if __name__ == '__main__':
         total_len = 0
         node_count = 0
         num_samples = min(1000, len(ds))  # Limit to first 1000 samples for efficiency
-        for i in tqdm(range(num_samples)):
+        for i in range(num_samples):
             tl, nc = calc_total_len(ds[i])
             total_len += tl
             node_count += nc
@@ -44,16 +44,34 @@ if __name__ == '__main__':
 
 
     paths = [
+        # './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors30',
+        './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_target_abstract',
+        './src/experiments/benchmarks/processed_data/cora_hops2_neighbors60_target_abstract',
+        './src/experiments/benchmarks/processed_data/cora_hops2_neighbors111_target_abstract',
+        # './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors30',
+        # './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors15_neighbor_abstracts',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.5',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.3',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.2',
         './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors30',
-        './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30',
-        './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors30',
-        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15',
+        './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors60_target_abstract',
     ]
+    results = {}
     for path in paths:
         datasets = load_dataset(path, train=True, val=False, test=False)
-        print(datasets['train'])
+        # print(datasets['train'])
 
         avg_per_graph_len, avg_per_node_len = calc_avg_total_len(datasets['train'])
-        print(f"Dataset: {os.path.basename(path)}, Average Total Length: {avg_per_graph_len}, Average Length per Node: {avg_per_node_len}")
+        print(f"Dataset: {os.path.basename(path)}\nAverage Total Length: {avg_per_graph_len}\nAverage Length per Node: {avg_per_node_len}")
         print('='*80)
-        print('='*80)
+        results[os.path.basename(path)] = (avg_per_graph_len, avg_per_node_len)
+        # print('='*80)
+
+    print()
+    print('-'*41+"Summary of Results"+'-'*41)
+    print('-'*100)
+    print("|                      Dataset                       |   Avg Total Length   |  Avg Length per Node |")
+    for dataset_name, (avg_graph_len, avg_node_len) in results.items():
+        print(f"| {dataset_name:<50} | {avg_graph_len:<20.2f} | {avg_node_len:<20.2f} |")
+    print('-'*100)

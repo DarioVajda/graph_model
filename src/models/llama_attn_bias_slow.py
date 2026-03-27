@@ -328,7 +328,7 @@ class LlamaAttentionWithBias(LlamaAttention):
         cache_key = f'cached_node_bias_{self.layer_idx}'
         
         # Bypass O(N^2) node calculations during generation if already cached
-        if input_graph_batch is not None and cache_key in input_graph_batch:
+        if not self.training and input_graph_batch is not None and cache_key in input_graph_batch:
             node_bias = input_graph_batch[cache_key]
         else:
             node_bias = 0
