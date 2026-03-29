@@ -139,7 +139,7 @@ def construct_subgraphs(data, hops=2, max_nodes=25, samples=4, mapping=None, ins
         G.add_edges_from(edge_index.t().tolist())
         distances = nx.single_source_shortest_path_length(G, node)
 
-        for _ in range(samples):
+        for _ in range((samples if split == "train" else 1)):
             graph = get_neighborhood(data, node, subset, edge_index, distances=distances, max_nodes=max_nodes, mapping=mapping, instruction=instruction)
             graphs[split].append(graph)
 
@@ -150,7 +150,7 @@ def construct_subgraphs(data, hops=2, max_nodes=25, samples=4, mapping=None, ins
             first, last = split_counts[split], split_counts[split] + len(graphs[split])
             subset_save_path = save_path + f"/{split}/{first}-{last}"
             os.makedirs(os.path.dirname(subset_save_path), exist_ok=True)
-            save_text_graph_dataset(graphs[split], subset_save_path, params=params, per_graph_versions=per_graph_versions)
+            save_text_graph_dataset(graphs[split], subset_save_path, params=params, per_graph_versions=(per_graph_versions if split == "train" else 1))
             split_counts[split] += len(graphs[split])
             graphs[split] = []
         
@@ -160,7 +160,7 @@ def construct_subgraphs(data, hops=2, max_nodes=25, samples=4, mapping=None, ins
             first, last = split_counts[split], split_counts[split] + len(graphs[split])
             subset_save_path = save_path + f"/{split}/{first}-{last}"
             os.makedirs(os.path.dirname(subset_save_path), exist_ok=True)
-            save_text_graph_dataset(graphs[split], subset_save_path, params=params, per_graph_versions=per_graph_versions)
+            save_text_graph_dataset(graphs[split], subset_save_path, params=params, per_graph_versions=(per_graph_versions if split == "train" else 1))
             split_counts[split] += len(graphs[split])
             graphs[split] = []
 
@@ -191,6 +191,12 @@ class GetRandomAbstracts:
             return get_titles(data, idx, target_dist)
 def get_reddit_text(data, idx, target_dist):
     return f"{data.raw_texts[idx]}"
+class GetTruncatedRedditText:
+    def __init__(self, max_length):
+        self.max_length = max_length
+    def __call__(self, data, idx, target_dist):
+        full_text = get_reddit_text(data, idx, target_dist)
+        return full_text[:self.max_length] + ("..." if len(full_text) > self.max_length else "")
 
 def get_mapping_name(mapping):
     if mapping == get_titles:
@@ -205,6 +211,8 @@ def get_mapping_name(mapping):
         return f"random_abstracts_p{mapping.p}"
     elif mapping == get_reddit_text:
         return "full_text"
+    elif mapping.__class__ == GetTruncatedRedditText:
+        return f"truncated_text_{mapping.max_length}"
     else:
         raise ValueError("Unknown mapping function")
 #endregion
@@ -244,8 +252,8 @@ if __name__ == "__main__":
         # ('cora', get_titles_and_neighbor_abstracts, 15),
         # ('cora', GetRandomAbstracts(p=0.2), 30),
         # ('ogbn-arxiv', get_titles_and_target_abstract, 60), 
-        ('pubmed', get_titles_and_target_abstract, 60), 
-        # ('reddit', get_reddit_text, 15),
+        # ('pubmed', get_titles_and_target_abstract, 60), 
+        ('reddit', GetTruncatedRedditText(max_length=128), 45),
     ]
     instructions = {
         'cora':         'Q: Given this paper citation graph, classify this paper into 7 classes: Case_Based, Genetic_Algorithms, Neural_Networks, Probabilistic_Methods, Reinforcement_Learning, Rule_Learning, Theory. Please tell me which class does this paper belong to?\nA: ',
@@ -253,7 +261,7 @@ if __name__ == "__main__":
         'pubmed':       'Q: Given this paper citation graph, classify this paper into 3 classes: Diabetes Mellitus Experimental, Diabetes Mellitus Type1, Diabetes Mellitus Type2. Please tell me which class does this paper belong to?\nA: ',
         'reddit':       'Q: Given this user reddit user post interaction graph, classify this reddit user into 2 classes: Normal Users and Popular Users. Please tell me which class does this reddit user belong to?\nA: ',
     }
-    NUM_SAMPLES = 2
+    NUM_SAMPLES = 8
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")

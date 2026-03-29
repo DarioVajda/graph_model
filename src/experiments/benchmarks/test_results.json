@@ -1,0 +1,21 @@
+{
+    "pubmed_hops2_neighbors30_checkpoint-960_v2": {
+        "eval_loss": 0.026378832757472992,
+        "eval_model_preparation_time": 0.0082,
+        "eval_em_accuracy": 0.9452332657200812,
+        "eval_em_f1": 0.9479134710881608,
+        "eval_runtime": 370.4437,
+        "eval_samples_per_second": 10.647,
+        "eval_steps_per_second": 1.331
+    },
+    "pubmed_hops2_neighbors30_checkpoint-960": {
+        "eval_loss": 0.026378832757472992,
+        "eval_model_preparation_time": 0.0087,
+        "eval_em_accuracy": 0.9452332657200812,
+        "eval_em_f1": 0.48047187375396083,
+        "eval_em_weighted_f1": 0.9616504395963741,
+        "eval_runtime": 458.9899,
+        "eval_samples_per_second": 8.593,
+        "eval_steps_per_second": 1.074
+    }
+}

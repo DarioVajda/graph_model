@@ -44,7 +44,7 @@ if __name__ == '__main__':
 
 
     paths = [
-        # './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors30',
+        # CORA
         './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_target_abstract',
         './src/experiments/benchmarks/processed_data/cora_hops2_neighbors60_target_abstract',
         './src/experiments/benchmarks/processed_data/cora_hops2_neighbors111_target_abstract',
@@ -54,8 +54,16 @@ if __name__ == '__main__':
         # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.5',
         # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.3',
         # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.2',
+
+        # PUBMED
         './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors30',
         './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors60_target_abstract',
+
+        # REDDIT
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_full_text',
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_truncated_text_128',
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors30_truncated_text_128',
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors45_truncated_text_128',
     ]
     results = {}
     for path in paths:
@@ -65,13 +73,13 @@ if __name__ == '__main__':
         avg_per_graph_len, avg_per_node_len = calc_avg_total_len(datasets['train'])
         print(f"Dataset: {os.path.basename(path)}\nAverage Total Length: {avg_per_graph_len}\nAverage Length per Node: {avg_per_node_len}")
         print('='*80)
-        results[os.path.basename(path)] = (avg_per_graph_len, avg_per_node_len)
+        results[os.path.basename(path)] = (len(datasets['train']), datasets['train'].per_graph_versions, avg_per_graph_len, avg_per_node_len)
         # print('='*80)
 
     print()
-    print('-'*41+"Summary of Results"+'-'*41)
-    print('-'*100)
-    print("|                      Dataset                       |   Avg Total Length   |  Avg Length per Node |")
-    for dataset_name, (avg_graph_len, avg_node_len) in results.items():
-        print(f"| {dataset_name:<50} | {avg_graph_len:<20.2f} | {avg_node_len:<20.2f} |")
-    print('-'*100)
+    print('-'*60+"Summary of Results"+'-'*60)
+    print('-'*140)
+    print("|                      Dataset                       |   Dataset Size   |  Graph Versions  |   Avg Total Length   |  Avg Length per Node |")
+    for dataset_name, (ds_size, per_graph_versions, avg_graph_len, avg_node_len) in results.items():
+        print(f"| {dataset_name:<50} | {ds_size:<16} | {per_graph_versions:<18} | {avg_graph_len:<20.2f} | {avg_node_len:<20.2f} |")
+    print('-'*140)

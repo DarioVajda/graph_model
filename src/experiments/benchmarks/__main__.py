@@ -2,6 +2,7 @@ from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCol
 from ...models.llama_attn_bias_slow import GraphLlamaForCausalLM, GraphLlamaConfig
 
 from .load_data import load_dataset
+from .train_utils import get_device, compute_exact_match
 
 import torch
 import os, json
@@ -10,9 +11,6 @@ import random
 from transformers import TrainingArguments, AutoTokenizer, TrainerCallback
 from peft import LoraConfig, get_peft_model
 import numpy as np
-
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #region -------- Code for model intialization and parameter selection --------
 def init_model(model_name, device, bias_params):
@@ -101,48 +99,6 @@ def print_trainable_parameters(model):
     print("="*50 + "\n")
 #endregion
 
-#region -------- Code for custom evaluation --------
-class PreprocessLogitsEM:
-    def __call__(self, logits, labels):
-        # 1. Unpack logits if the model returns a tuple (common in HF models)
-        if isinstance(logits, tuple):
-            logits = logits[0]
-            
-        # 2. Get the predicted token IDs via argmax
-        preds = torch.argmax(logits, dim=-1)
-        
-        # 3. Shift predictions to align with labels
-        # The logit at sequence index 't' predicts the label at 't+1'
-        shifted_preds = torch.full_like(preds, fill_value=-100)
-        shifted_preds[:, 1:] = preds[:, :-1]
-        
-        return shifted_preds
-
-def compute_exact_match(eval_preds):
-    preds, labels = eval_preds
-    
-    exact_matches = 0
-    total = len(labels)
-    
-    for i in range(total):
-        # Find the valid label tokens (ignoring -100 padding)
-        valid_indices = labels[i] != -100
-        
-        if not np.any(valid_indices):
-            continue
-            
-        example_preds = preds[i][valid_indices]
-        example_labels = labels[i][valid_indices]
-        
-        # Exact Match: ALL predicted tokens must match the ground truth
-        if np.array_equal(example_preds, example_labels):
-            exact_matches += 1
-            
-    return {
-        "em_accuracy": float(exact_matches) / total if total > 0 else 0.0,
-    }
-#endregion
-
 def training_run(
     model, 
     train_dataset, 
@@ -203,8 +159,6 @@ def training_run(
         weight_decay=0.1,                                       # Weight decay to apply (if not zero)
     )
 
-    preprocess_logits = PreprocessLogitsEM()
-
     # initialize using the custom class
     trainer = GraphTrainer(
         model=model,
@@ -215,7 +169,6 @@ def training_run(
 
         # Evaluation parameters
         compute_metrics=compute_exact_match,
-        # preprocess_logits_for_metrics=preprocess_logits,
 
         # set the active parameters for bias saving in the trainer callback
         active_params=active_params,

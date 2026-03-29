@@ -1,4 +1,291 @@
 {
+    "reddit_hops2_neighbors45_truncated_text_128_lora": {
+        "date_time": "2026-03-28 14:02:08",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors45_truncated_text_128",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors111_target_abstract_lora_v3": {
+        "date_time": "2026-03-28 13:56:07",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors111_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors30_target_abstract_lora": {
+        "date_time": "2026-03-28 13:56:01",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors30_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors_30_target_abstract_lora": {
+        "date_time": "2026-03-28 13:53:55",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors_30_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors_111_target_abstract_lora": {
+        "date_time": "2026-03-28 13:53:18",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors_111_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "reddit_hops2_neighbors30_truncated_text_128_lora": {
+        "date_time": "2026-03-28 13:46:07",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors30_truncated_text_128",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "pubmed_hops2_neighbors30_lora_v6": {
+        "date_time": "2026-03-27 17:25:40",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "pubmed_hops2_neighbors30",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 4,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
     "pubmed_hops2_neighbors30_lora_v5": {
         "date_time": "2026-03-26 19:47:29",
         "bias_params": {
