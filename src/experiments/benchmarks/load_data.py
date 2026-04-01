@@ -61,9 +61,16 @@ if __name__ == '__main__':
 
         # REDDIT
         './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_full_text',
-        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_truncated_text_128',
+        # './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_truncated_text_128',
         './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors30_truncated_text_128',
-        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors45_truncated_text_128',
+        # './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors45_truncated_text_128',
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors60_truncated_text_64',
+
+        # OGBN-ARXIV
+        './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors30',
+        './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors60_target_abstract',
+        './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors20_random_abstracts_p0.2'
+
     ]
     results = {}
     for path in paths:
@@ -77,9 +84,9 @@ if __name__ == '__main__':
         # print('='*80)
 
     print()
-    print('-'*60+"Summary of Results"+'-'*60)
+    print('-'*61+"Summary of Results"+'-'*61)
     print('-'*140)
-    print("|                      Dataset                       |   Dataset Size   |  Graph Versions  |   Avg Total Length   |  Avg Length per Node |")
+    print("|                      Dataset                       | Dataset Size     | Graph Versions     | Avg Total Length     | Avg Length per Node  |")
     for dataset_name, (ds_size, per_graph_versions, avg_graph_len, avg_node_len) in results.items():
         print(f"| {dataset_name:<50} | {ds_size:<16} | {per_graph_versions:<18} | {avg_graph_len:<20.2f} | {avg_node_len:<20.2f} |")
     print('-'*140)

@@ -1,4 +1,455 @@
 {
+    "cora_hops2_neighbors60_target_abstract_lora_v5": {
+        "date_time": "2026-04-01 10:06:52",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v4": {
+        "date_time": "2026-03-31 18:33:08",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "ogbn-arxiv_hops2_neighbors20_random_abstracts_p0.2_lora": {
+        "date_time": "2026-03-30 20:06:42",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "ogbn-arxiv_hops2_neighbors20_random_abstracts_p0.2",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 3,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "reddit_hops2_neighbors30_truncated_text_128_lora_v4": {
+        "date_time": "2026-03-30 19:00:44",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors30_truncated_text_128",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.02,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "ogbn-arxiv_hops2_neighbors60_target_abstract_lora": {
+        "date_time": "2026-03-30 14:54:47",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "ogbn-arxiv_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 1,
+        "learning_rate": 0.0002,
+        "bias_learning_rate": 0.04,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "reddit_hops2_neighbors60_truncated_text_64_lora": {
+        "date_time": "2026-03-30 13:11:56",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors60_truncated_text_64",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 6e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "reddit_hops2_neighbors30_truncated_text_128_lora_v3": {
+        "date_time": "2026-03-30 11:30:23",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors30_truncated_text_128",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 2e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 8,
+            "lora_alpha": 16,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "reddit_hops2_neighbors30_truncated_text_128_lora_v2": {
+        "date_time": "2026-03-29 14:29:05",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors30_truncated_text_128",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 6e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v3": {
+        "date_time": "2026-03-29 14:27:03",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v2": {
+        "date_time": "2026-03-29 14:09:20",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora": {
+        "date_time": "2026-03-29 14:07:44",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
     "reddit_hops2_neighbors45_truncated_text_128_lora": {
         "date_time": "2026-03-28 14:02:08",
         "bias_params": {

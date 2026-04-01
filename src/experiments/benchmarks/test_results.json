@@ -1,5 +1,77 @@
 {
-    "pubmed_hops2_neighbors30_checkpoint-960_v2": {
+    "cora_hops2_neighbors60_target_abstract_checkpoint-400_v3": {
+        "eval_loss": 0.17752188444137573,
+        "eval_model_preparation_time": 0.0118,
+        "eval_em_accuracy": 0.8911439114391144,
+        "eval_em_f1": 0.9144138020554434,
+        "eval_runtime": 78.116,
+        "eval_samples_per_second": 6.938,
+        "eval_steps_per_second": 6.938
+    },
+    "cora_hops2_neighbors60_target_abstract_checkpoint-400_v2": {
+        "eval_loss": 0.1755858212709427,
+        "eval_model_preparation_time": 0.0114,
+        "eval_em_accuracy": 0.8892988929889298,
+        "eval_em_f1": 0.9116213872753239,
+        "eval_runtime": 78.0214,
+        "eval_samples_per_second": 6.947,
+        "eval_steps_per_second": 6.947
+    },
+    "cora_hops2_neighbors60_target_abstract_checkpoint-400": {
+        "eval_loss": 0.1765507459640503,
+        "eval_model_preparation_time": 0.0141,
+        "eval_em_accuracy": 0.8856088560885609,
+        "eval_em_f1": 0.9115128245124738,
+        "eval_runtime": 78.2891,
+        "eval_samples_per_second": 6.923,
+        "eval_steps_per_second": 6.923
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_checkpoint-500": {
+        "eval_loss": 0.17804162204265594,
+        "eval_model_preparation_time": 0.0122,
+        "eval_em_accuracy": 0.8819188191881919,
+        "eval_em_f1": 0.9079478525297259,
+        "eval_runtime": 78.5013,
+        "eval_samples_per_second": 6.904,
+        "eval_steps_per_second": 6.904
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_checkpoint-400": {
+        "eval_loss": 0.17956458032131195,
+        "eval_model_preparation_time": 0.0128,
+        "eval_em_accuracy": 0.8856088560885609,
+        "eval_em_f1": 0.9115128245124738,
+        "eval_runtime": 78.7042,
+        "eval_samples_per_second": 6.887,
+        "eval_steps_per_second": 6.887
+    },
+    "cora_hops2_neighbors60_target_abstract_checkpoint-480": {
+        "eval_loss": 0.11057662963867188,
+        "eval_model_preparation_time": 0.0131,
+        "eval_em_accuracy": 0.8911439114391144,
+        "eval_em_f1": 0.9127165349079226,
+        "eval_runtime": 46.7876,
+        "eval_samples_per_second": 11.584,
+        "eval_steps_per_second": 1.453
+    },
+    "reddit_hops2_neighbors30_truncated_text_128_checkpoint-520_v2": {
+        "eval_loss": 0.19899483025074005,
+        "eval_model_preparation_time": 0.0082,
+        "eval_em_accuracy": 0.680914549998135,
+        "eval_em_f1": 0.6799524434731896,
+        "eval_runtime": 1899.8845,
+        "eval_samples_per_second": 14.112,
+        "eval_steps_per_second": 1.764
+    },
+    "reddit_hops2_neighbors30_truncated_text_128_checkpoint-520": {
+        "eval_loss": 0.20718221366405487,
+        "eval_model_preparation_time": 0.0082,
+        "eval_em_accuracy": 0.6791242400507255,
+        "eval_em_f1": 0.6791049264301874,
+        "eval_runtime": 1907.1044,
+        "eval_samples_per_second": 14.058,
+        "eval_steps_per_second": 1.758
+    },
+    "pubmed_hops2_neighbors30_checkpoint-960": {
         "eval_loss": 0.026378832757472992,
         "eval_model_preparation_time": 0.0082,
         "eval_em_accuracy": 0.9452332657200812,
@@ -7,15 +79,5 @@
         "eval_runtime": 370.4437,
         "eval_samples_per_second": 10.647,
         "eval_steps_per_second": 1.331
-    },
-    "pubmed_hops2_neighbors30_checkpoint-960": {
-        "eval_loss": 0.026378832757472992,
-        "eval_model_preparation_time": 0.0087,
-        "eval_em_accuracy": 0.9452332657200812,
-        "eval_em_f1": 0.48047187375396083,
-        "eval_em_weighted_f1": 0.9616504395963741,
-        "eval_runtime": 458.9899,
-        "eval_samples_per_second": 8.593,
-        "eval_steps_per_second": 1.074
     }
 }

@@ -13,7 +13,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate a fine-tuned GraphLLaMA model on the test dataset.")
     parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to the trained model checkpoint.")
     parser.add_argument("--dataset_name", type=str, required=True, help="Name of the dataset directory.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Evaluation batch size.")
+    parser.add_argument("--batch_size", type=int, default=1, help="Evaluation batch size.")
     parser.add_argument("--output_file", type=str, default="./src/experiments/benchmarks/test_results.json", help="JSON file to save the test results.")
     return parser.parse_args()
 

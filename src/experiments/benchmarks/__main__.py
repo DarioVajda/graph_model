@@ -241,8 +241,8 @@ def parse_args():
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=4, help="Training batch size.")
     parser.add_argument("--accumulation_steps", type=int, default=8, help="Number of steps to accumulate gradients before performing an optimizer step.")
-    parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate for the optimizer.")
-    parser.add_argument("--bias_learning_rate", type=float, default=4e-2, help="Learning rate for the bias parameters.")
+    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate for the optimizer.")
+    parser.add_argument("--bias_learning_rate", type=float, default=5e-2, help="Learning rate for the bias parameters.")
     parser.add_argument("--eval_every", type=int, default=40, help="Number of steps between evaluations.")
     parser.add_argument("--no_gradient_checkpointing", action="store_true", help="Disable gradient checkpointing (useful for debugging or if memory is not a concern).")
 
