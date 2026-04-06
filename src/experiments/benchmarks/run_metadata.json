@@ -1,4 +1,742 @@
 {
+    "reddit_hops2_neighbors60_more_target_text_lora_v2": {
+        "date_time": "2026-04-05 12:43:02",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors60_more_target_text",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.02,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "reddit_hops2_neighbors60_more_target_text_lora": {
+        "date_time": "2026-04-05 12:40:59",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors60_more_target_text",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.02,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "reddit_hops2_neighbors30_truncated_text_128_lora_v5": {
+        "date_time": "2026-04-05 09:56:06",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "reddit_hops2_neighbors30_truncated_text_128",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.02,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors20_random_abstracts_p0.2_lora": {
+        "date_time": "2026-04-04 18:38:04",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors20_random_abstracts_p0.2",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora_v8": {
+        "date_time": "2026-04-04 18:28:33",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora_v7": {
+        "date_time": "2026-04-04 18:27:39",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v11": {
+        "date_time": "2026-04-04 09:36:29",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.1,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora_v6": {
+        "date_time": "2026-04-04 09:26:01",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.1,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora_v5": {
+        "date_time": "2026-04-03 13:23:32",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora_v4": {
+        "date_time": "2026-04-03 13:15:06",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora_v3": {
+        "date_time": "2026-04-03 12:59:43",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 64,
+            "lora_alpha": 128,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora_v2": {
+        "date_time": "2026-04-03 10:54:49",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_lora": {
+        "date_time": "2026-04-02 17:31:00",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract_SMALL",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 15,
+        "learning_rate": 0.0006,
+        "bias_learning_rate": 0.1,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v10": {
+        "date_time": "2026-04-02 11:39:44",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 30,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 64,
+            "lora_alpha": 128,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v9": {
+        "date_time": "2026-04-02 11:38:28",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 30,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v8": {
+        "date_time": "2026-04-02 11:23:15",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v7": {
+        "date_time": "2026-04-02 11:22:13",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
+    "cora_hops2_neighbors60_target_abstract_lora_v6": {
+        "date_time": "2026-04-01 23:09:01",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": true,
+            "rwse": true,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "cora_hops2_neighbors60_target_abstract",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 10,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.0,
+            "bias": "none"
+        }
+    },
     "cora_hops2_neighbors60_target_abstract_lora_v5": {
         "date_time": "2026-04-01 10:06:52",
         "bias_params": {

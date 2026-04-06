@@ -2,7 +2,7 @@
 #SBATCH --partition=frida
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:A100:1
+#SBATCH --gres=gpu:H100:1
 #SBATCH --time=2:00:00
 #SBATCH --job-name=test_graph_model
 #SBATCH --output=job_logs/test_benchmark_%j.out
@@ -26,6 +26,6 @@ srun \
     
     # Run the python benchmark script
     python3 -m src.experiments.benchmarks.test \
-    --checkpoint_path=./checkpoints/cora_hops2_neighbors60_target_abstract_lora_v4/checkpoint-400 \
-    --dataset_name=cora_hops2_neighbors60_target_abstract
+    --checkpoint_path=./checkpoints/reddit_hops2_neighbors30_truncated_text_128_lora_v5/checkpoint-520 \
+    --dataset_name=reddit_hops2_neighbors30_truncated_text_128
   "

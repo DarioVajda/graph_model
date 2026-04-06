@@ -1,4 +1,49 @@
 {
+    "reddit_hops2_neighbors30_truncated_text_128_checkpoint-520_v3": {
+        "eval_loss": 0.19988900423049927,
+        "eval_model_preparation_time": 0.0088,
+        "eval_em_accuracy": 0.6792361344224386,
+        "eval_em_f1": 0.6777132494652134,
+        "eval_runtime": 2386.8331,
+        "eval_samples_per_second": 11.233,
+        "eval_steps_per_second": 11.233
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_checkpoint-480_v2": {
+        "eval_loss": 0.17440392076969147,
+        "eval_model_preparation_time": 0.0089,
+        "eval_em_accuracy": 0.8892988929889298,
+        "eval_em_f1": 0.9128012648344442,
+        "eval_runtime": 37.2021,
+        "eval_samples_per_second": 14.569,
+        "eval_steps_per_second": 14.569
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_checkpoint-480": {
+        "eval_loss": 0.1539226919412613,
+        "eval_model_preparation_time": 0.0082,
+        "eval_em_accuracy": 0.8892988929889298,
+        "eval_em_f1": 0.9106605421646453,
+        "eval_runtime": 33.5447,
+        "eval_samples_per_second": 16.158,
+        "eval_steps_per_second": 16.158
+    },
+    "cora_hops2_neighbors60_target_abstract_SMALL_checkpoint-400_v2": {
+        "eval_loss": 0.15286049246788025,
+        "eval_model_preparation_time": 0.0084,
+        "eval_em_accuracy": 0.8874538745387454,
+        "eval_em_f1": 0.9082312127637324,
+        "eval_runtime": 34.6637,
+        "eval_samples_per_second": 15.636,
+        "eval_steps_per_second": 15.636
+    },
+    "ogbn-arxiv_hops2_neighbors60_target_abstract_checkpoint-2840": {
+        "eval_loss": 0.07990830391645432,
+        "eval_model_preparation_time": 0.0083,
+        "eval_em_accuracy": 0.7622163240952204,
+        "eval_em_f1": 0.6976690209100843,
+        "eval_runtime": 5301.6942,
+        "eval_samples_per_second": 9.167,
+        "eval_steps_per_second": 1.146
+    },
     "cora_hops2_neighbors60_target_abstract_checkpoint-400_v3": {
         "eval_loss": 0.17752188444137573,
         "eval_model_preparation_time": 0.0118,

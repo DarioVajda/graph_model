@@ -45,31 +45,31 @@ if __name__ == '__main__':
 
     paths = [
         # CORA
-        './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_target_abstract',
-        './src/experiments/benchmarks/processed_data/cora_hops2_neighbors60_target_abstract',
-        './src/experiments/benchmarks/processed_data/cora_hops2_neighbors111_target_abstract',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_target_abstract',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors60_target_abstract',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors111_target_abstract',
         # './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors30',
         # './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15',
         # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors15_neighbor_abstracts',
         # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.5',
         # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.3',
-        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors30_random_abstracts_p0.2',
+        # './src/experiments/benchmarks/processed_data/cora_hops2_neighbors20_random_abstracts_p0.2',
 
         # PUBMED
-        './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors30',
-        './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors60_target_abstract',
+        # './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors30',
+        # './src/experiments/benchmarks/processed_data/pubmed_hops2_neighbors60_target_abstract',
 
         # REDDIT
         './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_full_text',
-        # './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_truncated_text_128',
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors15_truncated_text_128',
         './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors30_truncated_text_128',
-        # './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors45_truncated_text_128',
-        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors60_truncated_text_64',
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors45_truncated_text_128',
+        './src/experiments/benchmarks/processed_data/reddit_hops2_neighbors60_more_target_text',
 
         # OGBN-ARXIV
-        './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors30',
-        './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors60_target_abstract',
-        './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors20_random_abstracts_p0.2'
+        # './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors30',
+        # './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors60_target_abstract',
+        # './src/experiments/benchmarks/processed_data/ogbn-arxiv_hops2_neighbors20_random_abstracts_p0.2'
 
     ]
     results = {}

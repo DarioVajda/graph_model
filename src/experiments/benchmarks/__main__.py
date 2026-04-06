@@ -291,7 +291,7 @@ if __name__ == "__main__":
         "r": LORA_R,
         "lora_alpha": LORA_R*2,
         "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        "lora_dropout": 0.00,
+        "lora_dropout": 0.05,
         "bias": "none",
     }
     if LORA_R == 0: # if rank is set to 0, don't use LoRA at all

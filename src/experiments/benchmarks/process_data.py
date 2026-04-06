@@ -223,6 +223,15 @@ class GetTruncatedRedditText:
     def __call__(self, data, idx, target_dist):
         full_text = get_reddit_text(data, idx, target_dist)
         return full_text[:self.max_length] + ("..." if len(full_text) > self.max_length else "")
+def get_more_target_text(data, idx, target_dist):
+    lengths = [ 196, 128, 64 ]
+    full_text = get_reddit_text(data, idx, target_dist)
+    if target_dist == 0:
+        return full_text[:lengths[0]] + ("..." if len(full_text) > lengths[0] else "")
+    elif target_dist == 1:
+        return full_text[:lengths[1]] + ("..." if len(full_text) > lengths[1] else "")
+    else:
+        return full_text[:lengths[2]] + ("..." if len(full_text) > lengths[2] else "")
 
 def get_mapping_name(mapping):
     if mapping == get_titles:
@@ -239,6 +248,8 @@ def get_mapping_name(mapping):
         return "full_text"
     elif mapping.__class__ == GetTruncatedRedditText:
         return f"truncated_text_{mapping.max_length}"
+    elif mapping == get_more_target_text:
+        return "more_target_text"
     else:
         raise ValueError("Unknown mapping function")
 #endregion
@@ -274,13 +285,14 @@ class GetGraphLabels:
 if __name__ == "__main__":
     setup_seed(52)
     datasets = [ 
-        ('cora', get_titles_and_target_abstract, 60),
+        # ('cora', get_titles_and_target_abstract, 60),
         # ('cora', get_titles_and_neighbor_abstracts, 15),
-        # ('cora', GetRandomAbstracts(p=0.2), 30),
+        # ('cora', GetRandomAbstracts(p=0.2), 20),
         # ('ogbn-arxiv', get_titles_and_target_abstract, 60), 
         # ('ogbn-arxiv', GetRandomAbstracts(p=0.2), 20),
         # ('pubmed', get_titles_and_target_abstract, 60), 
         # ('reddit', GetTruncatedRedditText(max_length=64), 60),
+        ('reddit', get_more_target_text, 60),
     ]
     instructions = {
         'cora':         'Q: Given this paper citation graph, classify this paper into 7 classes: Case_Based, Genetic_Algorithms, Neural_Networks, Probabilistic_Methods, Reinforcement_Learning, Rule_Learning, Theory. Please tell me which class does this paper belong to?\nA: ',
@@ -288,7 +300,7 @@ if __name__ == "__main__":
         'pubmed':       'Q: Given this paper citation graph, classify this paper into 3 classes: Diabetes Mellitus Experimental, Diabetes Mellitus Type1, Diabetes Mellitus Type2. Please tell me which class does this paper belong to?\nA: ',
         'reddit':       'Q: Given this user reddit user post interaction graph, classify this reddit user into 2 classes: Normal Users and Popular Users. Please tell me which class does this reddit user belong to?\nA: ',
     }
-    NUM_SAMPLES = 16
+    NUM_SAMPLES = 8
     MAX_VAL_SAMPLES = 2000e10
     MAX_TRAIN_SAMPLES = 5000e10
 
@@ -311,7 +323,7 @@ if __name__ == "__main__":
         'get_graph_labels': GetGraphLabels(question_end=[ 32, 25 ]), # this represents "A:"
     }
     ONLY_SPLIT = "test"
-    # ONLY_SPLIT = None
+    ONLY_SPLIT = None
 
     modes = ['train', 'val', 'test']
     hops = 2

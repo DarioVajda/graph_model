@@ -1,5 +1,5 @@
 from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
+from ...models.llama_attn_bias_slow import GraphLlamaForCausalLM, GraphLlamaConfig
 
 from .load_dataset import load_graphqa_datasets
 
@@ -267,21 +267,24 @@ if __name__ == "__main__":
     # --------------------------------------------------------------------------
     #region ----------------------- CONFIGURATION ------------------------------
     # --------------------------------------------------------------------------
+    WITHOUT = 'magnetic' # options: None, "spd", "rrwp", "magnetic"
+    # WITHOUT = None
     BIAS_PARAMS = { 
-        "spd": True, 
+        "spd": WITHOUT!='spd', 
         "max_spd": 8, 
         "laplacian": False, 
         "rwse": False, 
-        "rrwp": True, 
+        "rrwp": WITHOUT!='rrwp', 
         "max_rw_steps": 16,
-        "magnetic": True,
+        "magnetic": WITHOUT!='magnetic',
         "magnetic_dim": 32,
         "magnetic_q": 0.25
     }
     # Options: [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ]
+    # Options in order: node_count, edge_count, cycle_check, triangle_counting, node_degree, connected_nodes, reachability, edge_existence, shortest_path
     GRAPH_TYPE = "standard" # options: "standard" or "incidence"
-    TRAIN_DATASET_TASKS =   [ "node_classification" ]
-    EVAL_DATASET_TASKS  =   [ "node_classification" ]
+    TRAIN_DATASET_TASKS =   [ "shortest_path" ]
+    EVAL_DATASET_TASKS  =   [ "shortest_path" ]
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
     ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
     LR = 3e-5
@@ -304,8 +307,8 @@ if __name__ == "__main__":
     #     in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
     #     if BIAS_PARAMS[bias_type.split('(')[0]]
     # ])
-    run_suffix = "+".join(TRAIN_DATASET_TASKS)
-
+    run_suffix = "+".join(TRAIN_DATASET_TASKS) + (f"_no_{WITHOUT}" if WITHOUT else "")
+    
     # Create a unique run name and save the run metadata
     RUN_NAME = f"GraphQA_{GRAPH_TYPE}{'_lora' if LORA_CONFIG else ''}_{run_suffix}"
     RUN_NAME = save_run_metadata(
