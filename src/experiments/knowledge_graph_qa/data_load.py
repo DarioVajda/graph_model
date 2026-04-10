@@ -1,0 +1,56 @@
+import json, os
+
+def load_graph_dataset_split(path, split):
+    # lazy import to avoid excessive waiting time when not needed
+    from ...utils.text_graph_dataset import TextGraphDataset
+
+    # list all files in the path that contain the substring {split}
+    files = [f for f in os.listdir(path) if split in f and f.endswith('.gtds')]
+    if len(files) > 1:
+        files = sorted(files, key=lambda x: int(x.split('-')[-1].split('.')[0])) # sort by the number after the last '-' and before '.gtds'
+
+    if not files:
+        raise ValueError(f"No dataset files found for split '{split}' in path '{path}'")
+
+    # load all files and add them up together
+    dataset = None
+    for file in files:
+        curr_dataset = TextGraphDataset.load(os.path.join(path, file))
+        if dataset is None:
+            dataset = curr_dataset
+        else:
+            dataset = dataset + curr_dataset
+        
+    print(f"Loaded dataset for split '{split}' from {len(files)} files with a total of {len(dataset)} examples.")
+    return dataset
+
+def load_text_dataset_split(path, split):
+    file = os.path.join(path, f"{split}_dataset.jsonl")
+    if not os.path.exists(file):
+        raise ValueError(f"No dataset file found for split '{split}' at path '{file}'")
+
+    dataset = []
+    with open(file, 'r') as f:
+        for line in f:
+            dataset.append(json.loads(line))
+    
+    print(f"Loaded text dataset for split '{split}' from file '{file}' with a total of {len(dataset)} examples.")
+    return dataset
+
+def load_dataset(path, type='graph'):
+    if type == 'graph':
+        return load_graph_dataset_split(path, split='train'), load_graph_dataset_split(path, split='val'), load_graph_dataset_split(path, split='test')
+    elif type == 'text':
+        return load_text_dataset_split(path, split='train'), load_text_dataset_split(path, split='val'), load_text_dataset_split(path, split='test')
+    else:
+        raise ValueError(f"Invalid dataset type '{type}'. Expected 'graph' or 'text'.")
+
+if __name__ == "__main__":
+    ds_type = 'text'
+    dataset_path = f"./src/experiments/knowledge_graph_qa/{ds_type}_datasets/dataset_50-100"
+    train_dataset, val_dataset, test_dataset = load_dataset(dataset_path, type=ds_type)
+
+    print(f"{ds_type.upper()} DATASET SIZES:")
+    print(f"Training dataset: {len(train_dataset)} examples")
+    print(f"Validation dataset: {len(val_dataset)} examples")
+    print(f"Test dataset: {len(test_dataset)} examples")

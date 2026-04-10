@@ -1,3 +1,4 @@
+print("src/experiments/backward_compatibility/__main__.py: Running backward compatibility test for graph model...")
 import torch
 from transformers import LlamaForCausalLM, LlamaConfig, AutoTokenizer
 
@@ -6,6 +7,7 @@ import networkx as nx
 from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
 from ...utils.text_graph_dataset import TextGraphDataset, prepare_example_labels
 from ...utils.text_graph_collator import GraphCollator
+print("src/experiments/backward_compatibility/__main__.py: Imports completed successfully.")
 
 def _load_default_model(model_name):
     config = LlamaConfig.from_pretrained(model_name)
@@ -34,6 +36,7 @@ def generate_example(model_name, tokenizer):
     return ds[0]
 
 if __name__ == "__main__":
+    print("Starting backward compatibility test for graph model...")
     model_name = "meta-llama/Llama-3.2-1B"
     
     default_model = _load_default_model(model_name)

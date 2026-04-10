@@ -4,53 +4,83 @@ This module implements the utilitiy function used for computing the Relative Ran
 
 import networkx as nx
 import numpy as np
+import torch
 
-def compute_rrwp(graph: nx.Graph, max_distance: int = 4):
+def compute_rrwp(graphs, max_distance: int = 8):
     """
-    Computes the Relative Random Walk Probabilities (RRWP) for a given graph up to a specified maximum distance.
-    
+    Highly optimized batched RRWP computation.
     Args:
-        graph: A NetworkX graph object representing the input graph.
-        max_distance: The maximum shortest path distance to consider for computing RRWP. Default is 4.
+        graphs: A single nx.Graph or a list of nx.Graph objects.
+        max_distance: Number of random walk steps.
     Returns:
-        A dictionary where keys are node pairs (i, j) and values are the computed RRWP values for those pairs.
+        If single graph: dict mapping (i, j) to list of floats.
+        If list of graphs: list of flattened numpy arrays.
     """
-    # get adjacency matrix of the graph 
-    A = nx.to_numpy_array(graph)
-
-    # compute the out-degrees
-    out_degrees = A.sum(axis=1)
-
-    # Add self-loops to sink nodes (those with zero out-degree)
-    sink_nodes = np.where(out_degrees == 0)[0]
-    if len(sink_nodes) > 0:
-        A[sink_nodes, sink_nodes] = 1   # Add self-loops to sink nodes
-        out_degrees = A.sum(axis=1)     # Recompute out-degrees after adding self-loops
-
-    # compute the inverse out-degree matrix
-    D_inv = np.diag(1 / out_degrees)  # Add small value to avoid division by zero
-
-    # compute the M matrix (transition probabilities)
-    M = D_inv @ A
-
-    # initialise the RRWP 3D array to store the probabilities for each distance
-    num_nodes = A.shape[0]
-    RRWP = np.zeros((num_nodes, num_nodes, max_distance))
-
-    # compute RRWP for each distance
-    for d in range(max_distance):
-        if d == 0:
-            RRWP[:, :, d] = np.eye(num_nodes)
-        else:
-            RRWP[:, :, d] = M @ RRWP[:, :, d-1]
-
-    # convert the RRWP 3D array into a dictionary for easier access
-    rrwp_dict = {}
-    for i, node_i in enumerate(graph.nodes()):
-        for j, node_j in enumerate(graph.nodes()):
-            rrwp_dict[(node_i, node_j)] = RRWP[i, j, :].tolist()  # Store the RRWP values for all distances as a list
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    return rrwp_dict
+    # Handle single graph input for backward compatibility
+    is_single = isinstance(graphs, nx.Graph)
+    graph_list = [graphs] if is_single else graphs
+    
+    num_graphs = len(graph_list)
+    node_counts = [g.number_of_nodes() for g in graph_list]
+    max_n = max(node_counts)
+
+    # 1. Build Padded Adjacency Tensor [B, N, N]
+    A = torch.zeros((num_graphs, max_n, max_n), device=device, dtype=torch.float32)
+    for i, g in enumerate(graph_list):
+        adj = nx.to_numpy_array(g)
+        A[i, :node_counts[i], :node_counts[i]] = torch.from_numpy(adj)
+
+    # 2. Handle Sink Nodes & Compute Transition Matrix M
+    # Sum along rows to get out-degrees
+    out_degrees = A.sum(dim=2)
+    sink_mask = (out_degrees == 0)
+    
+    # Add self-loops to sinks to avoid division by zero
+    if sink_mask.any():
+        # Get indices of diagonal elements for sink nodes across the batch
+        batch_idx, sink_idx = torch.where(sink_mask)
+        # Only add self-loops within the valid node range for each graph
+        valid_sink = sink_idx < torch.tensor(node_counts, device=device)[batch_idx]
+        if valid_sink.any():
+            A[batch_idx[valid_sink], sink_idx[valid_sink], sink_idx[valid_sink]] = 1.0
+            out_degrees = A.sum(dim=2)
+
+    # Transition Matrix M = D^-1 * A
+    M = A / out_degrees.unsqueeze(2)
+
+    # 3. Iterative Power Computation [B, N, N, Steps]
+    RRWP = torch.zeros((num_graphs, max_n, max_n, max_distance), device=device)
+    current_power = torch.eye(max_n, device=device).unsqueeze(0).repeat(num_graphs, 1, 1)
+
+    for d in range(max_distance) if not is_single else range(max_distance):
+        if d == 0:
+            RRWP[:, :, :, d] = current_power
+        else:
+            # Batch Matrix Multiplication: [B, N, N] @ [B, N, N]
+            current_power = torch.bmm(current_power, M)
+            RRWP[:, :, :, d] = current_power
+
+    # 4. Format Output
+    RRWP_cpu = RRWP.cpu().numpy()
+
+    if is_single:
+        # Maintain old dictionary format for single graph calls
+        n = node_counts[0]
+        res_dict = {}
+        for i in range(n):
+            for j in range(n):
+                res_dict[(i, j)] = RRWP_cpu[0, i, j, :].tolist()
+        return res_dict
+    else:
+        # Return list of flattened arrays for the Dataset map function
+        results = []
+        for b in range(num_graphs):
+            n = node_counts[b]
+            # Slice out the padding and flatten: (n, n, dist) -> (n*n*dist,)
+            results.append(RRWP_cpu[b, :n, :n, :].flatten())
+        return results
 
 if __name__ == "__main__":
     G = nx.DiGraph()

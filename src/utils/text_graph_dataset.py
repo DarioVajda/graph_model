@@ -9,6 +9,7 @@ from typing import List, Dict, Optional, Any, Union
 from tqdm import tqdm
 import random
 import json
+import numpy as np
 
 from .laplacian import get_laplacian_coordinates
 from .rwse import compute_rwse
@@ -290,7 +291,7 @@ class TextGraphDataset(Dataset):
             
         self._hf_dataset = self._hf_dataset.add_column("laplacian_coordinates", coords_list)
 
-    def compute_shortest_path_distances(self, cutoff=None):
+    def compute_shortest_path_distances_slow(self, cutoff=None):
         """Computes APSP and adds 'shortest_path_dists' column (flattened)."""       
         spd_list = []
         for g in tqdm(self.graphs, desc="Floyd-Warshall / BFS"):
@@ -315,6 +316,63 @@ class TextGraphDataset(Dataset):
             
         self._hf_dataset = self._hf_dataset.add_column("shortest_path_dists", spd_list)
 
+    def compute_shortest_path_distances(self, cutoff=None):
+        # 1. Setup Device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Computing Shortest Paths on: {device}")
+
+        # 2. Define the Mapping Function
+        # We use this inside .map() to handle chunks of data efficiently
+        def batch_apsp(batch, indices):
+            batch_results = []
+            
+            for idx in indices:
+                # Get the specific graph object for this row
+                g = self.graphs[idx]
+                n = g.number_of_nodes()
+                
+                # Convert graph to adjacency on GPU
+                # We use float32 for the math then cast back to int16 to save memory
+                adj = torch.from_numpy(nx.to_numpy_array(g)).to(device).to(torch.float32)
+                
+                # Initialize distance matrix
+                # 32767 is our 'infinity' for int16
+                dist = torch.full((n, n), 32767, device=device, dtype=torch.float32)
+                dist[adj > 0] = 1.0
+                dist.fill_diagonal_(0)
+
+                # Vectorized Floyd-Warshall: O(N^3) but fully parallel in CUDA
+                for k in range(n):
+                    # dist = min(dist, dist[:, k] + dist[k, :])
+                    # Note: .unsqueeze handles the broadcasting for the addition
+                    dist = torch.min(dist, dist[:, k].unsqueeze(1) + dist[k, :].unsqueeze(0))
+
+                # Apply cutoff and handle unreachable nodes
+                if cutoff is not None:
+                    dist[dist > cutoff] = 32767
+                
+                # Flatten and cast to int16 before moving to CPU
+                # Arrow handles NumPy arrays much faster than Python lists
+                flat_dist = dist.to(torch.int16).flatten().cpu().numpy()
+                batch_results.append(flat_dist)
+
+            return {"shortest_path_dists": batch_results}
+
+        # 3. Clean up existing column if necessary
+        if "shortest_path_dists" in self._hf_dataset.column_names:
+            self._hf_dataset = self._hf_dataset.remove_columns("shortest_path_dists")
+
+        # 4. Execute the mapping
+        # batched=True processes multiple rows at once, reducing overhead
+        # with_indices=True allows us to look up the correct graph in self.graphs
+        self._hf_dataset = self._hf_dataset.map(
+            batch_apsp,
+            batched=True,
+            batch_size=128, # Adjust based on your GPU VRAM
+            with_indices=True,
+            desc="Vectorized APSP (Torch)"
+        )
+
     def compute_rwse(self, max_rwse_steps=8):
         """Computes Random Walk Structural Encoding and adds 'rwse' column."""
         rwse_dataset_list = []
@@ -327,118 +385,105 @@ class TextGraphDataset(Dataset):
         self._hf_dataset = self._hf_dataset.add_column("rwse", rwse_dataset_list)
 
     def compute_rrwp(self, max_rrwp_steps=8):
-        """Computes Relative Random Walk Probabilities (RRWP) and adds 'rrwp' column."""        
-        # 1. Clean up old column if it exists to prevent schema conflicts
+        """
+        Optimized RRWP using batch tensor operations.
+        """
+        # 1. Clean up old column
         if "rrwp" in self._hf_dataset.column_names:
             self._hf_dataset = self._hf_dataset.remove_columns("rrwp")
 
-        # 2. Define the batching function
-        def _compute_batch(batch, indices):
-            rrwp_batch = []
+        # 2. Define the vectorized batching function
+        def _compute_batch_vectorized(batch, indices):
+            # Retrieve all graph objects for this batch at once
+            graph_objects = [self.graphs[i] for i in indices]
             
-            for idx in indices:
-                # Retrieve the specific graph from RAM
-                g = self.graphs[idx]
-                n = g.number_of_nodes()
-                
-                # Compute original logic
-                rrwp_dict = compute_rrwp(g, max_distance=max_rrwp_steps)
-                
-                # Flatten into a strict 1D list so PyArrow writes it instantly
-                rrwp_flat = []
-                for i in range(n):
-                    for j in range(n):
-                        rrwp_flat.extend(rrwp_dict[(i, j)])
-                        
-                rrwp_batch.append(rrwp_flat)
-                
+            # Compute everything in one GPU pass
+            # This returns a list of flattened numpy arrays
+            rrwp_batch = compute_rrwp(graph_objects, max_distance=max_rrwp_steps)
+            
             return {"rrwp": rrwp_batch}
 
-        # 3. Stream data to the dataset in chunks
+        # 3. Stream data using larger batches to saturate the GPU
         self._hf_dataset = self._hf_dataset.map(
-            _compute_batch,
+            _compute_batch_vectorized,
             with_indices=True,
             batched=True,
-            batch_size=10,
-            desc=f"Computing RRWP (max steps: {max_rrwp_steps})"
+            batch_size=16, # Increased for better GPU utilization
+            desc=f"Batched GPU RRWP (steps: {max_rrwp_steps})"
         )
 
     def compute_magnetic_lap(self, q=0.25):
-        """Computes Magnetic Laplacian eigenvalues and eigenvectors and adds 'magnetic_V' and 'magnetic_lambdas' columns."""       
-        # 1. Clean up old columns if they exist
+        """
+        High-speed Batched Magnetic Laplacian calculation.
+        """
+        # 1. Clean up old columns
         cols_to_remove = [c for c in ["magnetic_V", "magnetic_lambdas"] if c in self._hf_dataset.column_names]
         if cols_to_remove:
             self._hf_dataset = self._hf_dataset.remove_columns(cols_to_remove)
 
-        # 2. Define the batching function
-        def _compute_batch(batch, indices):
-            v_batch = []
-            lambdas_batch = []
+        # 2. Optimized Batched Function
+        def _compute_batch_fast(batch, indices):
+            # Gather all graph objects for the batch
+            graph_objects = [self.graphs[idx] for idx in indices]
             
-            for idx in indices:
-                g_int = self.graphs[idx]
-                
-                # Use the function from magnetic_lap.py
-                V, lambdas = get_magnetic_laplacian_coords(g_int, q=q)
-                
-                # Flatten V for lightning-fast Arrow storage
-                if isinstance(V, torch.Tensor):
-                    v_batch.append(V.flatten().tolist())
-                else: # Fallback for NumPy
-                    v_batch.append(V.reshape(-1).tolist())
-                    
-                lambdas_batch.append(lambdas.tolist())
-                
-            return {"magnetic_V": v_batch, "magnetic_lambdas": lambdas_batch}
+            # Batch process on GPU
+            # V_list contains (n, n, 2) arrays, L_list contains (n,) arrays
+            V_list, L_list = get_magnetic_laplacian_coords(graph_objects, q=q)
+            
+            # Flatten for Arrow storage compatibility
+            # We use .reshape(-1) which is faster than .flatten() in many cases
+            v_batch = [v.reshape(-1).tolist() for v in V_list]
+            l_batch = [l.tolist() for l in L_list]
+            
+            return {"magnetic_V": v_batch, "magnetic_lambdas": l_batch}
 
-        # 3. Stream data to the dataset in chunks
+        # 3. Stream to dataset
+        # We use a smaller batch size for eigh because eigvecs consume O(N^2) memory
         self._hf_dataset = self._hf_dataset.map(
-            _compute_batch,
+            _compute_batch_fast,
             with_indices=True,
             batched=True,
-            batch_size=10,
-            desc=f"Magnetic Eigen-decomposition (q={q})"
+            batch_size=1, 
+            desc=f"GPU Magnetic Spectral Decomposition (q={q})"
         )
 
-    def compute_labels(self, get_graph_labels):
-        """Computes labels for each graph using the provided function and adds 'labels' column."""       
-        labels_list = []
-        # Iterate over the raw flattened length
-        for i in tqdm(range(len(self._hf_dataset)), desc="Generating Labels"):
-            item = self._hf_dataset[i]
-            g = self.graphs[i] 
-            
-            # Manually inject what get_graph_labels needs
-            item['num_nodes'] = g.number_of_nodes()
-            item['prompt_node'] = g.graph.get('prompt_node', -1)
-            
-            if 'input_ids' not in item:
-                raise ValueError("Dataset must be tokenized before computing labels.")
-            
-            prompt_node = item['prompt_node']
-            if prompt_node == -1:
-                raise ValueError(f"Graph at index {i} does not have a valid prompt node. Cannot compute labels.")
-                
-            # Execute the user-provided mapping function
-            label = get_graph_labels(item)
-            
-            # Validate shape matches the prompt node's token_ids
-            expected_length = len(item['input_ids'][prompt_node])
-            if len(label) != expected_length:
-                raise ValueError(f"Label shape mismatch at index {i}. Expected length {expected_length}, got {len(label)}.")
-                
-            # Convert to list for efficient Hugging Face Arrow storage
-            if isinstance(label, torch.Tensor):
-                label = label.tolist()
-            elif hasattr(label, "tolist"):
-                label = label.tolist()
-                
-            labels_list.append(label)
+    def compute_labels(self, get_graph_labels, num_proc=None):
+        """
+        Parallelized label computation using multi-processing.
+        """
+        if 'input_ids' not in self._hf_dataset.column_names:
+            raise ValueError("Dataset must be tokenized before computing labels.")
 
-        if "labels" in self._hf_dataset.column_names:
-            self._hf_dataset = self._hf_dataset.remove_columns("labels")
+        # 1. Pre-extract prompt node indices.
+        # We do this to avoid pickling the entire 'self.graphs' list (NetworkX objects),
+        # which would be very slow and memory-intensive when starting worker processes.
+        prompt_nodes = [g.graph.get('prompt_node', -1) for g in self.graphs]
+
+        # 2. Define the worker function
+        def _map_fn(example, idx):
+            # Inject metadata required by your GetGraphLabels class
+            example['prompt_node'] = prompt_nodes[idx]
             
-        self._hf_dataset = self._hf_dataset.add_column("labels", labels_list)
+            if example['prompt_node'] == -1:
+                raise ValueError(f"Graph at index {idx} has no valid prompt node.")
+            
+            # Execute your existing callable class
+            label = get_graph_labels(example)
+            
+            # Standardize for Hugging Face Arrow storage
+            if hasattr(label, "tolist"):
+                label = label.tolist()
+            return {"labels": label}
+
+        # 3. Run parallelized mapping
+        # On your Linux environment, this uses 'fork' which is extremely efficient.
+        print(f"Parallelizing label generation across {num_proc or os.cpu_count()} cores...")
+        self._hf_dataset = self._hf_dataset.map(
+            _map_fn,
+            with_indices=True,
+            num_proc=num_proc if num_proc is not None else os.cpu_count(),
+            desc="Generating Labels (Parallel CPU)"
+        )
     #endregion
     # ------------------------------------------------------------------------
 
@@ -467,7 +512,10 @@ class TextGraphDataset(Dataset):
         # 1. Save to a temporary directory first to avoid memory-mapping conflicts
         os.makedirs(temp_path, exist_ok=True)
         print(f"Saving features to temporary path {temp_path}/features...")
-        self._hf_dataset.save_to_disk(os.path.join(temp_path, "features"))
+        self._hf_dataset.save_to_disk(
+            os.path.join(temp_path, "features"),
+            max_shard_size="10GB"
+        )
         
         print(f"Saving graphs to {temp_path}/graphs.pkl...")
         with open(os.path.join(temp_path, "graphs.pkl"), "wb") as f:

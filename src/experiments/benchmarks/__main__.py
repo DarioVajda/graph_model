@@ -1,5 +1,5 @@
 from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.llama_attn_bias_slow import GraphLlamaForCausalLM, GraphLlamaConfig
+from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
 
 from .load_data import load_dataset
 from .train_utils import get_device, compute_exact_match

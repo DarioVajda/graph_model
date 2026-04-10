@@ -23,7 +23,7 @@ torch-sparse
 torch-scatter
 
 # Utilities & Visualization
-numpy
+numpy>=1.21,<2.0.0
 matplotlib
 tqdm
 wandb
