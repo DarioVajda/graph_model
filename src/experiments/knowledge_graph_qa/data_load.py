@@ -46,7 +46,7 @@ def load_dataset(path, type='graph'):
         raise ValueError(f"Invalid dataset type '{type}'. Expected 'graph' or 'text'.")
 
 if __name__ == "__main__":
-    ds_type = 'text'
+    ds_type = 'graph'
     dataset_path = f"./src/experiments/knowledge_graph_qa/{ds_type}_datasets/dataset_50-100"
     train_dataset, val_dataset, test_dataset = load_dataset(dataset_path, type=ds_type)
 
@@ -54,3 +54,22 @@ if __name__ == "__main__":
     print(f"Training dataset: {len(train_dataset)} examples")
     print(f"Validation dataset: {len(val_dataset)} examples")
     print(f"Test dataset: {len(test_dataset)} examples")
+
+    exit()
+    datasets = {
+        'val': val_dataset,
+        'test': test_dataset,
+        'train': train_dataset,
+    }
+
+    from tqdm import tqdm
+
+    for split, ds in datasets.items():
+        print(f"--- Checking dataset split: {split} ---")
+        # check if each example has exactly 1 unmasked token in the labels (example['labels'] is a tensor with -100 for masked tokens and a single non-negative integer for the unmasked token)
+        for i, example in tqdm(enumerate(ds), desc=f"Checking {split} dataset", total=len(ds)):
+            if not (example['labels'][-1] != -100 and example['labels'][-2] == -100):
+                print(f"Example {i} in split '{split}' has {example['labels'].shape[0] - (example['labels'] == -100).sum()} unmasked tokens instead of 1.")
+                print(f"Labels: {example['labels']}")
+                print('='*70)
+        print('-----------------------------------------')

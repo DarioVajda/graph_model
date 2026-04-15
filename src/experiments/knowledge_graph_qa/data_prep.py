@@ -130,8 +130,8 @@ if __name__ == "__main__":
     TEST_COUNT = 250
     TRAIN_COUNT = 1200
 
-    MIN_NODES = 50
-    MAX_NODES = 100
+    MIN_NODES = 40
+    MAX_NODES = 60
     raw_train_graphs, raw_val_graphs, raw_test_graphs = generate_dataset(train_count=TRAIN_COUNT, val_count=VAL_COUNT, test_count=TEST_COUNT, min_nodes=MIN_NODES, max_nodes=MAX_NODES)
     print(f"Generated {len(raw_train_graphs)} training graphs, {len(raw_val_graphs)} validation graphs, and {len(raw_test_graphs)} test graphs with node counts between {MIN_NODES} and {MAX_NODES}.")
 
@@ -163,15 +163,16 @@ if __name__ == "__main__":
         f'train_{i*step_size}-{(i+1)*step_size}': train_dataset[i*step_size:(i+1)*step_size] for i in range((len(train_dataset) + step_size - 1) // step_size)
     }
     raw_datasets = {
-        **raw_datasets,
+        # **raw_datasets,
         'val': val_dataset,
         'test': test_dataset,
     }
+    for split, dataset in raw_datasets.items():
+        print(f"{split.upper()} dataset has {len(dataset)} examples.")
 
     datasets = {}
     save_path = f"./src/experiments/knowledge_graph_qa/graph_datasets/dataset_{MIN_NODES}-{MAX_NODES}"
     for split, dataset in raw_datasets.items():
-        if 'train' not in split: continue
         print(f"\n{split.upper()} DATASET:")
         datasets[split] = save_text_graph_dataset(dataset, os.path.join(save_path, split), params=params, per_graph_versions=1)
 
@@ -187,3 +188,5 @@ if __name__ == "__main__":
                 total_tokens += num_tokens
         break
     print(f"\nAverage number of tokens in prompt node: {total_tokens / total_graphs:.2f}")
+    # 40-60:  Average number of tokens in prompt node: ~524 tokens
+    # 50-100: Average number of tokens in prompt node: ~850-900 tokens
