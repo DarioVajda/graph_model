@@ -1,0 +1,43 @@
+{
+    "graph_kg_qa_lora": {
+        "date_time": "2026-04-16 13:25:13",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 6,
+        "learning_rate": 0.0003,
+        "bias_learning_rate": 0.05,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    }
+}

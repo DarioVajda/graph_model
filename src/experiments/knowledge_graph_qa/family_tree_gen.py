@@ -20,7 +20,7 @@ FEMALE_NAMES = [
 
 LAST_NAMES = [ "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin" ]
 
-COLORS = [ "red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white", "gray", "cyan", "magenta", "teal" ]
+COLORS = [ "red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white", "gray", "cyan", "teal" ]
 FOODS = [ "pizza", "sushi", "burger", "pasta", "salad", "steak", "tacos", "ramen", "curry", "sandwich", "cake", "chocolate", "candy", "bread", "fries" ]
 CITIES = [ "Paris", "Tokyo", "London", "Sydney", "Rome", "Toronto", "Berlin", "Madrid", "Moscow", "Dubai", "Singapore", "Barcelona", "Athens", "Florence" ]
 

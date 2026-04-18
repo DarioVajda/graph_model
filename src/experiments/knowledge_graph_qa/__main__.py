@@ -103,6 +103,7 @@ def training_run(
     model, 
     train_dataset, 
     eval_dataset, 
+    test_dataset,
     collator, 
     run_name, 
     num_epochs=3, 
@@ -176,8 +177,27 @@ def training_run(
     )
 
     trainer.train()
-    # resume training from a checkpoint
-    # trainer.train(resume_from_checkpoint="/shared/workspace/povejmo/graph_model/checkpoints/cora_hops2_neighbors30_random_abstracts_p0.2_lora/checkpoint-240")
+
+    if test_dataset is None:
+        print("No test dataset provided. Skipping final evaluation.")
+        return
+
+    # =====================================================================
+    # Evaluate the best model on the test dataset
+    # =====================================================================    
+    print("\n" + "="*50)
+    print("Training Complete. Evaluating Best Model on Test Dataset...")
+    print("="*50)
+    
+    # By passing metric_key_prefix="test", the metrics will show up in wandb 
+    # as test_em_accuracy and test_em_f1, keeping them distinct from eval metrics.
+    test_results = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
+    
+    print("\nFinal Test Set Results:")
+    for key, value in test_results.items():
+        print(f"  {key}: {value:.4f}")
+    print("="*50 + "\n")
+
 
 def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
     """
@@ -186,7 +206,7 @@ def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_pa
     Returns:
     run_name --> The final run name used for this training run (which may have a version suffix if there were duplicate names).
     """
-    metadata_path = "./src/experiments/benchmarks/run_metadata_graph.json"
+    metadata_path = "./src/experiments/knowledge_graph_qa/run_metadata_graph.json"
     if not os.path.exists(metadata_path):
         with open(metadata_path, "w") as f:
             json.dump({}, f)
@@ -236,9 +256,9 @@ def parse_args():
     # general parameters
     parser.add_argument("--dataset_name", type=str, default="kg_qa", help="Directory containing the processed dataset. Should be 'kg_qa' or 'family'.")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B", help="Pre-trained model name or path.")
-    parser.add_argument("--num_epochs", type=int, default=10, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=1, help="Training batch size.")
-    parser.add_argument("--accumulation_steps", type=int, default=16, help="Number of steps to accumulate gradients before performing an optimizer step.")
+    parser.add_argument("--num_epochs", type=int, default=6, help="Number of training epochs.")
+    parser.add_argument("--batch_size", type=int, default=2, help="Training batch size.")
+    parser.add_argument("--accumulation_steps", type=int, default=8, help="Number of steps to accumulate gradients before performing an optimizer step.")
     parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate for the LoRA parameters.")
     parser.add_argument("--bias_learning_rate", type=float, default=5e-2, help="Learning rate for the bias parameters.")
     parser.add_argument("--eval_every", type=int, default=40, help="Number of steps between evaluations.")
@@ -254,6 +274,9 @@ def parse_args():
 if __name__ == "__main__":
     # parse command line arguments
     args = parse_args()
+    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.2-1B --lora_r=32 --batch_size=4 --accumulation_steps=4 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
+    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.2-3B --lora_r=64 --batch_size=2 --accumulation_steps=8 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
+    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.1-8B --lora_r=64 --batch_size=1 --accumulation_steps=16 --learning_rate=1e-5 --bias_learning_rate=1e-2 --num_epochs=8
 
     # --------------------------------------------------------------------------
     #region ----------------------- CONFIGURATION ------------------------------
@@ -294,8 +317,10 @@ if __name__ == "__main__":
     if LORA_R == 0: # if rank is set to 0, don't use LoRA at all
         LORA_CONFIG = None
 
+    model_size = "1B" if "1b" in MODEL_NAME.lower() else ("3B" if "3b" in MODEL_NAME.lower() else ("8B" if "8b" in MODEL_NAME.lower() else "unknown_size"))
+
     # Create a unique run name and save the run metadata
-    RUN_NAME = f"graph_kg_qa{'_lora' if LORA_CONFIG else ''}"
+    RUN_NAME = f"{model_size}_graph_{args.dataset_name}{'_lora' if LORA_CONFIG else ''}"
     RUN_NAME = save_run_metadata(
         run_name=RUN_NAME,
         bias_params=BIAS_PARAMS,
@@ -341,6 +366,7 @@ if __name__ == "__main__":
         model=model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        test_dataset=test_dataset,
         collator=collator,
         run_name=RUN_NAME,
         num_epochs=NUM_EPOCHS,

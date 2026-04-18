@@ -1,6 +1,6 @@
 {
-    "graph_kg_qa_lora_v10": {
-        "date_time": "2026-04-15 18:28:39",
+    "3B_graph_family_lora_v4": {
+        "date_time": "2026-04-18 17:11:27",
         "bias_params": {
             "spd": true,
             "max_spd": 8,
@@ -12,7 +12,89 @@
             "magnetic_dim": 32,
             "magnetic_q": 0.25
         },
-        "dataset_name": "graph_kg_qa",
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-3B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 64,
+            "lora_alpha": 128,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "8B_graph_family_lora_v5": {
+        "date_time": "2026-04-18 17:10:58",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.1-8B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 1e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 64,
+            "lora_alpha": 128,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_graph_family_lora_v2": {
+        "date_time": "2026-04-18 17:02:02",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
         "base_model": "meta-llama/Llama-3.2-1B",
         "active_params": [
             "spd_weights",
@@ -21,9 +103,337 @@
             "rrwp_proj",
             "magnetic_"
         ],
-        "num_epochs": 10,
-        "learning_rate": 0.0003,
-        "bias_learning_rate": 0.05,
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "3B_graph_family_lora_v3": {
+        "date_time": "2026-04-18 16:39:55",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-3B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "8B_graph_family_lora_v4": {
+        "date_time": "2026-04-18 13:42:31",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.1-8B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 1e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "3B_graph_family_lora_v2": {
+        "date_time": "2026-04-18 13:09:58",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-3B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_graph_family_lora": {
+        "date_time": "2026-04-18 13:09:36",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "8B_graph_family_lora_v3": {
+        "date_time": "2026-04-18 02:36:49",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.1-8B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 5e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 64,
+            "lora_alpha": 128,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "3B_graph_family_lora": {
+        "date_time": "2026-04-18 01:59:51",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-3B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "8B_graph_family_lora": {
+        "date_time": "2026-04-18 01:59:22",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.1-8B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 8,
+        "learning_rate": 1e-05,
+        "bias_learning_rate": 0.01,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "3B_graph_family_lora_v6": {
+        "date_time": "2026-04-17 23:17:24",
+        "bias_params": {
+            "spd": true,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": true,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-3B",
+        "active_params": [
+            "spd_weights",
+            "laplacian_weights",
+            "rwse_weights",
+            "rrwp_proj",
+            "magnetic_"
+        ],
+        "num_epochs": 6,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.003,
         "lora_config": {
             "r": 16,
             "lora_alpha": 32,
@@ -40,8 +450,8 @@
             "bias": "none"
         }
     },
-    "graph_kg_qa_lora_v9": {
-        "date_time": "2026-04-13 14:02:40",
+    "8B_graph_family_lora_v2": {
+        "date_time": "2026-04-17 20:14:45",
         "bias_params": {
             "spd": true,
             "max_spd": 8,
@@ -53,8 +463,8 @@
             "magnetic_dim": 32,
             "magnetic_q": 0.25
         },
-        "dataset_name": "graph_dataset_40-60",
-        "base_model": "meta-llama/Llama-3.2-1B",
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.1-8B",
         "active_params": [
             "spd_weights",
             "laplacian_weights",
@@ -62,12 +472,12 @@
             "rrwp_proj",
             "magnetic_"
         ],
-        "num_epochs": 3,
-        "learning_rate": 3e-05,
-        "bias_learning_rate": 0.005,
+        "num_epochs": 6,
+        "learning_rate": 3e-06,
+        "bias_learning_rate": 0.003,
         "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
+            "r": 16,
+            "lora_alpha": 32,
             "target_modules": [
                 "q_proj",
                 "k_proj",
@@ -81,8 +491,8 @@
             "bias": "none"
         }
     },
-    "graph_kg_qa_lora_v8": {
-        "date_time": "2026-04-13 13:49:39",
+    "3B_graph_family_lora_v5": {
+        "date_time": "2026-04-17 20:14:32",
         "bias_params": {
             "spd": true,
             "max_spd": 8,
@@ -94,8 +504,8 @@
             "magnetic_dim": 32,
             "magnetic_q": 0.25
         },
-        "dataset_name": "graph_dataset_40-60",
-        "base_model": "meta-llama/Llama-3.2-1B",
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.2-3B",
         "active_params": [
             "spd_weights",
             "laplacian_weights",
@@ -103,12 +513,12 @@
             "rrwp_proj",
             "magnetic_"
         ],
-        "num_epochs": 3,
-        "learning_rate": 3e-05,
-        "bias_learning_rate": 0.005,
+        "num_epochs": 6,
+        "learning_rate": 1e-05,
+        "bias_learning_rate": 0.001,
         "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
+            "r": 16,
+            "lora_alpha": 32,
             "target_modules": [
                 "q_proj",
                 "k_proj",
@@ -122,8 +532,8 @@
             "bias": "none"
         }
     },
-    "graph_kg_qa_lora_v7": {
-        "date_time": "2026-04-13 13:41:39",
+    "graph_family_lora_v6": {
+        "date_time": "2026-04-16 21:04:43",
         "bias_params": {
             "spd": true,
             "max_spd": 8,
@@ -135,7 +545,7 @@
             "magnetic_dim": 32,
             "magnetic_q": 0.25
         },
-        "dataset_name": "graph_dataset_40-60",
+        "dataset_name": "graph_family",
         "base_model": "meta-llama/Llama-3.2-1B",
         "active_params": [
             "spd_weights",
@@ -144,12 +554,12 @@
             "rrwp_proj",
             "magnetic_"
         ],
-        "num_epochs": 3,
-        "learning_rate": 3e-05,
-        "bias_learning_rate": 0.005,
+        "num_epochs": 6,
+        "learning_rate": 0.0001,
+        "bias_learning_rate": 0.01,
         "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
+            "r": 16,
+            "lora_alpha": 32,
             "target_modules": [
                 "q_proj",
                 "k_proj",
@@ -163,8 +573,8 @@
             "bias": "none"
         }
     },
-    "graph_kg_qa_lora_v6": {
-        "date_time": "2026-04-13 13:29:32",
+    "graph_family_lora": {
+        "date_time": "2026-04-16 15:09:12",
         "bias_params": {
             "spd": true,
             "max_spd": 8,
@@ -176,8 +586,8 @@
             "magnetic_dim": 32,
             "magnetic_q": 0.25
         },
-        "dataset_name": "graph_dataset_40-60",
-        "base_model": "meta-llama/Llama-3.2-1B",
+        "dataset_name": "graph_family",
+        "base_model": "meta-llama/Llama-3.1-8B",
         "active_params": [
             "spd_weights",
             "laplacian_weights",
@@ -185,217 +595,12 @@
             "rrwp_proj",
             "magnetic_"
         ],
-        "num_epochs": 3,
-        "learning_rate": 3e-05,
-        "bias_learning_rate": 0.005,
-        "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
-            "target_modules": [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj"
-            ],
-            "lora_dropout": 0.05,
-            "bias": "none"
-        }
-    },
-    "graph_kg_qa_lora_v5": {
-        "date_time": "2026-04-11 13:20:03",
-        "bias_params": {
-            "spd": true,
-            "max_spd": 8,
-            "laplacian": false,
-            "rwse": false,
-            "rrwp": true,
-            "max_rw_steps": 16,
-            "magnetic": true,
-            "magnetic_dim": 32,
-            "magnetic_q": 0.25
-        },
-        "dataset_name": "graph_dataset_40-60",
-        "base_model": "meta-llama/Llama-3.2-1B",
-        "active_params": [
-            "spd_weights",
-            "laplacian_weights",
-            "rwse_weights",
-            "rrwp_proj",
-            "magnetic_"
-        ],
-        "num_epochs": 3,
+        "num_epochs": 6,
         "learning_rate": 0.0003,
         "bias_learning_rate": 0.05,
         "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
-            "target_modules": [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj"
-            ],
-            "lora_dropout": 0.05,
-            "bias": "none"
-        }
-    },
-    "graph_kg_qa_lora_v4": {
-        "date_time": "2026-04-11 12:59:19",
-        "bias_params": {
-            "spd": true,
-            "max_spd": 8,
-            "laplacian": false,
-            "rwse": false,
-            "rrwp": true,
-            "max_rw_steps": 16,
-            "magnetic": true,
-            "magnetic_dim": 32,
-            "magnetic_q": 0.25
-        },
-        "dataset_name": "graph_dataset_40-60",
-        "base_model": "meta-llama/Llama-3.2-1B",
-        "active_params": [
-            "spd_weights",
-            "laplacian_weights",
-            "rwse_weights",
-            "rrwp_proj",
-            "magnetic_"
-        ],
-        "num_epochs": 3,
-        "learning_rate": 0.0003,
-        "bias_learning_rate": 0.05,
-        "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
-            "target_modules": [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj"
-            ],
-            "lora_dropout": 0.05,
-            "bias": "none"
-        }
-    },
-    "graph_kg_qa_lora_v3": {
-        "date_time": "2026-04-11 01:56:56",
-        "bias_params": {
-            "spd": true,
-            "max_spd": 8,
-            "laplacian": false,
-            "rwse": false,
-            "rrwp": true,
-            "max_rw_steps": 16,
-            "magnetic": true,
-            "magnetic_dim": 32,
-            "magnetic_q": 0.25
-        },
-        "dataset_name": "graph_dataset_40-60",
-        "base_model": "meta-llama/Llama-3.2-1B",
-        "active_params": [
-            "spd_weights",
-            "laplacian_weights",
-            "rwse_weights",
-            "rrwp_proj",
-            "magnetic_"
-        ],
-        "num_epochs": 3,
-        "learning_rate": 0.0003,
-        "bias_learning_rate": 0.05,
-        "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
-            "target_modules": [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj"
-            ],
-            "lora_dropout": 0.05,
-            "bias": "none"
-        }
-    },
-    "graph_kg_qa_lora_v2": {
-        "date_time": "2026-04-11 00:05:51",
-        "bias_params": {
-            "spd": true,
-            "max_spd": 8,
-            "laplacian": false,
-            "rwse": false,
-            "rrwp": true,
-            "max_rw_steps": 16,
-            "magnetic": true,
-            "magnetic_dim": 32,
-            "magnetic_q": 0.25
-        },
-        "dataset_name": "graph_dataset_50-100",
-        "base_model": "meta-llama/Llama-3.2-1B",
-        "active_params": [
-            "spd_weights",
-            "laplacian_weights",
-            "rwse_weights",
-            "rrwp_proj",
-            "magnetic_"
-        ],
-        "num_epochs": 3,
-        "learning_rate": 0.0003,
-        "bias_learning_rate": 0.05,
-        "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
-            "target_modules": [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj"
-            ],
-            "lora_dropout": 0.05,
-            "bias": "none"
-        }
-    },
-    "graph_kg_qa_lora": {
-        "date_time": "2026-04-10 23:57:04",
-        "bias_params": {
-            "spd": true,
-            "max_spd": 8,
-            "laplacian": false,
-            "rwse": false,
-            "rrwp": true,
-            "max_rw_steps": 16,
-            "magnetic": true,
-            "magnetic_dim": 32,
-            "magnetic_q": 0.25
-        },
-        "dataset_name": "graph_dataset_50-100",
-        "base_model": "meta-llama/Llama-3.2-1B",
-        "active_params": [
-            "spd_weights",
-            "laplacian_weights",
-            "rwse_weights",
-            "rrwp_proj",
-            "magnetic_"
-        ],
-        "num_epochs": 10,
-        "learning_rate": 0.0003,
-        "bias_learning_rate": 0.05,
-        "lora_config": {
-            "r": 32,
-            "lora_alpha": 64,
+            "r": 16,
+            "lora_alpha": 32,
             "target_modules": [
                 "q_proj",
                 "k_proj",

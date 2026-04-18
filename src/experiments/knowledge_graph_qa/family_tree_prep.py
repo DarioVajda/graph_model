@@ -3,8 +3,11 @@ from .family_tree_gen import generate_dataset
 import os
 import networkx as nx
 import random
-from tqdm import tqdm
 import json
+from tqdm import tqdm
+
+import torch
+from torch_geometric.data import Data
 print("Imported all modules")
 
 # ------------------------------------------------------------------------------
@@ -139,6 +142,7 @@ class GetGraphLabels:
 
 # ------------------------------------------------------------------------------
 #region Text Dataset Preparation (for standard LLM baseline)
+# ------------------------------------------------------------------------------
 def prepare_text(graph, person_id, question, answer, tokenizer, get_graph_labels):
     text = "This graph represents a family tree. Each node corresponds to a person and contains the following information about them in this format: (full name; gender, birth year, favorite color, favorite food, favorite city). The edges represent relationships between people and can be of two types: 'SPOUSE' or 'CHILD'.\n\n"
     text += "People (nodes):\n"
@@ -189,8 +193,107 @@ def save_text_dataset(text_dataset, output_dir):
         with open(path, 'w') as f:
             for example in examples:
                 f.write(json.dumps(example) + '\n')
+#endregion
 # ------------------------------------------------------------------------------
 
+# ------------------------------------------------------------------------------
+# region LLaGA Format Dataset Preparation (for RGLM)
+# ------------------------------------------------------------------------------
+from sentence_transformers import SentenceTransformer
+
+def prepare_llaga_dataset(raw_dataset, encoder_model_name='all-MiniLM-L6-v2', device='cuda'):
+    """
+    Converts raw graphs to LLaGA format and pre-computes node embeddings.
+    """
+    print(f"Loading SentenceTransformer '{encoder_model_name}' on {device}...")
+    encoder = SentenceTransformer(encoder_model_name, device=device)
+    
+    prepared_dataset = { 'train': [], 'val': [], 'test': [] }
+    global_graph_id = 0
+    
+    for split, examples in raw_dataset.items():
+        print(f"Embedding nodes for {split} split...")
+        for example in tqdm(examples, desc=f"Preparing LLaGA {split} split", total=len(examples)):
+            nx_graph = example["graph"]
+            question = example["question"]
+            answer = example["answer"]
+            
+            # 1. Create the ShareGPT-style Conversation
+            conversation = [
+                {
+                    "from": "human",
+                    "value": f"<graph>\nQuestion: {question}"
+                },
+                {
+                    "from": "gpt",
+                    "value": str(answer)
+                }
+            ]
+            
+            llaga_json = {
+                "id": f"family_tree_{split}_{global_graph_id}",
+                "graph_id": f"{split}_{global_graph_id}",
+                "conversations": conversation
+            }
+            
+            # 2. Convert NetworkX graph to PyTorch Geometric format
+            node_mapping = {n: i for i, n in enumerate(nx_graph.nodes())}
+            
+            edge_list = []
+            for u, v in nx_graph.edges():
+                edge_list.append([node_mapping[u], node_mapping[v]])
+                
+            if len(edge_list) > 0:
+                edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+            else:
+                edge_index = torch.empty((2, 0), dtype=torch.long)
+                
+            # 3. Extract and Embed Node Text Features
+            node_texts = []
+            for n in nx_graph.nodes():
+                data = nx_graph.nodes[n]
+                text_desc = f"{data['first_name']} {data['last_name']}; {'male' if data['gender'] == 'M' else 'female'}, {data['birth_year']}, {data['fav_color']}, {data['fav_food']}, {data['fav_city']}"
+                node_texts.append(text_desc)
+            
+            # Compute embeddings on GPU in one batch per graph
+            with torch.no_grad():
+                x = encoder.encode(node_texts, convert_to_tensor=True, device=device)
+                
+            pyg_data = Data(x=x.cpu(), edge_index=edge_index)
+            
+            prepared_dataset[split].append({
+                "json_data": llaga_json,
+                "pyg_data": pyg_data,
+                "graph_id": llaga_json["graph_id"]
+            })
+            
+            global_graph_id += 1
+            
+    return prepared_dataset
+
+def save_llaga_dataset(llaga_datasets, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    for split, examples in llaga_datasets.items():
+        print(f"Saving LLaGA {split} split...")
+        
+        json_data_list = [ex["json_data"] for ex in examples]
+        json_path = os.path.join(output_dir, f"{split}_instructions.json")
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(json_data_list, f, indent=4)
+            
+        graphs_dir = os.path.join(output_dir, f"{split}_graphs")
+        os.makedirs(graphs_dir, exist_ok=True)
+        
+        for ex in tqdm(examples, desc=f"Saving {split} graphs", total=len(examples)):
+            pt_path = os.path.join(graphs_dir, f"{ex['graph_id']}.pt")
+            torch.save(ex["pyg_data"], pt_path)
+            
+        print(f"Saved {len(examples)} instructions to {json_path}")
+        print(f"Saved {len(examples)} graph .pt files to {graphs_dir}/")
+        print('-'*50)
+
+# endregion
 if __name__ == "__main__":
     print('-' * 50)
     print("Preparing family tree question-answering dataset!")
@@ -201,9 +304,9 @@ if __name__ == "__main__":
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
 
-    get_graph_labels = GetGraphLabels(question_end=[ 32, 25 ], tokenizer=tokenizer)
+    get_graph_labels = GetGraphLabels(question_end=[ 32, 25 ], tokenizer=tokenizer) # this represents "A:"
 
-    # --------- Save Graph Dataset ----------
+    # # --------- Save Graph Dataset ----------
     # graph_datasets = prepare_graph_dataset(raw_datasets)
 
     # params = {
@@ -211,13 +314,18 @@ if __name__ == "__main__":
     #     'max_length': 32_768,
     #     'max_rrwp_steps': 16,
     #     'magnetic_q': 0.25,
-    #     'get_graph_labels': get_graph_labels, # this represents "A:"
+    #     'get_graph_labels': get_graph_labels,
     # }
     # output_dir = "./src/experiments/knowledge_graph_qa/family_tree_graph_dataset"
     # save_graph_dataset(graph_datasets, output_dir, params)
 
     
-    # --------- Save Text Dataset ----------
-    text_datasets = prepare_text_dataset(raw_datasets, tokenizer, get_graph_labels)
-    output_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
-    save_text_dataset(text_datasets, output_dir)
+    # # --------- Save Text Dataset ----------
+    # text_datasets = prepare_text_dataset(raw_datasets, tokenizer, get_graph_labels)
+    # output_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
+    # save_text_dataset(text_datasets, output_dir)
+
+    # --------- Save LLaGA Dataset ----------
+    llaga_datasets = prepare_llaga_dataset(raw_datasets)
+    output_dir_llaga = "./src/experiments/knowledge_graph_qa/family_tree_llaga_dataset"
+    save_llaga_dataset(llaga_datasets, output_dir_llaga)

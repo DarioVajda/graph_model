@@ -47,14 +47,19 @@ def compute_rrwp(graphs, max_distance: int = 8):
             A[batch_idx[valid_sink], sink_idx[valid_sink], sink_idx[valid_sink]] = 1.0
             out_degrees = A.sum(dim=2)
 
+    # Clone out_degrees and set any remaining 0s (the padded nodes) to 1.0. 
+    # Since A is 0 for these nodes, 0 / 1.0 safely evaluates to 0.0, preventing NaNs.
+    safe_out_degrees = out_degrees.clone()
+    safe_out_degrees[safe_out_degrees == 0] = 1.0
+
     # Transition Matrix M = D^-1 * A
-    M = A / out_degrees.unsqueeze(2)
+    M = A / safe_out_degrees.unsqueeze(2)
 
     # 3. Iterative Power Computation [B, N, N, Steps]
     RRWP = torch.zeros((num_graphs, max_n, max_n, max_distance), device=device)
     current_power = torch.eye(max_n, device=device).unsqueeze(0).repeat(num_graphs, 1, 1)
 
-    for d in range(max_distance) if not is_single else range(max_distance):
+    for d in range(max_distance):
         if d == 0:
             RRWP[:, :, :, d] = current_power
         else:

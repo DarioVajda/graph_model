@@ -649,6 +649,22 @@ class LlamaModelWithBias(LlamaModel):
             attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
         )
 
+        # Force-materialize the causal mask if HF optimized it away.
+        if causal_mask is None and (node_ids is not None or input_graph_batch is not None):
+            B, q_len = inputs_embeds.shape[:2]
+            kv_len = q_len if past_key_values is None else past_key_values.get_seq_length()
+            
+            # Create a standard 4D attention mask: (B, 1, q_len, kv_len)
+            causal_mask = torch.zeros((B, 1, q_len, kv_len), device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+            
+            # Apply standard causal masking (mask out future tokens)
+            if q_len > 1:
+                q_indices = torch.arange(kv_len - q_len, kv_len, device=inputs_embeds.device).unsqueeze(1)
+                k_indices = torch.arange(kv_len, device=inputs_embeds.device).unsqueeze(0)
+                
+                min_val = torch.finfo(inputs_embeds.dtype).min
+                causal_mask.masked_fill_(k_indices > q_indices, min_val)
+
         # APPLY BIDIRECTIONAL PREFIX MASK ON TOP OF CAUSAL MASK
         # HF creates a strict causal lower-triangle mask. We need to unmask the prefix-to-prefix region.
         if causal_mask is not None and node_ids is not None and input_graph_batch is not None:
