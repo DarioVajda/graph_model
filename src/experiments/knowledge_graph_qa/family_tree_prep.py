@@ -144,12 +144,18 @@ class GetGraphLabels:
 #region Text Dataset Preparation (for standard LLM baseline)
 # ------------------------------------------------------------------------------
 def prepare_text(graph, person_id, question, answer, tokenizer, get_graph_labels):
-    text = "This graph represents a family tree. Each node corresponds to a person and contains the following information about them in this format: (full name; gender, birth year, favorite color, favorite food, favorite city). The edges represent relationships between people and can be of two types: 'SPOUSE' or 'CHILD'.\n\n"
+    text = "This graph represents a family tree. Each node corresponds to a person and contains the following information about them in this format: (full name; gender, birth year, favorite color, favorite food, favorite city). The edges represent relationships between people."
     text += "People (nodes):\n"
-    for node, data in graph.nodes(data=True):
+
+    nodes = list(graph.nodes(data=True))
+    random.shuffle(nodes)
+    for node, data in nodes:
         text += f"({data['first_name']} {data['last_name']}; {'male' if data['gender'] == 'M' else 'female'}, {data['birth_year']}, {data['fav_color']}, {data['fav_food']}, {data['fav_city']})\n"
+    
     text += "\nRelationships (edges):\n"
-    for u, v, data in graph.edges(data=True):
+    edges = list(graph.edges(data=True))
+    random.shuffle(edges)
+    for u, v, data in edges:
         relation = graph.edges[u, v]['relation']
         text += f"({graph.nodes[u]['first_name']} {graph.nodes[u]['last_name']}) -[{relation}]-> ({graph.nodes[v]['first_name']} {graph.nodes[v]['last_name']})\n"
 
@@ -294,6 +300,8 @@ def save_llaga_dataset(llaga_datasets, output_dir):
         print('-'*50)
 
 # endregion
+# ------------------------------------------------------------------------------
+
 if __name__ == "__main__":
     print('-' * 50)
     print("Preparing family tree question-answering dataset!")
@@ -321,11 +329,13 @@ if __name__ == "__main__":
 
     
     # # --------- Save Text Dataset ----------
-    # text_datasets = prepare_text_dataset(raw_datasets, tokenizer, get_graph_labels)
-    # output_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
-    # save_text_dataset(text_datasets, output_dir)
+    print("Preparing and saving text dataset...")
+    text_datasets = prepare_text_dataset(raw_datasets, tokenizer, get_graph_labels)
+    output_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
+    save_text_dataset(text_datasets, output_dir)
+    print("Finished preparing and saving text dataset.")
 
     # --------- Save LLaGA Dataset ----------
-    llaga_datasets = prepare_llaga_dataset(raw_datasets)
-    output_dir_llaga = "./src/experiments/knowledge_graph_qa/family_tree_llaga_dataset"
-    save_llaga_dataset(llaga_datasets, output_dir_llaga)
+    # llaga_datasets = prepare_llaga_dataset(raw_datasets)
+    # output_dir_llaga = "./src/experiments/knowledge_graph_qa/family_tree_llaga_dataset"
+    # save_llaga_dataset(llaga_datasets, output_dir_llaga)

@@ -285,27 +285,28 @@ class KnowledgeGraphGenerator:
             for pr in projs: G.add_node(pr, type='project')
             for r in res: G.add_node(r, type='resource')
 
-            # 3. WORKS_ON (Geometric p=1/2)
+            # 3. WORKS_ON (Geometric p=2/3)
             for p in people:
-                num_projs = min(len(projs), np.random.geometric(p=1/2))
+                num_projs = min(len(projs), np.random.geometric(p=2/3))
                 for pr in random.sample(projs, num_projs):
                     G.add_edge(p, pr, relation='WORKS_ON')
 
             # 4. REPORTS_TO (Hierarchy)
             for i, p in enumerate(people):
-                if i > 0 and random.random() > 0.3:
+                # if i > 0 and random.random() > 0.3:
+                if i > 0:
                     boss = random.choice(people[:i]) # Only report to someone "above" you
                     G.add_edge(p, boss, relation='REPORTS_TO')
             
-            # 5. REQUIRES (Geometric p=1/3)
+            # 5. REQUIRES (Geometric p=3/5)
             for pr in projs:
-                num_res = min(len(res), np.random.geometric(p=1/3))
+                num_res = min(len(res), np.random.geometric(p=3/5))
                 for r in random.sample(res, num_res):
                     G.add_edge(pr, r, relation='REQUIRES')
             
-            # 6. CAN_ACCESS (Geometric p=1/4)
+            # 6. CAN_ACCESS (Geometric p=3/5)
             for p in people:
-                num_res = min(len(res), np.random.geometric(p=1/4))
+                num_res = min(len(res), np.random.geometric(p=3/5))
                 for r in random.sample(res, num_res):
                     G.add_edge(p, r, relation='CAN_ACCESS')
             
@@ -347,6 +348,20 @@ def print_label_stats(label_stats):
         no_pct = counts['No'] / total * 100 if total > 0 else 0
         print(f"{func_name:<40}: Yes={counts['Yes']} ({yes_pct:.1f}%), No={counts['No']} ({no_pct:.1f}%)")
 
+def print_size_stats(graphs):
+    # print distribution of node counts, edge counts and total node+edge counts
+    node_counts = [graph.number_of_nodes() for graph in graphs]
+    edge_counts = [graph.number_of_edges() for graph in graphs]
+    total_counts = [node_counts[i] + edge_counts[i] for i in range(len(graphs))]
+
+    print("=" * 50)
+    print("Graph Size Statistics:")
+    print("=" * 50)
+    print("Node Count: mean={:.1f}, std={:.1f}, min={}, max={}".format(np.mean(node_counts), np.std(node_counts), np.min(node_counts), np.max(node_counts)))
+    print("Edge Count: mean={:.1f}, std={:.1f}, min={}, max={}".format(np.mean(edge_counts), np.std(edge_counts), np.min(edge_counts), np.max(edge_counts)))
+    print("Total Count: mean={:.1f}, std={:.1f}, min={}, max={}".format(np.mean(total_counts), np.std(total_counts), np.min(total_counts), np.max(total_counts)))
+    print("=" * 50)
+
 def generate_dataset(train_count=1000, val_count=200, test_count=200, min_nodes=20, max_nodes=100):
     train_graphs = KnowledgeGraphGenerator().generate(train_count, min_nodes=min_nodes, max_nodes=max_nodes, train=True)
     val_graphs = KnowledgeGraphGenerator().generate(val_count, min_nodes=min_nodes, max_nodes=max_nodes, train=False)
@@ -355,8 +370,11 @@ def generate_dataset(train_count=1000, val_count=200, test_count=200, min_nodes=
 
 
 if __name__ == "__main__":
-    train_graphs, val_graphs, test_graphs = generate_dataset(train_count=1000, val_count=200, test_count=200, min_nodes=20, max_nodes=100)
-    print_example(train_graphs[0])
+    train_graphs, val_graphs, test_graphs = generate_dataset(train_count=200, val_count=20, test_count=50, min_nodes=30, max_nodes=40)
+    # print_example(train_graphs[0])
+
+    print_size_stats(train_graphs)
+    print_size_stats(test_graphs)
 
     train_label_stats = compute_label_stats(train_graphs)
     test_label_stats = compute_label_stats(test_graphs)

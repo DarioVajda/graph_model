@@ -126,12 +126,12 @@ def save_text_graph_dataset(graphs, path, params=None, per_graph_versions=1):
 
 
 if __name__ == "__main__":
-    VAL_COUNT = 150
-    TEST_COUNT = 250
-    TRAIN_COUNT = 1200
+    VAL_COUNT = 2
+    TEST_COUNT = 5
+    TRAIN_COUNT = 20
 
-    MIN_NODES = 40
-    MAX_NODES = 60
+    MIN_NODES = 30
+    MAX_NODES = 40
     raw_train_graphs, raw_val_graphs, raw_test_graphs = generate_dataset(train_count=TRAIN_COUNT, val_count=VAL_COUNT, test_count=TEST_COUNT, min_nodes=MIN_NODES, max_nodes=MAX_NODES)
     print(f"Generated {len(raw_train_graphs)} training graphs, {len(raw_val_graphs)} validation graphs, and {len(raw_test_graphs)} test graphs with node counts between {MIN_NODES} and {MAX_NODES}.")
 
@@ -158,7 +158,7 @@ if __name__ == "__main__":
         'get_graph_labels': GetGraphLabels(question_end=[ 32, 25 ], tokenizer=tokenizer), # this represents "A:"
     }
 
-    step_size = 2000
+    step_size = 5000
     raw_datasets = {
         f'train_{i*step_size}-{(i+1)*step_size}': train_dataset[i*step_size:(i+1)*step_size] for i in range((len(train_dataset) + step_size - 1) // step_size)
     }

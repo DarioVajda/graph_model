@@ -25,7 +25,7 @@ def load_graph_dataset_split(path, split):
     return dataset
 
 def load_text_dataset_split(path, split):
-    file = os.path.join(path, f"{split}_dataset.jsonl")
+    file = os.path.join(path, f"{split}.jsonl")
     if not os.path.exists(file):
         raise ValueError(f"No dataset file found for split '{split}' at path '{file}'")
 

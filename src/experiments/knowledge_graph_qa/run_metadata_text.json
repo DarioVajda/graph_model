@@ -1,0 +1,134 @@
+{
+    "1B_text_family_lora_v6": {
+        "date_time": "2026-04-19 18:31:36",
+        "dataset_name": "text_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_family_lora_v5": {
+        "date_time": "2026-04-19 16:13:04",
+        "dataset_name": "text_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_family_lora_v4": {
+        "date_time": "2026-04-19 15:18:19",
+        "dataset_name": "text_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_family_lora_v3": {
+        "date_time": "2026-04-19 14:39:30",
+        "dataset_name": "text_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_family_lora_v2": {
+        "date_time": "2026-04-19 13:40:31",
+        "dataset_name": "text_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 64,
+            "lora_alpha": 128,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_family_lora": {
+        "date_time": "2026-04-19 13:38:14",
+        "dataset_name": "text_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 64,
+            "lora_alpha": 128,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    }
+}

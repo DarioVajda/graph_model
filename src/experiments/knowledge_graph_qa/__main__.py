@@ -143,7 +143,7 @@ def training_run(
         save_steps=EVAL_EVERY,                                  # Number of steps between saving checkpoints
         metric_for_best_model="eval_em_accuracy",               # Metric to use for determining the best model
         greater_is_better=True,                                 # Higher classification_accuracy is better
-        save_total_limit=3,                                     # Maximum number of checkpoints to store
+        save_total_limit=1,                                     # Maximum number of checkpoints to store
         load_best_model_at_end=True,                            # Load the best model at the end of training
 
         # WandB logging:
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     args = parse_args()
     # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.2-1B --lora_r=32 --batch_size=4 --accumulation_steps=4 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
     # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.2-3B --lora_r=64 --batch_size=2 --accumulation_steps=8 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
-    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.1-8B --lora_r=64 --batch_size=1 --accumulation_steps=16 --learning_rate=1e-5 --bias_learning_rate=1e-2 --num_epochs=8
+    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.1-8B --lora_r=64 --batch_size=1 --accumulation_steps=16 --learning_rate=5e-5 --bias_learning_rate=1e-2 --num_epochs=8
 
     # --------------------------------------------------------------------------
     #region ----------------------- CONFIGURATION ------------------------------
