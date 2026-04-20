@@ -225,12 +225,12 @@ class KnowledgeGraphGenerator:
         questions = {} # map of func_name -> (question, answer) pairs
         problems = [
             # Easy
-            (works_on, [random_person, random_project]),
-            (reports_to, [random_person, random_person]),
-            (requires, [random_project, random_resource]),
-            (can_access, [random_person, random_resource]),
+            # (works_on, [random_person, random_project]),
+            # (reports_to, [random_person, random_person]),
+            # (requires, [random_project, random_resource]),
+            # (can_access, [random_person, random_resource]),
             # Medium
-            (works_on_project_which_requires, [random_person, random_resource]),
+            # (works_on_project_which_requires, [random_person, random_resource]),
             (reports_to_who_works_on, [random_person, random_project]),
             (report_to_same_person, [random_person, random_person]),
             (projects_require_same_resource, [random_project, random_project]),
@@ -370,15 +370,18 @@ def generate_dataset(train_count=1000, val_count=200, test_count=200, min_nodes=
 
 
 if __name__ == "__main__":
-    train_graphs, val_graphs, test_graphs = generate_dataset(train_count=200, val_count=20, test_count=50, min_nodes=30, max_nodes=40)
+    train_graphs, val_graphs, test_graphs = generate_dataset(train_count=200, val_count=20, test_count=50, min_nodes=30, max_nodes=50)
     # print_example(train_graphs[0])
 
     print_size_stats(train_graphs)
     print_size_stats(test_graphs)
 
     train_label_stats = compute_label_stats(train_graphs)
+    val_label_stats = compute_label_stats(val_graphs)
     test_label_stats = compute_label_stats(test_graphs)
     print('=' * 50)
     print_label_stats(train_label_stats)
+    print('=' * 50)
+    print_label_stats(val_label_stats)
     print('=' * 50)
     print_label_stats(test_label_stats)

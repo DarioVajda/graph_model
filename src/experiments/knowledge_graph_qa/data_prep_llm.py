@@ -106,12 +106,12 @@ def generate_labels(tokenized_sequences, target_seq=[32, 25], num_proc=None):
 #endregion
 
 if __name__ == "__main__":
-    VAL_COUNT = 150
-    TEST_COUNT = 250
-    TRAIN_COUNT = 1200
+    VAL_COUNT = 30
+    TEST_COUNT = 150
+    TRAIN_COUNT = 500
 
-    MIN_NODES = 40
-    MAX_NODES = 60
+    MIN_NODES = 30
+    MAX_NODES = 50
     raw_train_graphs, raw_val_graphs, raw_test_graphs = generate_dataset(train_count=TRAIN_COUNT, val_count=VAL_COUNT, test_count=TEST_COUNT, min_nodes=MIN_NODES, max_nodes=MAX_NODES)
     print(f"Generated {len(raw_train_graphs)} training graphs, {len(raw_val_graphs)} validation graphs, and {len(raw_test_graphs)} test graphs with node counts between {MIN_NODES} and {MAX_NODES}.")
 
@@ -144,7 +144,7 @@ if __name__ == "__main__":
         ]
 
         os.makedirs(save_path, exist_ok=True)
-        save_file = os.path.join(save_path, f"{split}_dataset.jsonl")
+        save_file = os.path.join(save_path, f"{split}.jsonl")
         with open(save_file, 'w') as f:
             for item in dataset:
                 f.write(json.dumps(item) + "\n")
@@ -159,5 +159,6 @@ if __name__ == "__main__":
                 total_examples += 1
             avg_tokens = total_tokens / total_examples if total_examples > 0 else 0
             print(f"Average tokenized length in {split} dataset: {avg_tokens:.2f} tokens")
+            # 30-50  OUTPUT: Average tokenized length in val dataset: 1100.03 tokens
             # 40-60  OUTPUT: Average tokenized length in val dataset: 2175.94 tokens
             # 50-100 OUTPUT: Average tokenized length in val dataset: 3290.71 tokens

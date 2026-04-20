@@ -275,7 +275,7 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description="Fine-tune a baseline text LLM on a specified dataset.")
 
-    parser.add_argument("--dataset_name", type=str, default="family", help="Directory containing the processed dataset. Should be 'kg_qa' or 'family'.")
+    parser.add_argument("--dataset_name", type=str, default="kg_qa", help="Directory containing the processed dataset. Should be 'kg_qa' or 'family'.")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B", help="Pre-trained model name or path.")
     parser.add_argument("--num_epochs", type=int, default=8, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=2, help="Training batch size.")
@@ -295,7 +295,7 @@ if __name__ == "__main__":
         raise ValueError(f"Invalid dataset name: {args.dataset_name}. Must be 'kg_qa' or 'family'.")
     
     if args.dataset_name == "kg_qa":
-        dataset_dir = "./src/experiments/knowledge_graph_qa/text_datasets/dataset_40-60"
+        dataset_dir = "./src/experiments/knowledge_graph_qa/text_datasets/dataset_30-50"
     else:
         dataset_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
         

@@ -47,8 +47,8 @@ def load_dataset(path, type='graph'):
 
 if __name__ == "__main__":
     ds_type = 'graph'
-    # dataset_path = f"./src/experiments/knowledge_graph_qa/{ds_type}_datasets/dataset_50-100"
-    dataset_path = f"./src/experiments/knowledge_graph_qa/family_tree_graph_dataset"
+    dataset_path = f"./src/experiments/knowledge_graph_qa/{ds_type}_datasets/dataset_30-50"
+    # dataset_path = f"./src/experiments/knowledge_graph_qa/family_tree_graph_dataset"
     train_dataset, val_dataset, test_dataset = load_dataset(dataset_path, type=ds_type)
 
     print(f"{ds_type.upper()} DATASET SIZES:")
@@ -61,6 +61,7 @@ if __name__ == "__main__":
         'test': test_dataset,
         'train': train_dataset,
     }
+    exit()
 
     from tqdm import tqdm
     from transformers import AutoTokenizer

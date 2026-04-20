@@ -1,4 +1,92 @@
 {
+    "1B_text_kg_qa_lora_v3": {
+        "date_time": "2026-04-19 21:39:20",
+        "dataset_name": "text_kg_qa",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_kg_qa_lora_v2": {
+        "date_time": "2026-04-19 21:39:02",
+        "dataset_name": "text_kg_qa",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_kg_qa_lora": {
+        "date_time": "2026-04-19 20:39:43",
+        "dataset_name": "text_kg_qa",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
+    "1B_text_family_lora_v7": {
+        "date_time": "2026-04-19 19:25:03",
+        "dataset_name": "text_family",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 8,
+        "learning_rate": 0.0001,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
     "1B_text_family_lora_v6": {
         "date_time": "2026-04-19 18:31:36",
         "dataset_name": "text_family",

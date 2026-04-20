@@ -126,12 +126,12 @@ def save_text_graph_dataset(graphs, path, params=None, per_graph_versions=1):
 
 
 if __name__ == "__main__":
-    VAL_COUNT = 2
-    TEST_COUNT = 5
-    TRAIN_COUNT = 20
+    VAL_COUNT = 30
+    TEST_COUNT = 150
+    TRAIN_COUNT = 500
 
     MIN_NODES = 30
-    MAX_NODES = 40
+    MAX_NODES = 50
     raw_train_graphs, raw_val_graphs, raw_test_graphs = generate_dataset(train_count=TRAIN_COUNT, val_count=VAL_COUNT, test_count=TEST_COUNT, min_nodes=MIN_NODES, max_nodes=MAX_NODES)
     print(f"Generated {len(raw_train_graphs)} training graphs, {len(raw_val_graphs)} validation graphs, and {len(raw_test_graphs)} test graphs with node counts between {MIN_NODES} and {MAX_NODES}.")
 
@@ -163,7 +163,7 @@ if __name__ == "__main__":
         f'train_{i*step_size}-{(i+1)*step_size}': train_dataset[i*step_size:(i+1)*step_size] for i in range((len(train_dataset) + step_size - 1) // step_size)
     }
     raw_datasets = {
-        # **raw_datasets,
+        **raw_datasets,
         'val': val_dataset,
         'test': test_dataset,
     }
@@ -179,7 +179,7 @@ if __name__ == "__main__":
     total_tokens, total_graphs = 0, 0
     for split, dataset in datasets.items():
         print(split)
-        for i in range(0, len(dataset), 12):
+        for i in range(0, len(dataset), 7):
             graph = dataset[i]
             print(f"  graph {i} has {len(graph['input_ids'])} nodes")
             total_graphs += 1
@@ -187,6 +187,7 @@ if __name__ == "__main__":
                 num_tokens = len(input_ids)
                 total_tokens += num_tokens
         break
-    print(f"\nAverage number of tokens in prompt node: {total_tokens / total_graphs:.2f}")
-    # 40-60:  Average number of tokens in prompt node: ~524 tokens
-    # 50-100: Average number of tokens in prompt node: ~850-900 tokens
+    print(f"\nAverage number of tokens: {total_tokens / total_graphs:.2f}")
+    # 30-50:  Average number of tokens: ~315 tokens
+    # 40-60:  Average number of tokens: ~524 tokens
+    # 50-100: Average number of tokens: ~850-900 tokens

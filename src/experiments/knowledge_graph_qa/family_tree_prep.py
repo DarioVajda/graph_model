@@ -207,7 +207,7 @@ def save_text_dataset(text_dataset, output_dir):
 # ------------------------------------------------------------------------------
 from sentence_transformers import SentenceTransformer
 
-def prepare_llaga_dataset(raw_dataset, encoder_model_name='all-MiniLM-L6-v2', device='cuda'):
+def prepare_llaga_dataset_old(raw_dataset, encoder_model_name='all-MiniLM-L6-v2', device='cuda'):
     """
     Converts raw graphs to LLaGA format and pre-computes node embeddings.
     """
@@ -277,6 +277,108 @@ def prepare_llaga_dataset(raw_dataset, encoder_model_name='all-MiniLM-L6-v2', de
             
     return prepared_dataset
 
+def prepare_llaga_dataset(raw_dataset, encoder_model_name='all-MiniLM-L6-v2', device='cuda'):
+    """
+    Convert raw family tree graphs to LLaGA format via an incidence graph 
+    to preserve relation types, and pre-computes node embeddings.
+    """
+    print(f"Loading SentenceTransformer '{encoder_model_name}' on {device}...")
+    encoder = SentenceTransformer(encoder_model_name, device=device)
+    
+    prepared_dataset = { 'train': [], 'val': [], 'test': [] }
+    global_graph_id = 0
+    
+    for split, examples in raw_dataset.items():
+        print(f"Embedding nodes for {split} split...")
+        for example in tqdm(examples, desc=f"Preparing LLaGA {split} split", total=len(examples)):
+            nx_graph = example["graph"]
+            question = example["question"]
+            answer = example["answer"]
+            
+            # 1. Create the ShareGPT-style Conversation
+            conversation = [
+                {
+                    "from": "human",
+                    "value": f"<graph>\nQuestion: {question}"
+                },
+                {
+                    "from": "gpt",
+                    "value": str(answer)
+                }
+            ]
+            
+            llaga_json = {
+                "id": f"family_tree_{split}_{global_graph_id}",
+                "graph_id": f"{split}_{global_graph_id}",
+                "conversations": conversation
+            }
+            
+            # 2. Convert to Incidence Graph
+            incidence_graph = nx.DiGraph()
+            
+            # Add original nodes with their formatted text descriptions
+            for n in nx_graph.nodes():
+                data = nx_graph.nodes[n]
+                text_desc = f"{data['first_name']} {data['last_name']}; {'male' if data['gender'] == 'M' else 'female'}, {data['birth_year']}, {data['fav_color']}, {data['fav_food']}, {data['fav_city']}"
+                incidence_graph.add_node(n, text=text_desc)
+                
+            # Add edge-nodes to preserve relationship data
+            for u, v, data in nx_graph.edges(data=True):
+                relation = data.get('relation')
+                edge_node_id = f"{u}_{relation}_{v}"
+                
+                if relation == "SPOUSE":
+                    # Skip duplicate processing if graph originally had bidirectional SPOUSE edges
+                    if str(u) > str(v):
+                        continue
+                        
+                    incidence_graph.add_node(edge_node_id, text="spouse")
+                    # P1 <-> SPOUSE <-> P2
+                    incidence_graph.add_edge(u, edge_node_id)
+                    incidence_graph.add_edge(v, edge_node_id)
+                    incidence_graph.add_edge(edge_node_id, u)
+                    incidence_graph.add_edge(edge_node_id, v)
+                    
+                elif relation == "CHILD":
+                    incidence_graph.add_node(edge_node_id, text="child")
+                    # P1 -> CHILD -> P2
+                    incidence_graph.add_edge(u, edge_node_id)
+                    incidence_graph.add_edge(edge_node_id, v)
+                else:
+                    raise ValueError(f"Unknown relation: {relation}")
+
+            # 3. Create PyG mapping and edge index from the INCIDENCE graph
+            node_mapping = {n: i for i, n in enumerate(incidence_graph.nodes())}
+            
+            edge_list = []
+            for u, v in incidence_graph.edges():
+                edge_list.append([node_mapping[u], node_mapping[v]])
+                
+            if len(edge_list) > 0:
+                edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+            else:
+                edge_index = torch.empty((2, 0), dtype=torch.long)
+                
+            # 4. Extract and Embed All Node Text Features
+            # Now includes both the people descriptions AND the relationship texts
+            node_texts = [incidence_graph.nodes[n]['text'] for n in incidence_graph.nodes()]
+            
+            # Compute embeddings on GPU in one batch per graph
+            with torch.no_grad():
+                x = encoder.encode(node_texts, convert_to_tensor=True, device=device)
+                
+            pyg_data = Data(x=x.cpu(), edge_index=edge_index)
+            
+            prepared_dataset[split].append({
+                "json_data": llaga_json,
+                "pyg_data": pyg_data,
+                "graph_id": llaga_json["graph_id"]
+            })
+            
+            global_graph_id += 1
+            
+    return prepared_dataset
+
 def save_llaga_dataset(llaga_datasets, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     
@@ -329,13 +431,13 @@ if __name__ == "__main__":
 
     
     # # --------- Save Text Dataset ----------
-    print("Preparing and saving text dataset...")
-    text_datasets = prepare_text_dataset(raw_datasets, tokenizer, get_graph_labels)
-    output_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
-    save_text_dataset(text_datasets, output_dir)
-    print("Finished preparing and saving text dataset.")
+    # print("Preparing and saving text dataset...")
+    # text_datasets = prepare_text_dataset(raw_datasets, tokenizer, get_graph_labels)
+    # output_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
+    # save_text_dataset(text_datasets, output_dir)
+    # print("Finished preparing and saving text dataset.")
 
     # --------- Save LLaGA Dataset ----------
-    # llaga_datasets = prepare_llaga_dataset(raw_datasets)
-    # output_dir_llaga = "./src/experiments/knowledge_graph_qa/family_tree_llaga_dataset"
-    # save_llaga_dataset(llaga_datasets, output_dir_llaga)
+    llaga_datasets = prepare_llaga_dataset(raw_datasets)
+    output_dir_llaga = "./src/experiments/knowledge_graph_qa/family_tree_llaga_dataset_v2"
+    save_llaga_dataset(llaga_datasets, output_dir_llaga)
