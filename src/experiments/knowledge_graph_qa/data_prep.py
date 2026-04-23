@@ -171,7 +171,7 @@ if __name__ == "__main__":
         print(f"{split.upper()} dataset has {len(dataset)} examples.")
 
     datasets = {}
-    save_path = f"./src/experiments/knowledge_graph_qa/graph_datasets/dataset_{MIN_NODES}-{MAX_NODES}"
+    save_path = f"./src/experiments/knowledge_graph_qa/graph_datasets/dataset_{MIN_NODES}-{MAX_NODES}_v2"
     for split, dataset in raw_datasets.items():
         print(f"\n{split.upper()} DATASET:")
         datasets[split] = save_text_graph_dataset(dataset, os.path.join(save_path, split), params=params, per_graph_versions=1)

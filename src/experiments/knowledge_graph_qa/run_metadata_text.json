@@ -1,4 +1,26 @@
 {
+    "1B_text_kg_qa_lora_v4": {
+        "date_time": "2026-04-23 09:04:03",
+        "dataset_name": "text_kg_qa",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "num_epochs": 10,
+        "learning_rate": 0.0005,
+        "lora_config": {
+            "r": 32,
+            "lora_alpha": 64,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        }
+    },
     "1B_text_kg_qa_lora_v3": {
         "date_time": "2026-04-19 21:39:20",
         "dataset_name": "text_kg_qa",

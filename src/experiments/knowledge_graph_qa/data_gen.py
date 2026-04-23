@@ -364,8 +364,8 @@ def print_size_stats(graphs):
 
 def generate_dataset(train_count=1000, val_count=200, test_count=200, min_nodes=20, max_nodes=100):
     train_graphs = KnowledgeGraphGenerator().generate(train_count, min_nodes=min_nodes, max_nodes=max_nodes, train=True)
-    val_graphs = KnowledgeGraphGenerator().generate(val_count, min_nodes=min_nodes, max_nodes=max_nodes, train=False)
-    test_graphs = KnowledgeGraphGenerator().generate(test_count, min_nodes=min_nodes, max_nodes=max_nodes, train=False)
+    val_graphs = KnowledgeGraphGenerator().generate(val_count, min_nodes=min_nodes, max_nodes=max_nodes, train=True)
+    test_graphs = KnowledgeGraphGenerator().generate(test_count, min_nodes=min_nodes, max_nodes=max_nodes, train=True)
     return train_graphs, val_graphs, test_graphs
 
 
@@ -385,3 +385,4 @@ if __name__ == "__main__":
     print_label_stats(val_label_stats)
     print('=' * 50)
     print_label_stats(test_label_stats)
+    print('=' * 50)

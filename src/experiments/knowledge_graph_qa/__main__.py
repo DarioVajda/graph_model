@@ -274,9 +274,9 @@ def parse_args():
 if __name__ == "__main__":
     # parse command line arguments
     args = parse_args()
-    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.2-1B --lora_r=32 --batch_size=4 --accumulation_steps=4 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
-    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.2-3B --lora_r=64 --batch_size=2 --accumulation_steps=8 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
-    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=family --model_name=meta-llama/Llama-3.1-8B --lora_r=64 --batch_size=1 --accumulation_steps=16 --learning_rate=5e-5 --bias_learning_rate=1e-2 --num_epochs=8
+    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=kg_qa --model_name=meta-llama/Llama-3.2-1B --lora_r=32 --batch_size=4 --accumulation_steps=4 --learning_rate=5e-4 --bias_learning_rate=1e-2 --num_epochs=8
+    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=kg_qa --model_name=meta-llama/Llama-3.2-3B --lora_r=64 --batch_size=2 --accumulation_steps=8 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
+    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=kg_qa --model_name=meta-llama/Llama-3.1-8B --lora_r=64 --batch_size=1 --accumulation_steps=16 --learning_rate=5e-5 --bias_learning_rate=1e-2 --num_epochs=8
 
     # --------------------------------------------------------------------------
     #region ----------------------- CONFIGURATION ------------------------------
@@ -285,7 +285,7 @@ if __name__ == "__main__":
         raise ValueError(f"Invalid dataset name: {args.dataset_name}. Must be 'kg_qa' or 'family'.")
     
     if args.dataset_name == "kg_qa":
-        dataset_dir = "./src/experiments/knowledge_graph_qa/graph_datasets/dataset_40-60"
+        dataset_dir = "./src/experiments/knowledge_graph_qa/graph_datasets/dataset_30-50"
     else:
         dataset_dir = "./src/experiments/knowledge_graph_qa/family_tree_graph_dataset"
     dataset_name = f"graph_{args.dataset_name}"
