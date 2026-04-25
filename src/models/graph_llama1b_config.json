@@ -8,9 +8,9 @@
   "eos_token_id": 128001,
   "graph_attn_bias": {
     "spd": true,
-    "laplacian": true,
+    "laplacian": false,
     "max_spd": 16,
-    "rwse": true,
+    "rwse": false,
     "rrwp": true,
     "max_rw_steps": 4,
     "magnetic": true,

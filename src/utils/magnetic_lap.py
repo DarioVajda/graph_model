@@ -2,12 +2,12 @@ import numpy as np
 import networkx as nx
 import torch
 
-def get_magnetic_laplacian_coords(graphs, q=0.25):
+def get_magnetic_laplacian_coords(graphs, q=0.25, use_gpu=True):
     """
     Optimized Magnetic Laplacian spectral coordinates using Batched PyTorch.
     Supports single nx.Graph or list of nx.Graph.
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and use_gpu else "cpu")
     
     # 1. Handle Input Consistency
     is_single = isinstance(graphs, nx.Graph)

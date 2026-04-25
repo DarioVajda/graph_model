@@ -6,7 +6,7 @@ import networkx as nx
 import numpy as np
 import torch
 
-def compute_rrwp(graphs, max_distance: int = 8):
+def compute_rrwp(graphs, max_distance: int = 8, use_gpu: bool = True):
     """
     Highly optimized batched RRWP computation.
     Args:
@@ -16,7 +16,7 @@ def compute_rrwp(graphs, max_distance: int = 8):
         If single graph: dict mapping (i, j) to list of floats.
         If list of graphs: list of flattened numpy arrays.
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and use_gpu else "cpu")
     
     # Handle single graph input for backward compatibility
     is_single = isinstance(graphs, nx.Graph)

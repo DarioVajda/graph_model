@@ -316,9 +316,9 @@ class TextGraphDataset(Dataset):
             
         self._hf_dataset = self._hf_dataset.add_column("shortest_path_dists", spd_list)
 
-    def compute_shortest_path_distances(self, cutoff=None):
+    def compute_shortest_path_distances(self, cutoff=None, use_gpu=True):
         # 1. Setup Device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() and use_gpu else "cpu")
         print(f"Computing Shortest Paths on: {device}")
 
         # 2. Define the Mapping Function
@@ -384,7 +384,7 @@ class TextGraphDataset(Dataset):
             self._hf_dataset = self._hf_dataset.remove_columns("rwse")
         self._hf_dataset = self._hf_dataset.add_column("rwse", rwse_dataset_list)
 
-    def compute_rrwp(self, max_rrwp_steps=8):
+    def compute_rrwp(self, max_rrwp_steps=8, use_gpu=True):
         """
         Optimized RRWP using batch tensor operations.
         """
@@ -399,7 +399,7 @@ class TextGraphDataset(Dataset):
             
             # Compute everything in one GPU pass
             # This returns a list of flattened numpy arrays
-            rrwp_batch = compute_rrwp(graph_objects, max_distance=max_rrwp_steps)
+            rrwp_batch = compute_rrwp(graph_objects, max_distance=max_rrwp_steps, use_gpu=use_gpu)
             
             return {"rrwp": rrwp_batch}
 
@@ -412,7 +412,7 @@ class TextGraphDataset(Dataset):
             desc=f"Batched GPU RRWP (steps: {max_rrwp_steps})"
         )
 
-    def compute_magnetic_lap(self, q=0.25):
+    def compute_magnetic_lap(self, q=0.25, use_gpu=True):
         """
         High-speed Batched Magnetic Laplacian calculation.
         """
@@ -428,7 +428,7 @@ class TextGraphDataset(Dataset):
             
             # Batch process on GPU
             # V_list contains (n, n, 2) arrays, L_list contains (n,) arrays
-            V_list, L_list = get_magnetic_laplacian_coords(graph_objects, q=q)
+            V_list, L_list = get_magnetic_laplacian_coords(graph_objects, q=q, use_gpu=use_gpu)
             
             # Flatten for Arrow storage compatibility
             # We use .reshape(-1) which is faster than .flatten() in many cases

@@ -11,6 +11,7 @@ import random
 from transformers import TrainingArguments, AutoTokenizer, TrainerCallback
 from peft import LoraConfig, get_peft_model
 import numpy as np
+import gc
 
 #region -------- Code for model intialization and parameter selection --------
 def init_model(model_name, device, bias_params):
@@ -103,6 +104,7 @@ def training_run(
     model, 
     train_dataset, 
     eval_dataset, 
+    test_dataset,
     collator, 
     run_name, 
     num_epochs=3, 
@@ -115,8 +117,6 @@ def training_run(
     eval_every=40,
     gradient_checkpointing=True,
 ):
-    # if label_options is None or pad_token_id is None:
-    #     raise ValueError("Label options and pad token ID must be provided for the training run.")
     if gradient_checkpointing:
         print("Gradient checkpointing is ENABLED. This will save memory but may increase training time.")
     else:
@@ -155,7 +155,7 @@ def training_run(
         learning_rate=learning_rate,                            # The initial learning rate for Adam
         lr_scheduler_type="cosine_with_min_lr",                 # Type of learning rate scheduler to use
         lr_scheduler_kwargs={"min_lr": learning_rate/10},       # Additional arguments for the learning rate scheduler
-        warmup_steps=TOTAL_STEPS // 10,                         # Number of steps for the warmup phase (when the learning rate is increasing linearly)
+        warmup_steps=TOTAL_STEPS // 10,                         # Number of steps for the warmup phase
         weight_decay=0.1,                                       # Weight decay to apply (if not zero)
     )
 
@@ -177,9 +177,108 @@ def training_run(
         bias_lr=bias_learning_rate,
     )
 
+    # 1. Execute the main training loop
     trainer.train()
-    # resume training from a checkpoint
-    # trainer.train(resume_from_checkpoint="/shared/workspace/povejmo/graph_model/checkpoints/cora_hops2_neighbors30_random_abstracts_p0.2_lora/checkpoint-240")
+
+    # =========================================================================
+    # 2. TEST DATASET EVALUATION LOOP ON TOP 3 SAVED CHECKPOINTS
+    # =========================================================================
+    print("\n" + "="*70)
+    print("Training Complete. Locating Top 3 Saved Checkpoints for Evaluation...")
+    print("="*70)
+
+    output_dir = training_args.output_dir
+    # Get all checkpoint directories left by the Trainer (since save_total_limit=3)
+    checkpoint_dirs = [
+        os.path.join(output_dir, d) 
+        for d in os.listdir(output_dir) 
+        if d.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, d))
+    ]
+
+    eval_results = []
+    
+    # Iterate and test each saved checkpoint
+    for ckpt_dir in checkpoint_dirs:
+        print(f"\nEvaluating checkpoint: {ckpt_dir}")
+        
+        # Load the checkpoint model using your custom loader logic
+        ckpt_model = GraphLlamaForCausalLM.from_pretrained(ckpt_dir)
+        ckpt_model.to(get_device())
+        ckpt_model.eval()
+
+        # Dummy arguments strictly for evaluation to disable wandb logging
+        eval_args = TrainingArguments(
+            output_dir="./eval_temp",
+            per_device_eval_batch_size=batch_size,
+            report_to="none", 
+            do_train=False,
+            do_eval=True,
+        )
+
+        eval_trainer = GraphTrainer(
+            model=ckpt_model,
+            args=eval_args,
+            eval_dataset=test_dataset,
+            data_collator=collator,
+            compute_metrics=compute_exact_match,
+        )
+
+        # Run evaluation and prepend 'test_' to metric keys
+        metrics = eval_trainer.evaluate(metric_key_prefix="test")
+        eval_results.append((ckpt_dir, metrics))
+
+        # Cleanup memory to prevent OOM before loading the next checkpoint
+        del ckpt_model
+        del eval_trainer
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    # Sort results descending based on exact match accuracy on the test set
+    eval_results.sort(key=lambda x: x[1].get("test_em_accuracy", 0.0), reverse=True)
+
+    # Prepare to append to the JSON file
+    output_file = "./src/experiments/benchmarks/test_results.json"
+    if os.path.exists(output_file):
+        with open(output_file, "r") as f:
+            all_results = json.load(f)
+    else:
+        all_results = {}
+
+    suffixes = ["_first", "_second", "_third"]
+    
+    print("\n" + "="*70)
+    print("FINAL TEST EVALUATION RESULTS")
+    print("="*70)
+    
+    for i, (ckpt_dir, metrics) in enumerate(eval_results):
+        suffix = suffixes[i] if i < len(suffixes) else f"_{i+1}th"
+        
+        # Create a clean key for the JSON file 
+        checkpoint_name = os.path.basename(os.path.normpath(ckpt_dir))
+        run_key = f"{run_name}_{checkpoint_name}{suffix}"
+        
+        # Avoid overriding previous testing iterations manually triggered
+        if run_key in all_results:
+            version = 2
+            while f"{run_key}_v{version}" in all_results:
+                version += 1
+            run_key = f"{run_key}_v{version}"
+
+        # Place this new evaluation at the top of the dictionary
+        all_results = {run_key: metrics, **all_results}
+
+        # Print cleanly to the console
+        print(f"\n--- Checkpoint Rank {i+1} {suffix.strip('_').upper()} ---")
+        print(f"Path: {ckpt_dir}")
+        for key, value in metrics.items():
+            print(f"  {key}: {value}")
+
+    # Write everything back to disk
+    with open(output_file, "w") as f:
+        json.dump(all_results, f, indent=4)
+        
+    print(f"\nAll checkpoint metrics successfully appended to {output_file}.")
+
 
 def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
     """
@@ -237,10 +336,10 @@ def parse_args():
 
     # general parameters
     parser.add_argument("--dataset_name", type=str, default="cora_hops2_neighbors60_target_abstract", help="Directory containing the processed dataset.")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B", help="Pre-trained model name or path.")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-3B", help="Pre-trained model name or path.")
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=4, help="Training batch size.")
-    parser.add_argument("--accumulation_steps", type=int, default=8, help="Number of steps to accumulate gradients before performing an optimizer step.")
+    parser.add_argument("--batch_size", type=int, default=1, help="Training batch size.")
+    parser.add_argument("--accumulation_steps", type=int, default=32, help="Number of steps to accumulate gradients before performing an optimizer step.")
     parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate for the optimizer.")
     parser.add_argument("--bias_learning_rate", type=float, default=5e-2, help="Learning rate for the bias parameters.")
     parser.add_argument("--eval_every", type=int, default=40, help="Number of steps between evaluations.")
@@ -322,18 +421,20 @@ if __name__ == "__main__":
     # --------------------------------------------------------------------------
     #region ----------------------- LOAD DATASETS ------------------------------
     # --------------------------------------------------------------------------
-    datasets = load_dataset(dataset_dir, train=True, val=True, test=False)
+    
+    datasets = load_dataset(dataset_dir, train=True, val=True, test=True)
     train_dataset = datasets["train"]
     eval_dataset = datasets["val"]
+    test_dataset = datasets["test"]
 
     collator = GraphCollator()
 
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Eval dataset size: {len(eval_dataset)}")
+    print(f"Test dataset size: {len(test_dataset)}")
 
     #endregion
     # --------------------------------------------------------------------------
-
 
     # --------------------------------------------------------------------------
     #region ---------------- FINE TUNE SELECTED PARAMETERS ---------------------
@@ -346,6 +447,7 @@ if __name__ == "__main__":
         model=model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        test_dataset=test_dataset,      # <--- MODIFICATION: Pass test dataset
         collator=collator,
         run_name=RUN_NAME,
         num_epochs=NUM_EPOCHS,
