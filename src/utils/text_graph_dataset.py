@@ -33,7 +33,7 @@ class TextGraphDataset(Dataset):
     Backend: Hugging Face Datasets (Arrow) + NetworkX (Topology).
     """
 
-    def __init__(self, graphs: List[nx.Graph], _hf_dataset: Optional[HFDataset] = None, dataset_label: Optional[str] = None, per_graph_versions=1):
+    def __init__(self, graphs: List[nx.Graph] = None, _hf_dataset: Optional[HFDataset] = None, dataset_label: Optional[str] = None, per_graph_versions=1):
         """
         Args:
             graphs: List of NetworkX graphs. Nodes must have 'text' attribute. Should have N x per_graph_versions graphs structured like this: [g1_v1,... g1_vk, g2_v1,... g2_vk, ...] where k=per_graph_versions. The prompt node index should be stored in graph.graph['prompt_node']
@@ -41,6 +41,9 @@ class TextGraphDataset(Dataset):
             dataset_label: Optional label for the dataset.
             per_graph_versions: Number of versions of each graph, item i will return one of the versions of graph i (used for data augmentation, default=1 means no augmentation)
         """
+        if graphs is None:
+            graphs = []
+
         self.per_graph_versions = per_graph_versions
 
         if _hf_dataset is not None:
@@ -111,6 +114,11 @@ class TextGraphDataset(Dataset):
          - 'input_ids'                  ---> List of num_nodes lists of token ids (tokenized input for each node)
          - 'labels'                     ---> Tensor of labels for the prompt node
         """
+        # Handle slicing to split the dataset (e.g., train_ds = dataset[:100])
+        if isinstance(idx, slice):
+            indices = list(range(*idx.indices(len(self))))
+            return self.select(indices)
+
         # 0. Calculate the actual index in the underlying dataset considering per_graph_versions
         version = random.randint(0, self.per_graph_versions - 1)
         idx = idx * self.per_graph_versions + version # eg. if idx=52, per_graph_versions=4 => new idx can be 208, 209, 210, or 211 (randomly selected) which correspond to different versions of the same graph
@@ -170,6 +178,29 @@ class TextGraphDataset(Dataset):
             item['labels'] = torch.tensor(item['labels'], dtype=torch.long)
 
         return item
+
+    def select(self, indices: List[int]) -> 'TextGraphDataset':
+        """
+        Creates a new TextGraphDataset containing only the specified graph indices.
+        Perfect for creating train/val/test splits.
+        """
+        # 1. Map the logical graph indices to the physical indices (handling augmented versions)
+        actual_indices = []
+        for i in indices:
+            for v in range(self.per_graph_versions):
+                actual_indices.append(i * self.per_graph_versions + v)
+                
+        # 2. Subset BOTH the raw NetworkX graphs and the Hugging Face dataset 
+        # using the exact same physical indices to ensure perfect alignment
+        subset_graphs = [self.graphs[i] for i in actual_indices]
+        subset_hf = self._hf_dataset.select(actual_indices)
+        
+        # 3. Return a new instantiated dataset
+        return TextGraphDataset(
+            graphs=subset_graphs, 
+            _hf_dataset=subset_hf, 
+            per_graph_versions=self.per_graph_versions
+        )
 
     def __add__(self, other: 'TextGraphDataset') -> 'TextGraphDataset':
         """Allows merging two TextGraphDatasets using the '+' operator."""

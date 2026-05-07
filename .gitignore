@@ -6,6 +6,7 @@ hf_token.txt
 *llama_report.jsonl
 
 src/kernels/
+src/graph_attn_tests/
 
 *.gtds/
 job_logs/

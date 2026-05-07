@@ -10,7 +10,7 @@
 #SBATCH --job-name=train_graph_model
 #SBATCH --output=job_logs/benchmark_%j.out
 
-cd /d/hpc/home/dv70648/graph_model
+cd ~/graph_model
 pwd
 
 # USE WITH A100/H100 GPUS:
@@ -21,7 +21,7 @@ source .venv/bin/activate
 source ./login.sh
 
 # Run the python custom task training script
-python3 -m src.experiments.knowledge_graph_qa \
+python3 -m src.experiments.our_tests \
   --dataset_name=kg_qa \
   --model_name=meta-llama/Llama-3.2-1B \
   --lora_r=32 \
@@ -30,7 +30,7 @@ python3 -m src.experiments.knowledge_graph_qa \
   --learning_rate=5e-4 \
   --bias_learning_rate=3e-2 \
   --num_epochs=10
-# python3 -m src.experiments.knowledge_graph_qa.train_llm_baseline \
+# python3 -m src.experiments.our_tests.train_llm_baseline \
 #   --dataset_name=kg_qa \
 #   --model_name=meta-llama/Llama-3.2-1B \
 #   --lora_r=32 \

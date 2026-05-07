@@ -1,6 +1,8 @@
-## Expressiveness of Graph-aware Positional Encodings
+## Expressiveness of our Graph-aware Positional Encodings
 
-In this experiment, I will try to train both the GraphLlamaModel and the LlamaModel on a simple task to show that the modified graph-aware positional encodings empower the LLM to see graphs, without having explicit information about edges in the token sequence.
+**This experiment is used to generate the simulated message passing visualisation in our paper! See [this section](#replate-the-results) for instructions on how to replicate the experimental results.**
+
+In this experiment, we will try to train both the GraphLlamaModel and the LlamaModel on a simple task to show that the modified graph-aware positional encodings empower the LLM to see graphs, without having explicit information about edges in the token sequence.
 
 ### Problem setup
 - The model is given a set of $N$ node labels $l_1, l_2,... l_N$ (possibly letters or numbers).
@@ -16,5 +18,16 @@ In this experiment, I will try to train both the GraphLlamaModel and the LlamaMo
 ### Findings
 Success ✅
 
-### **Conclusion**
-The modified Llama model DOES SEE GRAPHS.
+## Replate the Results
+
+To train the model on our synthetic task, run the following command:
+```
+python3 -m src.experiments.expressiveness
+```
+Make sure that the model is being trained on the "EASY" variant of the problem, for quicker convergence and clearer visualisation.
+
+To visualise the attention map, run:
+```
+python3 -m src.utils.plot_attention
+```
+Again, make sure that the correct checkpoint paths are used in the plot_attention module.

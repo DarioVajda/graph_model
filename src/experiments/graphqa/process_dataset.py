@@ -275,11 +275,11 @@ def process_dataset(dataset_dir, output_dir, graph_type="standard", problem_type
         ds.compute_labels(get_graph_labels)
 
         # Compute other spectral features for each graph in the dataset
-        ds.compute_laplacian_coordinates(params.get("laplacian_embedding_dim", 16))
-        ds.compute_shortest_path_distances()
-        ds.compute_rwse(params.get("max_rwse_steps", 16))
-        ds.compute_rrwp(params.get("max_rrwp_steps", 16))
-        ds.compute_magnetic_lap(params.get("magnetic_laplacian_q", 0.25))
+        # ds.compute_laplacian_coordinates(params.get("laplacian_embedding_dim", 16))
+        ds.compute_shortest_path_distances(use_gpu=False)
+        # ds.compute_rwse(params.get("max_rwse_steps", 16))
+        ds.compute_rrwp(params.get("max_rrwp_steps", 16), use_gpu=False)
+        ds.compute_magnetic_lap(params.get("magnetic_laplacian_q", 0.25), use_gpu=False)
 
     dataset_post_processing(train_ds, question_end, spectral_params)
     dataset_post_processing(test_ds, question_end, spectral_params)

@@ -121,7 +121,7 @@ if __name__ == "__main__":
         'train': raw_train_graphs,
     }
 
-    save_path = f"./src/experiments/knowledge_graph_qa/text_datasets/dataset_{MIN_NODES}-{MAX_NODES}"
+    save_path = f"./src/experiments/our_tests/text_datasets/dataset_{MIN_NODES}-{MAX_NODES}"
     
     print("Loading tokenizer...")
     from transformers import AutoTokenizer

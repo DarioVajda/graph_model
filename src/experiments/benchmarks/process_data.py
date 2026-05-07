@@ -283,16 +283,16 @@ class GetGraphLabels:
 
 
 if __name__ == "__main__":
-    setup_seed(52)
+    setup_seed(42)
     datasets = [ 
         # ('cora', get_titles_and_target_abstract, 60),
         # ('cora', get_titles_and_neighbor_abstracts, 15),
         # ('cora', GetRandomAbstracts(p=0.2), 20),
-        # ('ogbn-arxiv', get_titles_and_target_abstract, 60), 
+        ('ogbn-arxiv', get_titles_and_target_abstract, 60), 
         # ('ogbn-arxiv', GetRandomAbstracts(p=0.2), 20),
         # ('pubmed', get_titles_and_target_abstract, 60), 
         # ('reddit', GetTruncatedRedditText(max_length=64), 60),
-        ('reddit', get_more_target_text, 60),
+        # ('reddit', get_more_target_text, 60),
     ]
     instructions = {
         'cora':         'Q: Given this paper citation graph, classify this paper into 7 classes: Case_Based, Genetic_Algorithms, Neural_Networks, Probabilistic_Methods, Reinforcement_Learning, Rule_Learning, Theory. Please tell me which class does this paper belong to?\nA: ',
@@ -300,7 +300,7 @@ if __name__ == "__main__":
         'pubmed':       'Q: Given this paper citation graph, classify this paper into 3 classes: Diabetes Mellitus Experimental, Diabetes Mellitus Type1, Diabetes Mellitus Type2. Please tell me which class does this paper belong to?\nA: ',
         'reddit':       'Q: Given this user reddit user post interaction graph, classify this reddit user into 2 classes: Normal Users and Popular Users. Please tell me which class does this reddit user belong to?\nA: ',
     }
-    NUM_SAMPLES = 8
+    NUM_SAMPLES = 1
     MAX_VAL_SAMPLES = 2000e10
     MAX_TRAIN_SAMPLES = 5000e10
 

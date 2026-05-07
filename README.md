@@ -1,63 +1,48 @@
-# Towards Native Unification of Graph and Text Modalities
+# Teaching LLMs to See Graphs: Unifying Text and Structural Reasoning
 
-### Dario Vajda, University of Ljubljana
-This is a research project I am working on as student and a Machine Learning researcher at Faculty of Computer and Information Science in Ljubljana, with the goal of empowering LLMs to natively process graph data. 
-
-I believe this original model architecture will help solve LLM hallucinations, and also bridge the gap between foundation models for sequential text, Geometric Deep Learning and Relational Deep Learning.
-
-## TODO List
-1. ✅ Evaluate the model (1B) on OGBN-Arxiv, Cora, Reddit, and Pubmed datasets.
-2. ✅ Test the model with different sized neighbourhoods.
-3. ✅ Perform a leave-one-out ablation study on all benchmarks for the PEs.
-5. 🔄 Find other benchmarks to evaluate the model on.
-4. 🔜 Test scaling with respect to model size (probably the meta-llama/Llama-3.1-8B model).
+### Anonymous Author, University Name
 
 
 ## This Codebase
 
-This is a repository with all of the code used for my research – it includes low-level architecture implementations, data processing, experiments, and evaluation scripts. Moreover, it captures the entire raw research process I am going through and is ready for straight-forward reproduction.
+This is a repository with all of the code used for this research project — it includes low-level architecture implementations, data processing, experiments, and evaluation scripts. 
 
-## Research Overview
-The main motivation for this research project is finding a way to overcome a core limitation that traditional Large Language Models (LLMs) have - they operate purely on sequential data. However, as modern LLMs can be taught of as a special case of a Graph Transformer (GT), it provokes the idea of unifying the functionalities of LLMs and general GTs. 
+File structure:
+```
+graph_model/
+  └── plots/                            # Visualizations and plots generated during data analysis.
+  └── src/                              # The main source code directory.
+      ├── experiments/                  # specific experiment setups and configurations.
+      │   ├── backward_compatibility/   # Code for the backward compatibility test.
+      │   ├── benchmarks/               # Scripts used for TAG benchmark training and evauluation.
+      │   ├── expressiveness/           # Code for expressiveness analysis (also used for the message passing visualisation)
+      │   ├── graphqa/                  # Code for GraphQA benchmark experiments.
+      │   ├── our_tests/                # Family Tree and Knowledge Graph QA experiments
+      │   └── permutation_equivariance/ # Code for permutation the equivariance test.
+      ├── models/                       # Implementation of the custom architecture.
+      └── utils/                        # general-purpose utility functions and helper scripts.
+  ├── .gitignore                        # specifies intentionally untracked files to ignore.
+  ├── hf_login.sh                       # Helper script for logging into the Hugging Face Hub. (private)
+  └── wandb_login.sh                    # Helper script for logging into Weights & Biases (WandB). (private)
+  ├── login.sh                          # A script running hf_login and wandb_login.
+  ├── README.md                         # Project documentation (this file).
+  ├── requirements.in                   # High-level specification of project dependencies.
+  ├── requirements.txt                  # A generated and locked file of exact project dependencies.
+```
 
-To unify the graph and text modality, all data would be represented with an underlying graph structure, where all nodes (and possibly edges too) are pieces of text. This global graph would be processed by a GT-like model which would take into account both the global graph structure and also the relative positions of text tokens inside each node. This architecture enables LLMs to see graphs in a very parameter-efficient way, training less than 0.01% of the total number of LLM parameters.
+## Working with GTLM
 
+The dependencies are managed with `pip-tools`, so that the process of tracking the required libraries is easier.
 
+### Environment setup:
+```
+python -m venv .venv        # Create a new python environment
+source .venv/bin/activate   # Activate the environment
+pip install pip-tools       # Download pip-tools
+pip-compile                 # Compile the full requirements.txt file
+pip-sync                    # Install all requirements
+```
 
-## Base Architecture Innovation: Graph-Aware Relative Positional Encodings
-The main innovation of this approach is the combination of relative positional embeddings, traditionally used by LLMs such as RoPE, and positional encodings used for graphs. To maintain backward compatibility and leverage the pretrained knowledge of the LLM, the relative sequence positional encoding preserves the original approach used by the given LLM, with the only modification being that the token indices are reset for every node individually. 
+From now on, we will assume that each program is ran inside of the `.venv` environment.
 
-The model injects structural graph information directly into the self-attention computation via additive biases. The raw attention score matrix for the $h$-th attention head within the $l$-th layer is calculated as:
-
-$$A_{i,j}^{(l,h)} = \frac{Q_{i}^{(l,h)} \cdot (K_{j}^{(l,h)})^T}{\sqrt{d_{head}}} + b_{graph}^{(l,h)}(i,j)$$
-
-Where $b_{graph}$ represents the sum of selected graph-aware attention biases. This architecture produces the exact same attention scores between two tokens within the same node, under the simple assumption that the bias term is equal to 0 when the distance is 0.
-
-### Available Attention Biases
-The custom attention layer supports five distinct types of graph-aware biases:
-
-* **Shortest Path Distance (SPD) Bias:** A learned lookup table mapping the shortest path distance (SPD) of the corresponding nodes to an attention bias. 
-
-$$
-b_{ij} = \text{spd-weights}[d_{ij}] \quad \text{if } d_{ij} > 0 \text{ else } 0
-$$
-
-* **Laplacian Bias:** This bias term is proportional to the $L_2$-distance of the Laplacian embeddings...
-
-$$
-b_{ij} = w_k \cdot D_{L_2}(s_i, s_j)
-$$
-
-* **Random Walk Structural Encoding (RWSE) Bias:** Maps the $L_2$ distance between the random walk structural features of two nodes into a scalar bias value.
-  $$b_{ij} = w_k \cdot D_{L_2}(r_i, r_j)$$
-
-* **Relative Random Walk Probability (RRWP) Bias:** Based on the multi-hop probability of a random walk starting at node $i$ and landing on node $j$. A 2-layer MLP maps the vector of transition probabilities directly to the attention heads.
-  $$b_{ij} = \text{MLP}(\text{RRWP}_{ij}) \quad \text{if } i \neq j \text{ else } 0$$
-
-## Intended Use Cases
-By fundamentally changing how the LLM perceives input context, this model unlocks several capabilities:
-
-* **Native Knowledge Graph Ingestion (GraphRAG):** Instead of flattening and serializing complex knowledge graphs for the LLM prompt, this model can natively input knowledge graphs using a GraphRAG-like algorithm. Allowing the LLM to traverse explicit graph structures directly in its attention layers can significantly reduce hallucinations common in flattened context windows.
-* **Mixed Modality Few-Shot Reasoning:** The model will be able to perform many different tasks with text and/or graphs with few-shot prompts.
-* **Text-Heavy Node Classification:** Excels at tasks where nodes contain rich textual information that dictates their category within a wider network, such as the OGBN-Arxiv benchmark.
-* **Graph-Level Classification:** Applicable to domains requiring holistic understanding of a graph's structure, such as chemical molecule data tested through the MoleculeNet benchmark suite.
+The instructions for each individual experiment can be found in the appropriate directories inside `src/experiments/`, while the core architectural logic is implemented in `src/models/`.

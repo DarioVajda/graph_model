@@ -1,8 +1,7 @@
 from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
 from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
 
-from .data_load import load_dataset
-from .train_utils import get_device, compute_exact_match
+from .load_dataset import load_graphqa_datasets
 
 import torch
 import os, json
@@ -11,18 +10,17 @@ import random
 from transformers import TrainingArguments, AutoTokenizer, TrainerCallback
 from peft import LoraConfig, get_peft_model
 import numpy as np
+import wandb
+
+def get_device():
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #region -------- Code for model intialization and parameter selection --------
 def init_model(model_name, device, bias_params):
+    # model = GraphLlamaForCausalLM.from_pretrained(model_name, bias_type=bias_type, max_spd=max_spd, attn_implementation="eager")
     config = GraphLlamaConfig.from_pretrained(model_name, **bias_params)
-    model = GraphLlamaForCausalLM.from_pretrained(
-        model_name, 
-        config=config, 
-        attn_implementation="sdpa",
-    )
-
+    model = GraphLlamaForCausalLM.from_pretrained(model_name, config=config, attn_implementation="eager")
     model.to(device)
-
     for param in model.parameters():
         param.requires_grad = False
 
@@ -99,6 +97,48 @@ def print_trainable_parameters(model):
     print("="*50 + "\n")
 #endregion
 
+#region -------- Code for custom evaluation --------
+class PreprocessLogitsEM:
+    def __call__(self, logits, labels):
+        # 1. Unpack logits if the model returns a tuple (common in HF models)
+        if isinstance(logits, tuple):
+            logits = logits[0]
+            
+        # 2. Get the predicted token IDs via argmax
+        preds = torch.argmax(logits, dim=-1)
+        
+        # 3. Shift predictions to align with labels
+        # The logit at sequence index 't' predicts the label at 't+1'
+        shifted_preds = torch.full_like(preds, fill_value=-100)
+        shifted_preds[:, 1:] = preds[:, :-1]
+        
+        return shifted_preds
+
+def compute_exact_match(eval_preds):
+    preds, labels = eval_preds
+    
+    exact_matches = 0
+    total = len(labels)
+    
+    for i in range(total):
+        # Find the valid label tokens (ignoring -100 padding)
+        valid_indices = labels[i] != -100
+        
+        if not np.any(valid_indices):
+            continue
+            
+        example_preds = preds[i][valid_indices]
+        example_labels = labels[i][valid_indices]
+        
+        # Exact Match: ALL predicted tokens must match the ground truth
+        if np.array_equal(example_preds, example_labels):
+            exact_matches += 1
+            
+    return {
+        "em_accuracy": float(exact_matches) / total if total > 0 else 0.0,
+    }
+#endregion
+
 def training_run(
     model, 
     train_dataset, 
@@ -113,17 +153,14 @@ def training_run(
     accumulation_steps=4, 
     pad_token_id=None,
     active_params=None,
-    eval_every=40,
-    gradient_checkpointing=True,
+    seed=42,
+    use_wandb=True,
 ):
-    if gradient_checkpointing:
-        print("Gradient checkpointing is ENABLED. This will save memory but may increase training time.")
-    else:
-        print("Gradient checkpointing is DISABLED. This may lead to out-of-memory errors if the model or batch size is too large.")
+    # if label_options is None or pad_token_id is None:
+    #     raise ValueError("Label options and pad token ID must be provided for the training run.")
 
     STEPS_PER_EPOCH = len(train_dataset) // batch_size // accumulation_steps
-    TOTAL_STEPS = STEPS_PER_EPOCH * num_epochs
-    EVAL_EVERY = eval_every
+    EVAL_EVERY = 20
 
     training_args = TrainingArguments(
         # Basic training arguments:
@@ -132,31 +169,34 @@ def training_run(
         logging_steps=1,                                        # Log training metrics every 5 steps
         per_device_train_batch_size=batch_size,                 # Batch size per device during training
         gradient_accumulation_steps=accumulation_steps,         # Number of steps to accumulate gradients before performing an optimizer step
-        # torch_compile=True,                                     # Use PyTorch 2.0's torch.compile for potential speedup (requires PyTorch 2.0+)
-        gradient_checkpointing=gradient_checkpointing,          # Enable gradient checkpointing to save memory (trades compute for memory)
-        gradient_checkpointing_kwargs={"use_reentrant": False} if gradient_checkpointing else None,
+        gradient_checkpointing=False,                           # Gradient checkpointing to save memory
 
         # Evaluation arguments:
         eval_strategy="steps",                                  # Evaluate every eval_steps during training
         eval_steps=EVAL_EVERY,                                  # Number of steps between evaluations
         save_strategy="steps",                                  # Save a checkpoint based on save_steps
         save_steps=EVAL_EVERY,                                  # Number of steps between saving checkpoints
-        metric_for_best_model="eval_em_accuracy",               # Metric to use for determining the best model
-        greater_is_better=True,                                 # Higher classification_accuracy is better
+        metric_for_best_model="eval_loss",                      # Metric to use for determining the best model
+        greater_is_better=False,                                # Lower loss is better
         save_total_limit=1,                                     # Maximum number of checkpoints to store
         load_best_model_at_end=True,                            # Load the best model at the end of training
 
         # WandB logging:
-        report_to="wandb",                                      # Report training metrics to Weights & Biases
+        report_to="wandb" if use_wandb else None,              # Report training metrics to Weights & Biases
         run_name=run_name,                                      # Name of the WandB run for better organization
         
         # Learning rate scheduler:
         learning_rate=learning_rate,                            # The initial learning rate for Adam
         lr_scheduler_type="cosine_with_min_lr",                 # Type of learning rate scheduler to use
         lr_scheduler_kwargs={"min_lr": learning_rate/10},       # Additional arguments for the learning rate scheduler
-        warmup_steps=TOTAL_STEPS // 10,                         # Number of steps for the warmup phase (when the learning rate is increasing linearly)
+        warmup_steps=STEPS_PER_EPOCH*2,                           # Number of steps for the warmup phase (when the learning rate is increasing linearly)
         weight_decay=0.1,                                       # Weight decay to apply (if not zero)
+
+        seed=seed,
+        data_seed=seed,
     )
+
+    preprocess_logits = PreprocessLogitsEM()
 
     # initialize using the custom class
     trainer = GraphTrainer(
@@ -168,6 +208,7 @@ def training_run(
 
         # Evaluation parameters
         compute_metrics=compute_exact_match,
+        # preprocess_logits_for_metrics=preprocess_logits,
 
         # set the active parameters for bias saving in the trainer callback
         active_params=active_params,
@@ -178,35 +219,43 @@ def training_run(
 
     trainer.train()
 
-    if test_dataset is None:
-        print("No test dataset provided. Skipping final evaluation.")
-        return
+    # Evaluate on the test dataset and log them to WandB
+    test_results = trainer.evaluate(test_dataset, metric_key_prefix="test")
+    em_acc_key = [key for key in test_results.keys() if "em_accuracy" in key][0]
+    test_accuracy = test_results[em_acc_key]
+    print(f"Test results: {test_accuracy}")
 
-    # =====================================================================
-    # Evaluate the best model on the test dataset
-    # =====================================================================    
-    print("\n" + "="*50)
-    print("Training Complete. Evaluating Best Model on Test Dataset...")
-    print("="*50)
-    
-    # By passing metric_key_prefix="test", the metrics will show up in wandb 
-    # as test_em_accuracy and test_em_f1, keeping them distinct from eval metrics.
-    test_results = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
-    
-    print("\nFinal Test Set Results:")
-    for key, value in test_results.items():
-        print(f"  {key}: {value:.4f}")
-    print("="*50 + "\n")
+    # Save the test results to a JSON file in the run directory
+    results_path = "./src/experiments/graphqa/results.json"
+    if not os.path.exists(results_path):
+        with open(results_path, "w") as f:
+            json.dump({}, f)
+    with open(results_path, "r") as f:
+        all_results = json.load(f)
 
+    all_results = {
+        run_name: test_accuracy,
+        **all_results,
+    }
+    with open(results_path, "w") as f:
+        json.dump(all_results, f, indent=4)
 
-def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
+    print("!"*100)
+    print(f"Final test accuracy for run {run_name}: {test_accuracy}")
+    print("!"*100)
+
+    wandb.finish()
+
+    return test_accuracy
+
+def save_run_metadata(run_name, bias_params, graph_type, train_dataset, eval_dataset, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
     """
-    Save the metadata of the training run to the run_metadata_graph.json file with the run_name being the key (if there are multiple runs with the same base name, append "_v2", "_v3", etc. to the run name).
+    Save the metadata of the training run to the run_metadata.json file with the run_name being the key (if there are multiple runs with the same base name, append "_v2", "_v3", etc. to the run name).
 
     Returns:
     run_name --> The final run name used for this training run (which may have a version suffix if there were duplicate names).
     """
-    metadata_path = "./src/experiments/knowledge_graph_qa/run_metadata_graph.json"
+    metadata_path = "./src/experiments/graphqa/run_metadata.json"
     if not os.path.exists(metadata_path):
         with open(metadata_path, "w") as f:
             json.dump({}, f)
@@ -229,7 +278,9 @@ def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_pa
         run_name: {
             "date_time": date_time,
             "bias_params": bias_params,
-            "dataset_name": dataset_name,
+            "graph_type": graph_type,
+            "train_dataset": train_dataset,
+            "eval_dataset": eval_dataset,
             "base_model": base_model,
             "active_params": active_params,
             "num_epochs": num_epochs,
@@ -248,65 +299,45 @@ def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_pa
     
     return run_name
 
-
 def parse_args():
     import argparse
-    parser = argparse.ArgumentParser(description="Fine-tune GraphLLaMA on a specified dataset with configurable parameters.")
-
-    # general parameters
-    parser.add_argument("--dataset_name", type=str, default="kg_qa", help="Directory containing the processed dataset. Should be 'kg_qa' or 'family'.")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B", help="Pre-trained model name or path.")
-    parser.add_argument("--num_epochs", type=int, default=6, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=2, help="Training batch size.")
-    parser.add_argument("--accumulation_steps", type=int, default=8, help="Number of steps to accumulate gradients before performing an optimizer step.")
-    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate for the LoRA parameters.")
-    parser.add_argument("--bias_learning_rate", type=float, default=5e-2, help="Learning rate for the bias parameters.")
-    parser.add_argument("--eval_every", type=int, default=40, help="Number of steps between evaluations.")
-    parser.add_argument("--no_gradient_checkpointing", action="store_true", help="Disable gradient checkpointing (useful for debugging or if memory is not a concern).")
-
-    # which parameters to activate and train
-    parser.add_argument("--active_params", nargs="+", default=["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"], help="List of parameter name substrings to activate for training. Use 'all' to activate all parameters.")
-    parser.add_argument("--lora_r", type=int, default=16, help="Rank for LoRA adapters. If not using LoRA, set to 0.")
+    parser = argparse.ArgumentParser(description="Train a graph-based LLM on the GraphQA dataset with configurable options.")
+    parser.add_argument("--without", type=str, default=None, help="Which bias to exclude from the model. Options: None, 'spd', 'rrwp', 'magnetic'")
+    parser.add_argument("--graph_type", type=str, default="standard", help="Type of graph representation to use. Options: 'standard' or 'incidence'")
+    parser.add_argument("--task", type=str, default="shortest_path", help="Which GraphQA task to train on. Options: node_count, edge_count, cycle_check, triangle_counting, node_degree, connected_nodes, reachability, edge_existence, shortest_path")
+    parser.add_argument("--lora_r", type=int, default=16, help="The rank for LoRA adapters. If 0 or None, LoRA will not be applied.")
 
     args = parser.parse_args()
-    return args
+    without, graph_type, task, lora_r = args.without, args.graph_type, args.task, args.lora_r
 
-if __name__ == "__main__":
-    # parse command line arguments
-    args = parse_args()
-    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=kg_qa --model_name=meta-llama/Llama-3.2-1B --lora_r=32 --batch_size=4 --accumulation_steps=4 --learning_rate=5e-4 --bias_learning_rate=1e-2 --num_epochs=8
-    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=kg_qa --model_name=meta-llama/Llama-3.2-3B --lora_r=64 --batch_size=2 --accumulation_steps=8 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
-    # python3 -m src.experiments.knowledge_graph_qa --dataset_name=kg_qa --model_name=meta-llama/Llama-3.1-8B --lora_r=64 --batch_size=1 --accumulation_steps=16 --learning_rate=5e-5 --bias_learning_rate=1e-2 --num_epochs=8
+    return without, graph_type, task, lora_r
 
+def run_training(without, graph_type, task, lora_r, seed, run_name=None, use_wandb=True):
     # --------------------------------------------------------------------------
     #region ----------------------- CONFIGURATION ------------------------------
     # --------------------------------------------------------------------------
-    if args.dataset_name not in ["kg_qa", "family"]:
-        raise ValueError(f"Invalid dataset name: {args.dataset_name}. Must be 'kg_qa' or 'family'.")
-    
-    if args.dataset_name == "kg_qa":
-        dataset_dir = "./src/experiments/knowledge_graph_qa/graph_datasets/dataset_30-50"
-    else:
-        dataset_dir = "./src/experiments/knowledge_graph_qa/family_tree_graph_dataset"
-    dataset_name = f"graph_{args.dataset_name}"
+    WITHOUT, GRAPH_TYPE, TASK, LORA_R, SEED = without, graph_type, task, lora_r, seed
     BIAS_PARAMS = { 
-        "spd": True, 
+        "spd": WITHOUT!='spd', 
         "max_spd": 8, 
         "laplacian": False, 
         "rwse": False, 
-        "rrwp": True, 
+        "rrwp": WITHOUT!='rrwp', 
         "max_rw_steps": 16,
-        "magnetic": True,
+        "magnetic": WITHOUT!='magnetic',
         "magnetic_dim": 32,
         "magnetic_q": 0.25
     }
-    MODEL_NAME = args.model_name
-    ACTIVE_PARAMS = args.active_params
-    LR = args.learning_rate
-    BIAS_LR=args.bias_learning_rate
-    NUM_EPOCHS = args.num_epochs
+    # Options: [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ]
+    # Options in order: node_count, edge_count, cycle_check, triangle_counting, node_degree, connected_nodes, reachability, edge_existence, shortest_path
+    TRAIN_DATASET_TASKS =   [ TASK ]
+    EVAL_DATASET_TASKS  =   [ TASK ]
+    MODEL_NAME = "meta-llama/Llama-3.2-1B"
+    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
+    LR = 3e-5
+    BIAS_LR=5e-3
+    NUM_EPOCHS = 20
 
-    LORA_R = args.lora_r
     LORA_CONFIG = {
         "r": LORA_R,
         "lora_alpha": LORA_R*2,
@@ -314,25 +345,31 @@ if __name__ == "__main__":
         "lora_dropout": 0.05,
         "bias": "none",
     }
-    if LORA_R == 0: # if rank is set to 0, don't use LoRA at all
-        LORA_CONFIG = None
+    # LORA_CONFIG = None
 
-    model_size = "1B" if "1b" in MODEL_NAME.lower() else ("3B" if "3b" in MODEL_NAME.lower() else ("8B" if "8b" in MODEL_NAME.lower() else "unknown_size"))
-
+    # run_suffix = "+".join([ 
+    #     bias_type
+    #     for bias_type 
+    #     in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
+    #     if BIAS_PARAMS[bias_type.split('(')[0]]
+    # ])
+    run_suffix = "+".join(TRAIN_DATASET_TASKS) + (f"_no_{WITHOUT}" if WITHOUT else "")
+    
     # Create a unique run name and save the run metadata
-    RUN_NAME = f"{model_size}_graph_{args.dataset_name}{'_lora' if LORA_CONFIG else ''}"
+    RUN_NAME = f"GraphQA_{GRAPH_TYPE}{'_lora' if LORA_CONFIG else ''}_{run_suffix}" if run_name is None else run_name
     RUN_NAME = save_run_metadata(
         run_name=RUN_NAME,
         bias_params=BIAS_PARAMS,
-        dataset_name=dataset_name,
+        graph_type=GRAPH_TYPE,
+        train_dataset=TRAIN_DATASET_TASKS,
+        eval_dataset=EVAL_DATASET_TASKS,
         base_model=MODEL_NAME,
         active_params=ACTIVE_PARAMS,
         lr=LR,
         bias_lr=BIAS_LR,
-        num_epochs=NUM_EPOCHS,
         lora_config=LORA_CONFIG,
+        num_epochs=NUM_EPOCHS,
     )
-    EVAL_EVERY = args.eval_every
     #endregion
     # --------------------------------------------------------------------------
 
@@ -344,12 +381,18 @@ if __name__ == "__main__":
     # --------------------------------------------------------------------------
     #region ----------------------- LOAD DATASETS ------------------------------
     # --------------------------------------------------------------------------
-    train_dataset, eval_dataset, test_dataset = load_dataset(dataset_dir, type='graph')
+    datasets_dir = "./src/experiments/graphqa/processed_datasets"
+    train_dataset, test_dataset = load_graphqa_datasets(datasets_dir, TRAIN_DATASET_TASKS, EVAL_DATASET_TASKS, graph_type=GRAPH_TYPE)
+    train_ds_size = len(train_dataset)
+    eval_dataset = train_dataset[int(0.85*train_ds_size):]  # use the last 15% of the training dataset as the evaluation dataset
+    train_dataset = train_dataset[:int(0.85*train_ds_size)]  # use the first 85% of the training dataset for training
+
 
     collator = GraphCollator()
 
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Eval dataset size: {len(eval_dataset)}")
+    print(f"Test dataset size: {len(test_dataset)}")
 
     #endregion
     # --------------------------------------------------------------------------
@@ -362,7 +405,7 @@ if __name__ == "__main__":
     model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=LORA_CONFIG)
     print_trainable_parameters(model)
 
-    training_run(
+    return training_run(
         model=model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
@@ -370,14 +413,23 @@ if __name__ == "__main__":
         collator=collator,
         run_name=RUN_NAME,
         num_epochs=NUM_EPOCHS,
-        batch_size=args.batch_size,
+        batch_size=4,
         learning_rate=LR,
         bias_learning_rate=BIAS_LR,
-        accumulation_steps=args.accumulation_steps,
+        accumulation_steps=8,
         active_params=ACTIVE_PARAMS,
-        eval_every=EVAL_EVERY,
-        gradient_checkpointing=not args.no_gradient_checkpointing,
+        seed=SEED,
+        use_wandb=use_wandb,
     )
 
     #endregion
     # --------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    args = parse_args()
+    run_training(
+        without=args.without,
+        graph_type=args.graph_type,
+        task=args.task,
+        lora_r=args.lora_r,
+    )

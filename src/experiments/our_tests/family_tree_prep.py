@@ -426,18 +426,18 @@ if __name__ == "__main__":
     #     'magnetic_q': 0.25,
     #     'get_graph_labels': get_graph_labels,
     # }
-    # output_dir = "./src/experiments/knowledge_graph_qa/family_tree_graph_dataset"
+    # output_dir = "./src/experiments/our_tests/family_tree_graph_dataset"
     # save_graph_dataset(graph_datasets, output_dir, params)
 
     
     # # --------- Save Text Dataset ----------
     # print("Preparing and saving text dataset...")
     # text_datasets = prepare_text_dataset(raw_datasets, tokenizer, get_graph_labels)
-    # output_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
+    # output_dir = "./src/experiments/our_tests/family_tree_text_dataset"
     # save_text_dataset(text_datasets, output_dir)
     # print("Finished preparing and saving text dataset.")
 
     # --------- Save LLaGA Dataset ----------
     llaga_datasets = prepare_llaga_dataset(raw_datasets)
-    output_dir_llaga = "./src/experiments/knowledge_graph_qa/family_tree_llaga_dataset_v2"
+    output_dir_llaga = "./src/experiments/our_tests/family_tree_llaga_dataset_v2"
     save_llaga_dataset(llaga_datasets, output_dir_llaga)

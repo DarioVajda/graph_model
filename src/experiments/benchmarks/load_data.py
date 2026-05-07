@@ -3,7 +3,7 @@ from tqdm import tqdm
 
 from ...utils import TextGraphDataset
 
-def load_dataset(path, train=True, val=True, test=True):
+def load_dataset(path, train=True, val=True, test=True, max_val_size=None):
     datasets = {}
     splits = [ split for split, load in zip(['train', 'val', 'test'], [train, val, test]) if load ]
     for split in splits:
@@ -19,6 +19,21 @@ def load_dataset(path, train=True, val=True, test=True):
                 dataset = ds
             else:
                 dataset += ds
+
+        if split == 'val' and max_val_size is not None and len(dataset) > max_val_size:
+            print(f"Validation dataset size ({len(dataset)}) is larger than max_val_size ({max_val_size}). Truncating the validation dataset.")
+            new_dataset = None
+            block_size = 50
+            pieces = max_val_size // block_size
+            stride = (len(dataset)+pieces-1) // pieces
+            for i in range(pieces):
+                if new_dataset is None:
+                    new_dataset = dataset[i*stride:i*stride+block_size]
+                else:
+                    new_dataset = new_dataset + dataset[i*stride:i*stride+block_size]
+            new_dataset = new_dataset[:max_val_size]  # In case of any rounding issues
+            dataset = new_dataset
+
         datasets[split] = dataset
         print('-'*20+f"Loaded {len(dataset)} samples for {split} dataset"+'-'*20)
         print()

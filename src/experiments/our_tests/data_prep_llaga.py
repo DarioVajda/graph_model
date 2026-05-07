@@ -131,7 +131,7 @@ if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     llaga_datasets = prepare_kg_llaga_dataset(raw_datasets, device=device)
-    output_dir_llaga = f"./src/experiments/knowledge_graph_qa/llaga_datasets/dataset_{MIN_NODES}-{MAX_NODES}"
+    output_dir_llaga = f"./src/experiments/our_tests/llaga_datasets/dataset_{MIN_NODES}-{MAX_NODES}"
     
     save_llaga_dataset(llaga_datasets, output_dir_llaga)
     print("Finished preparing and saving RGLM dataset.")

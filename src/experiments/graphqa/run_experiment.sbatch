@@ -6,9 +6,9 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
-#SBATCH --time=2:00:00
-#SBATCH --job-name=test_graph_model
-#SBATCH --output=job_logs/test_benchmark_%j.out
+#SBATCH --time=4-00:00:00
+#SBATCH --job-name=graphqa
+#SBATCH --output=job_logs/graph_qa_%j.out
 
 cd ~/graph_model
 pwd
@@ -19,8 +19,6 @@ source .venv/bin/activate
 
 # Execute the login script
 source ./login.sh
-    
+
 # Run the python benchmark script
-python3 -m src.experiments.benchmarks.test \
-  --checkpoint_path=./checkpoints/8B_pubmed_hops2_neighbors30_lora_v5/checkpoint-840 \
-  --dataset_name=pubmed_hops2_neighbors30
+python3 -m src.experiments.graphqa.full_experiment

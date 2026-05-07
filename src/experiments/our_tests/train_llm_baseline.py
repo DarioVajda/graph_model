@@ -232,7 +232,7 @@ def training_run(
 
 
 def save_run_metadata(run_name, dataset_name, base_model, lr, lora_config, num_epochs):
-    metadata_path = "./src/experiments/knowledge_graph_qa/run_metadata_text.json"
+    metadata_path = "./src/experiments/our_tests/run_metadata_text.json"
     if not os.path.exists(os.path.dirname(metadata_path)):
         os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
         
@@ -295,9 +295,9 @@ if __name__ == "__main__":
         raise ValueError(f"Invalid dataset name: {args.dataset_name}. Must be 'kg_qa' or 'family'.")
     
     if args.dataset_name == "kg_qa":
-        dataset_dir = "./src/experiments/knowledge_graph_qa/text_datasets/dataset_30-50"
+        dataset_dir = "./src/experiments/our_tests/text_datasets/dataset_30-50"
     else:
-        dataset_dir = "./src/experiments/knowledge_graph_qa/family_tree_text_dataset"
+        dataset_dir = "./src/experiments/our_tests/family_tree_text_dataset"
         
     dataset_name = f"text_{args.dataset_name}"
     MODEL_NAME = args.model_name
