@@ -32,7 +32,7 @@ graph_model/
 
 ## Working with GTLM
 
-The dependencies are managed with `pip-tools`, so that the process of tracking the required libraries is easier.
+The dependencies are managed with `pip-tools`, so that the process of tracking the required libraries is easier (which are saved in `requirements.in`).
 
 ### Environment setup:
 ```
