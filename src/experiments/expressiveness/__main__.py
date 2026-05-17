@@ -1,5 +1,5 @@
 from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
+from ...models.llama_attn_bias_slow import GraphLlamaForCausalLM, GraphLlamaConfig
 
 from .data_gen import create_and_save_dataset, dataset_path_and_size
 
@@ -281,7 +281,7 @@ if __name__ == "__main__":
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
     ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
     LR = 4e-6
-    BIAS_LR=1e-3
+    BIAS_LR=1e-2
 
     LORA_CONFIG = {
         "r": 4,
@@ -290,7 +290,7 @@ if __name__ == "__main__":
         "lora_dropout": 0.00,
         "bias": "none",
     }
-    # LORA_CONFIG = None
+    LORA_CONFIG = None
 
     run_suffix = "+".join([ 
         bias_type
@@ -298,7 +298,7 @@ if __name__ == "__main__":
         in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
         if BIAS_PARAMS[bias_type.split('(')[0]]
     ])
-    DIFFICULTY = "HARD"     # "EASY" (2 fully connected components, undirected prompt edges) or "HARD" (between 2 and size//5 connected components, directed prompt edges)
+    DIFFICULTY = "EASY"     # "EASY" (2 fully connected components, undirected prompt edges) or "HARD" (between 2 and size//5 connected components, directed prompt edges)
     IS_EASY = DIFFICULTY == "EASY"
     RUN_NAME = f"{DIFFICULTY}{'_lora' if LORA_CONFIG else ''}_{run_suffix}_v4"
 
@@ -356,7 +356,7 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
         collator=collator,
         run_name=RUN_NAME,
-        num_epochs=10,
+        num_epochs=5,
         batch_size=4,
         learning_rate=LR,
         bias_learning_rate=BIAS_LR,

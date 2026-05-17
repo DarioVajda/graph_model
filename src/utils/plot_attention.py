@@ -16,7 +16,8 @@ def plot_graph_attention(
     plot_means: bool = True, 
     plot_heads: bool = True,
     device: torch.device = torch.device("cpu"),
-    plot_graph=True
+    plot_graph=True,
+    vmax=None
 ):
     """
     Runs a forward pass to extract attention weights and plots heatmaps according to specifications and potentially also visualizes the graph structure itself.
@@ -31,6 +32,7 @@ def plot_graph_attention(
         plot_heads: If True, plots individual head attentions.
         device: Torch device to run the inference on.
         plot_graph: If True, also visualizes the graph structure.
+        vmax: Maximum value for color scaling in the heatmaps.
     """
     if plot_graph:
         print("Visualizing the graph structure...")
@@ -39,9 +41,9 @@ def plot_graph_attention(
             output_path=os.path.join(output_path, "graph_structure_landscape.png"),
             max_line_length=30,
             use_spectral_layout=False,
-            figsize=(9, 4)
+            figsize=(8, 8)
         )
-        exit()
+        # return
 
     if not plot_means and not plot_heads:
         print("Both plot_means and plot_heads are False. Nothing to plot.")
@@ -117,7 +119,7 @@ def plot_graph_attention(
             
             plt.figure(figsize=(fig_size, fig_size))
             ax = sns.heatmap(mean_attn, xticklabels=clean_tokens, yticklabels=clean_tokens, 
-                             square=True, cmap="viridis", cbar_kws={"shrink": .8})
+                             square=True, cmap="viridis", cbar_kws={"shrink": .8}, vmax=vmax)
             ax.xaxis.tick_top() # Put X-axis on top
             plt.xticks(rotation=90, fontsize=8)
             plt.yticks(rotation=0, fontsize=8)
@@ -139,7 +141,7 @@ def plot_graph_attention(
                 
                 plt.figure(figsize=(fig_size, fig_size))
                 ax = sns.heatmap(head_attn, xticklabels=clean_tokens, yticklabels=clean_tokens, 
-                                 square=True, cmap="viridis", cbar_kws={"shrink": .8})
+                                 square=True, cmap="viridis", cbar_kws={"shrink": .8}, vmax=vmax)
                 ax.xaxis.tick_top() # Put X-axis on top
                 plt.xticks(rotation=90, fontsize=8)
                 plt.yticks(rotation=0, fontsize=8)
@@ -160,17 +162,18 @@ def plot_graph_attention(
 # ==============================================================================
 if __name__ == "__main__":
     from . import TextGraphDataset, GraphCollator
-    from ..models.llama_attn_bias import GraphLlamaForCausalLM
+    from ..models.llama_attn_bias_slow import GraphLlamaForCausalLM
     from ..experiments.expressiveness.data_gen import create_and_save_dataset, dataset_path_and_size
     from transformers import AutoTokenizer
 
     def get_device():
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return "cpu"
 
     DEVICE = get_device()
 
     # 1. Setup Data
-    TEST_DATASET_SIZE = 10  # Smaller for plotting test
+    TEST_DATASET_SIZE = 100  # Smaller for plotting test
     test_dataset_path, _ = dataset_path_and_size(TEST_DATASET_SIZE)
     if not os.path.exists(test_dataset_path):
         print(f"Test dataset not found at {test_dataset_path}. Creating new dataset...")
@@ -178,7 +181,8 @@ if __name__ == "__main__":
     test_dataset = TextGraphDataset.load(test_dataset_path)
 
     # 2. Setup Model & Tokenizer
-    trained_model_path = "./checkpoints/bias_only_combined/checkpoint-3120"
+    # trained_model_path = "./checkpoints/bias_only_combined/checkpoint-3120"
+    trained_model_path = "./checkpoints/EASY_spd(8)+rrwp(16)+magnetic(dim=32,q=0.25)_v4/checkpoint-1125"
     model = GraphLlamaForCausalLM.from_pretrained(trained_model_path, bias_type="combined", max_spd=4, attn_implementation="eager")
     print(f"Loaded model from {trained_model_path}")
 
@@ -186,39 +190,41 @@ if __name__ == "__main__":
     collator = GraphCollator(tokenizer=tokenizer)
 
     # 3. Pick one example from the dataset
-    graph_example = test_dataset[0]
+    idx = 3
+    graph_example = test_dataset[idx]
 
     # 4. Test Plotting Functions
 
     # Scenario A: Plot EVERYTHING (Means + Heads)
-    # print('-'*80)
-    # print("Plotting Everything (Means and Heads)...")
-    # print('-'*80)
-    # plot_graph_attention(
-    #     model=model,
-    #     graph_example=graph_example,
-    #     tokenizer=tokenizer,
-    #     collator=collator,
-    #     output_path="./plots/attn_plots_all",
-    #     plot_means=True,
-    #     plot_heads=True,
-    #     device=DEVICE
-    # )
-
-    # Scenario B: Plot MEANS ONLY
     print('-'*80)
-    print("Plotting Means Only...")
+    print("Plotting Everything (Means and Heads)...")
     print('-'*80)
     plot_graph_attention(
         model=model,
         graph_example=graph_example,
         tokenizer=tokenizer,
         collator=collator,
-        output_path="./plots/attn_plots_means",
+        output_path=f"./plots/attn_plots_all_{idx}",
         plot_means=True,
-        plot_heads=False,
-        device=DEVICE
+        plot_heads=True,
+        device=DEVICE,
+        vmax=0.35
     )
+
+    # Scenario B: Plot MEANS ONLY
+    # print('-'*80)
+    # print("Plotting Means Only...")
+    # print('-'*80)
+    # plot_graph_attention(
+    #     model=model,
+    #     graph_example=graph_example,
+    #     tokenizer=tokenizer,
+    #     collator=collator,
+    #     output_path="./plots/attn_plots_means",
+    #     plot_means=True,
+    #     plot_heads=False,
+    #     device=DEVICE
+    # )
 
     # Scenario C: Plot HEADS ONLY
     # print('-'*80)
