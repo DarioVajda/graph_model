@@ -159,9 +159,13 @@ class MagneticBias(BaseBias):
         V, lambdas = magnetic # (B,N,N,2), (B,N)
         V_real, V_imag = V[..., 0], V[..., 1] # (B, N, N) each
 
-        h_i  = self.lambda_lin(lambdas.unsqueeze(-1))                                                       # (B, N, head_dim)
-        valid = (torch.arange(lambdas.shape[1], device=device).unsqueeze(0) < num_nodes.unsqueeze(1))       # (B, N) bool
-        h_avg = ((h_i * valid.unsqueeze(-1)).sum(1, keepdim=True) / num_nodes.view(-1, 1, 1).to(h_i.dtype)) # (B, 1, head_dim)
+        h_i   = self.lambda_lin(lambdas.unsqueeze(-1))                                          # (B, M, head_dim)
+        valid = (torch.arange(lambdas.shape[1], device=device).unsqueeze(0)
+                 < num_nodes.unsqueeze(1))                                                       # (B, M) bool
+        # Divide by the number of valid eigenvalues, not num_nodes.
+        # With full eigenvectors (M=N) these are equal; with truncated (M<N) they differ.
+        n_valid = valid.float().sum(dim=1, keepdim=True).unsqueeze(-1).clamp(min=1)             # (B, 1, 1)
+        h_avg   = (h_i * valid.unsqueeze(-1)).sum(1, keepdim=True) / n_valid                   # (B, 1, head_dim)
 
         phi = self.deep_set(torch.cat([h_i, h_avg.expand_as(h_i)], dim=-1))                                 # (B, N, magnetic_dim)
 

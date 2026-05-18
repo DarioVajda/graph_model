@@ -70,8 +70,14 @@ class GraphCollator:
         rrwp = torch.zeros(batch_size, max_num_nodes, max_num_nodes, max_rw_steps, dtype=torch.float)
 
         # initialise magnetic laplacian
-        magnetic_V = torch.zeros(batch_size, max_num_nodes, max_num_nodes, 2, dtype=torch.float) # 2 for real and imaginary parts
-        magnetic_lambdas = torch.zeros(batch_size, max_num_nodes, dtype=torch.float)
+        # The eigenvector dimension is m_eff per item (min(m, n) when m>0, n when m=0).
+        # Infer the maximum across the batch from the item shapes.
+        max_m = max(
+            (item['magnetic_V'].shape[1] for item in batch if 'magnetic_V' in item),
+            default=max_num_nodes,
+        )
+        magnetic_V = torch.zeros(batch_size, max_num_nodes, max_m, 2, dtype=torch.float)
+        magnetic_lambdas = torch.zeros(batch_size, max_m, dtype=torch.float)
 
         for i, item in enumerate(batch):
             num_nodes = item['num_nodes']
@@ -84,8 +90,9 @@ class GraphCollator:
             if "rrwp" in item:
                 rrwp[i, :num_nodes, :num_nodes, :] = item['rrwp'].detach().clone()
             if "magnetic_V" in item and "magnetic_lambdas" in item:
-                magnetic_V[i, :num_nodes, :num_nodes, :] = item['magnetic_V'].detach().clone()
-                magnetic_lambdas[i, :num_nodes] = item['magnetic_lambdas'].detach().clone()
+                m_eff = item['magnetic_V'].shape[1]
+                magnetic_V[i, :num_nodes, :m_eff, :] = item['magnetic_V'].detach().clone()
+                magnetic_lambdas[i, :m_eff] = item['magnetic_lambdas'].detach().clone()
 
         batch_dict = {
             'num_nodes': sizes,

@@ -148,8 +148,11 @@ class TextGraphDataset(Dataset):
 
         # Handle Magnetic Spectral Coordinates (Convert list back to torch tensor)
         if 'magnetic_V' in item and item['magnetic_V'] is not None and 'magnetic_lambdas' in item and item['magnetic_lambdas'] is not None:
-            item['magnetic_V'] = torch.tensor(item['magnetic_V'], dtype=torch.float32).reshape((item['num_nodes'], item['num_nodes'], 2)) # reshape back to (num_nodes, num_nodes, 2)
-            item['magnetic_lambdas'] = torch.tensor(item['magnetic_lambdas'], dtype=torch.float32).reshape((item['num_nodes'],)) # reshape back to (num_nodes,)
+            n = item['num_nodes']
+            flat_v = item['magnetic_V']
+            m_eff = len(flat_v) // (n * 2)  # works for both full (m_eff=n) and truncated (m_eff=m)
+            item['magnetic_V'] = torch.tensor(flat_v, dtype=torch.float32).reshape((n, m_eff, 2))
+            item['magnetic_lambdas'] = torch.tensor(item['magnetic_lambdas'], dtype=torch.float32)
             
         # Handle SPD (Reshape flattened array back to Matrix)
         if 'shortest_path_dists' in item and item['shortest_path_dists'] is not None:
@@ -443,7 +446,7 @@ class TextGraphDataset(Dataset):
             desc=f"Batched GPU RRWP (steps: {max_rrwp_steps})"
         )
 
-    def compute_magnetic_lap(self, q=0.25, use_gpu=True):
+    def compute_magnetic_lap(self, q=0.25, use_gpu=True, m=0):
         """
         High-speed Batched Magnetic Laplacian calculation.
         """
@@ -459,7 +462,7 @@ class TextGraphDataset(Dataset):
             
             # Batch process on GPU
             # V_list contains (n, n, 2) arrays, L_list contains (n,) arrays
-            V_list, L_list = get_magnetic_laplacian_coords(graph_objects, q=q, use_gpu=use_gpu)
+            V_list, L_list = get_magnetic_laplacian_coords(graph_objects, q=q, use_gpu=use_gpu, m=m)
             
             # Flatten for Arrow storage compatibility
             # We use .reshape(-1) which is faster than .flatten() in many cases

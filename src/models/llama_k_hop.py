@@ -71,7 +71,11 @@ class KHopLlamaConfig(GraphLlamaConfig):
     def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
         config_dict, kwargs = cls.get_config_dict(pretrained_model_name_or_path, **kwargs)
         k_hop = kwargs.pop('k_hop', config_dict.pop('k_hop', 0))
-        return cls(k_hop=k_hop, **config_dict)
+        # Merge remaining kwargs (e.g. spd=True, rrwp=True passed at init time)
+        # into config_dict so GraphLlamaConfig.__init__ picks them up correctly.
+        # When loading from a checkpoint, kwargs will be empty and config_dict
+        # already contains the serialised graph_attn_bias dict.
+        return cls(k_hop=k_hop, **{**config_dict, **kwargs})
 
 
 # ── Node → token expansion (shared utility) ───────────────────────────────────

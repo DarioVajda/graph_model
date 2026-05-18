@@ -2,10 +2,19 @@ import numpy as np
 import networkx as nx
 import torch
 
-def get_magnetic_laplacian_coords(graphs, q=0.25, use_gpu=True):
+def get_magnetic_laplacian_coords(graphs, q=0.25, use_gpu=True, m=0):
     """
     Optimized Magnetic Laplacian spectral coordinates using Batched PyTorch.
     Supports single nx.Graph or list of nx.Graph.
+
+    Args:
+        graphs:   nx.Graph or list of nx.Graph.
+        q:        Magnetic flux parameter (default 0.25).
+        use_gpu:  Use CUDA when available (default True).
+        m:        Number of eigenpairs to keep (lowest eigenvalues).
+                  0 (default) keeps all N eigenpairs — identical to the
+                  original behaviour.  If m > N for a given graph, all N
+                  eigenpairs are kept for that graph.
     """
     device = torch.device("cuda" if torch.cuda.is_available() and use_gpu else "cpu")
     
@@ -53,26 +62,32 @@ def get_magnetic_laplacian_coords(graphs, q=0.25, use_gpu=True):
     # torch.linalg.eigh is optimized for Hermitian matrices
     eigvals, eigvecs = torch.linalg.eigh(L_N)
 
-    # 6. Formatting Outputs
-    # Separate real and imaginary for eigenvectors: [B, N, N, 2]
+    # 6. Optional truncation to the lowest m eigenpairs
+    if m > 0:
+        keep = min(m, max_n)
+        eigvals = eigvals[:, :keep]
+        eigvecs = eigvecs[:, :, :keep]
+
+    # 7. Formatting Outputs
+    # Separate real and imaginary for eigenvectors: [B, N, M, 2]
     V_final = torch.stack([eigvecs.real, eigvecs.imag], dim=-1)
-    
+
     # Move to CPU for final formatting
     V_cpu = V_final.cpu().numpy()
-    lambdas_cpu = eigvals.real.cpu().numpy() # Eigenvalues of Hermitian are real
+    lambdas_cpu = eigvals.real.cpu().numpy()  # Eigenvalues of Hermitian are real
 
     if is_single:
-        # Return exact original format: (n, n, 2), (n,)
         n = node_counts[0]
-        return V_cpu[0, :n, :n, :], lambdas_cpu[0, :n]
+        m_out = min(m, n) if m > 0 else n
+        return V_cpu[0, :n, :m_out, :], lambdas_cpu[0, :m_out]
     else:
-        # Return lists for batched processing
         v_list = []
         l_list = []
         for b in range(num_graphs):
             n = node_counts[b]
-            v_list.append(V_cpu[b, :n, :n, :])
-            l_list.append(lambdas_cpu[b, :n])
+            m_out = min(m, n) if m > 0 else n
+            v_list.append(V_cpu[b, :n, :m_out, :])
+            l_list.append(lambdas_cpu[b, :m_out])
         return v_list, l_list
 
 if __name__ == "__main__":
