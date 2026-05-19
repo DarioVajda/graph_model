@@ -24,7 +24,8 @@ graph_model/
       │   ├── graphqa/                  # Code for GraphQA benchmark experiments.
       │   ├── graphqa_mag_khop/         # Ablation: effect of capping magnetic eigenvectors (M) and attention hop distance (K).
       │   ├── our_tests/                # Family Tree and Knowledge Graph QA experiments
-      │   └── permutation_equivariance/ # Code for permutation the equivariance test.
+      │   ├── permutation_equivariance/ # Code for permutation the equivariance test.
+      │   └── template/                 # Minimal experiment template — copy this to start a new experiment.
       ├── models/                       # Implementation of the custom architecture.
       └── utils/                        # general-purpose utility functions and helper scripts.
   ├── .gitignore                        # specifies intentionally untracked files to ignore.
@@ -52,6 +53,44 @@ pip-sync                    # Install all requirements
 From now on, we will assume that each program is ran inside of the `.venv` environment.
 
 The instructions for each individual experiment can be found in the appropriate directories inside `src/experiments/`, while the core architectural logic is implemented in `src/models/`.
+
+## Starting a New Experiment
+
+Copy `src/experiments/template/` to a new directory and edit three files:
+
+**`load_data.py`** — build your dataset. Each graph is a NetworkX `DiGraph` with:
+- A `text` attribute on every node (the node's natural-language description)
+- A `prompt_node` key in `graph.graph` (the index of the node whose tokens the model generates)
+- The prompt node's text must contain both the question and the expected answer
+
+Pass a list of such graphs to `TextGraphDataset`, call the feature-computation methods you need (`compute_shortest_path_distances`, `compute_rrwp`, `compute_magnetic_lap`, …), tokenize, then call `compute_labels` to mask the question tokens to `-100` so the model is supervised on the answer only. Return `(train_dataset, eval_dataset, test_dataset)`.
+
+**`__main__.py`** — configure `BIAS_PARAMS` to choose which graph attention biases to use (SPD, RRWP, magnetic Laplacian, …), set sensible defaults for the CLI arguments, and update `EXPERIMENT_NAME`. Everything else can stay as-is.
+
+**`test.py`** — update the `load_data` call to match your new `load_data.py` signature.
+
+### Training
+
+```bash
+python -m src.experiments.<your_experiment> \
+    --num_epochs 20 \
+    --batch_size 4 \
+    --learning_rate 3e-5 \
+    --lora_r 16 \
+    --k_hop 0 \
+    --wandb_project GraphLLM
+```
+
+Checkpoints are saved under `checkpoints/<experiment_name>/<run_name>/`.
+
+### Evaluation
+
+```bash
+python -m src.experiments.<your_experiment>.test \
+    --checkpoint_path checkpoints/<experiment_name>/<run_name>/checkpoint-<step>
+```
+
+Results are appended to `src/experiments/<your_experiment>/results.json`.
 
 ## Citation
 
