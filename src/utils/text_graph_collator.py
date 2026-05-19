@@ -24,16 +24,20 @@ def _k_hop_reachability(A: torch.Tensor, K: int) -> torch.Tensor:
 
 
 class GraphCollator:
-    def __init__(self, tokenizer=None, k_hop: int = 0):
+    def __init__(self, tokenizer=None, k_hop: int = 0, magnetic_m: int = 0):
         """
         Args:
-            tokenizer: Optional tokenizer (unused internally, kept for callers).
-            k_hop:     When > 0, a boolean (N×N) K-hop reachability mask is
-                       added to every batch under the key 'k_hop_mask'.
-                       When 0 (default) the collator behaves exactly as before.
+            tokenizer:  Optional tokenizer (unused internally, kept for callers).
+            k_hop:      When > 0, a boolean (N×N) K-hop reachability mask is
+                        added to every batch under the key 'k_hop_mask'.
+                        When 0 (default) the collator behaves exactly as before.
+            magnetic_m: When > 0, eigenvectors are truncated to the first
+                        min(stored_m, magnetic_m) columns before batching.
+                        When 0 (default) all stored eigenvectors are kept.
         """
-        self.tokenizer = tokenizer
-        self.k_hop     = k_hop
+        self.tokenizer  = tokenizer
+        self.k_hop      = k_hop
+        self.magnetic_m = magnetic_m
 
     def __call__(self, batch: list[TextGraph]):
         """
@@ -71,11 +75,13 @@ class GraphCollator:
 
         # initialise magnetic laplacian
         # The eigenvector dimension is m_eff per item (min(m, n) when m>0, n when m=0).
-        # Infer the maximum across the batch from the item shapes.
+        # Infer the maximum across the batch, then cap at magnetic_m if set.
         max_m = max(
             (item['magnetic_V'].shape[1] for item in batch if 'magnetic_V' in item),
             default=max_num_nodes,
         )
+        if self.magnetic_m > 0:
+            max_m = min(max_m, self.magnetic_m)
         magnetic_V = torch.zeros(batch_size, max_num_nodes, max_m, 2, dtype=torch.float)
         magnetic_lambdas = torch.zeros(batch_size, max_m, dtype=torch.float)
 
@@ -91,8 +97,10 @@ class GraphCollator:
                 rrwp[i, :num_nodes, :num_nodes, :] = item['rrwp'].detach().clone()
             if "magnetic_V" in item and "magnetic_lambdas" in item:
                 m_eff = item['magnetic_V'].shape[1]
-                magnetic_V[i, :num_nodes, :m_eff, :] = item['magnetic_V'].detach().clone()
-                magnetic_lambdas[i, :m_eff] = item['magnetic_lambdas'].detach().clone()
+                if self.magnetic_m > 0:
+                    m_eff = min(m_eff, self.magnetic_m)
+                magnetic_V[i, :num_nodes, :m_eff, :] = item['magnetic_V'][:, :m_eff, :].detach().clone()
+                magnetic_lambdas[i, :m_eff] = item['magnetic_lambdas'][:m_eff].detach().clone()
 
         batch_dict = {
             'num_nodes': sizes,

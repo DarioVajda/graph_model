@@ -1,0 +1,522 @@
+{
+    "GraphQA_shortest_path_K=3_M=0_v2": {
+        "date_time": "2026-05-19 11:45:16",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 3,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=0_M=0_v3": {
+        "date_time": "2026-05-19 11:44:46",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 0,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=0_M=0_v2": {
+        "date_time": "2026-05-19 11:43:49",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 0,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=1_M=0_v3": {
+        "date_time": "2026-05-19 11:43:19",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 1,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=1_M=0_v2": {
+        "date_time": "2026-05-19 11:42:46",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 1,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=2_M=0_v5": {
+        "date_time": "2026-05-19 11:41:46",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 2,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=2_M=0_v4": {
+        "date_time": "2026-05-19 11:41:41",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 2,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=2_M=0_v3": {
+        "date_time": "2026-05-19 11:17:52",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 2,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=3_M=0": {
+        "date_time": "2026-05-19 11:14:16",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 3,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=2_M=0_v2": {
+        "date_time": "2026-05-19 10:56:08",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 2,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=1_M=0": {
+        "date_time": "2026-05-19 10:51:45",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 1,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=0_M=0": {
+        "date_time": "2026-05-19 10:29:30",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 0,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    },
+    "GraphQA_shortest_path_K=2_M=0": {
+        "date_time": "2026-05-19 10:28:49",
+        "base_model": "meta-llama/Llama-3.2-1B",
+        "active_params": [
+            "graph_bias"
+        ],
+        "num_epochs": 20,
+        "learning_rate": 3e-05,
+        "bias_learning_rate": 0.005,
+        "lora_config": {
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ],
+            "lora_dropout": 0.05,
+            "bias": "none"
+        },
+        "bias_params": {
+            "spd": false,
+            "max_spd": 8,
+            "laplacian": false,
+            "rwse": false,
+            "rrwp": false,
+            "max_rw_steps": 16,
+            "magnetic": true,
+            "magnetic_dim": 32,
+            "magnetic_q": 0.25
+        },
+        "k_hop": 2,
+        "magnetic_m": 0,
+        "task": "shortest_path",
+        "graph_type": "standard"
+    }
+}

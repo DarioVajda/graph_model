@@ -16,7 +16,7 @@ def plot_graph_attention(
     plot_means: bool = True, 
     plot_heads: bool = True,
     device: torch.device = torch.device("cpu"),
-    plot_graph=True,
+    plot_graph=False,
     vmax=None
 ):
     """

@@ -72,10 +72,14 @@ def _load_model_from_checkpoint(checkpoint_path, device):
     model = KHopGraphLlamaForCausalLM.from_pretrained(
         base_model_name, config=config, attn_implementation="eager"
     )
-    load_bias_parameters(model, checkpoint_path)
 
     if os.path.exists(os.path.join(checkpoint_path, "adapter_config.json")):
         model = PeftModel.from_pretrained(model, checkpoint_path)
+
+    # Load bias parameters after any PeftModel wrapping so that parameter
+    # names match: PeftModel prefixes them with 'base_model.model.' and the
+    # saved state dict was recorded from the wrapped model.
+    load_bias_parameters(model, checkpoint_path)
 
     model.to(device)
     return model, config

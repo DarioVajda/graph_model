@@ -1,0 +1,32 @@
+{
+    "GraphQA_shortest_path_K=3_M=0_v2": {
+        "test_em_accuracy": 0.784
+    },
+    "GraphQA_shortest_path_K=0_M=0_v3": {
+        "test_em_accuracy": 0.886
+    },
+    "GraphQA_shortest_path_K=1_M=0_v2": {
+        "test_em_accuracy": 0.87
+    },
+    "GraphQA_shortest_path_K=1_M=0_v3": {
+        "test_em_accuracy": 0.892
+    },
+    "GraphQA_shortest_path_K=2_M=0_v4": {
+        "test_em_accuracy": 0.894
+    },
+    "GraphQA_shortest_path_K=2_M=0_v3": {
+        "test_em_accuracy": 0.736
+    },
+    "GraphQA_shortest_path_K=3_M=0": {
+        "test_em_accuracy": 0.784
+    },
+    "GraphQA_shortest_path_K=2_M=0_v2": {
+        "test_em_accuracy": 0.718
+    },
+    "GraphQA_shortest_path_K=1_M=0": {
+        "test_em_accuracy": 0.88
+    },
+    "GraphQA_shortest_path_K=0_M=0": {
+        "test_em_accuracy": 0.91
+    }
+}
