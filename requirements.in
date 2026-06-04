@@ -36,3 +36,4 @@ seaborn
 # Other
 typing-extensions>=4.8.0
 pydantic
+gdown
