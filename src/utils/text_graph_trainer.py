@@ -3,7 +3,7 @@ import torch
 from transformers import Trainer
 from peft import PeftModel
 
-from ..models.llama_utils import save_bias_parameters
+from ..models.model_utils import save_bias_parameters
 
 class GraphTrainer(Trainer):
     def __init__(self, *args, custom_prediction_step=None, active_params=None, bias_lr=None, **kwargs):
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     collator = GraphCollator(tokenizer=tokenizer)
 
     # load the model
-    from ..models.llama_attn_bias import GraphLlamaForCausalLM
+    from ..models.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM
     model = GraphLlamaForCausalLM.from_pretrained(model_name)
 
     # ---------------------------------------------------------------

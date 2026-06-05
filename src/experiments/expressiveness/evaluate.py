@@ -1,5 +1,5 @@
 from ...utils import TextGraphDataset, GraphCollator
-from ...models.llama_attn_bias import GraphLlamaForCausalLM
+from ...models.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM
 
 from .data_gen import create_and_save_dataset, dataset_path_and_size
 

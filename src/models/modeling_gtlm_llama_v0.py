@@ -45,7 +45,7 @@ from transformers.cache_utils import DynamicCache
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 from ..utils.text_graph_dataset import TextGraphDataset, TextGraph, generate_text_graph_example, prepare_example_labels
-from .llama_utils import save_bias_parameters, load_bias_parameters
+from .model_utils import save_bias_parameters, load_bias_parameters
 from peft import PeftModel
 
 from transformers.models.llama.modeling_llama import (
@@ -1152,7 +1152,7 @@ if __name__ == "__main__":
 
     # model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", bias_type="combined")
     # config = GraphLlamaConfig.from_pretrained("meta-llama/Llama-3.2-1B", spd=True, laplacian=True, max_spd=8, rwse=True)
-    config = GraphLlamaConfig.from_pretrained("./src/models/graph_llama1b_config.json")
+    config = GraphLlamaConfig.from_pretrained("./src/models/configs/gtlm_llama_v0_1b.json")
     print(config.graph_attn_bias)
     # model = GraphLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", config=config)
     model = GraphLlamaForCausalLM(config=config).to("cuda")

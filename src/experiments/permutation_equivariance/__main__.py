@@ -4,14 +4,14 @@ from transformers import LlamaForCausalLM, LlamaConfig, AutoTokenizer
 
 import networkx as nx
 
-from ...models.llama_attn_bias import GraphLlamaForCausalLM, GraphLlamaConfig
+from ...models.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
 from ...utils.text_graph_dataset import TextGraphDataset, prepare_example_labels
 from ...utils.text_graph_collator import GraphCollator
 print("src/experiments/backward_compatibility/__main__.py: Imports completed successfully.")
 
 
 def _load_graph_model(model_name):
-    config = GraphLlamaConfig.from_pretrained("./src/models/graph_llama1b_config.json")
+    config = GraphLlamaConfig.from_pretrained("./src/models/configs/gtlm_llama_v0_1b.json")
     config.use_cache = False
     model = GraphLlamaForCausalLM.from_pretrained(model_name, config=config)
     return model

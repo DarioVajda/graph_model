@@ -41,7 +41,7 @@ from transformers.models.llama.modeling_llama import (
     logger,
 )
 
-from .llama_attn_bias import (
+from .modeling_gtlm_llama_v0 import (
     GraphLlamaConfig,
     GraphLlamaForCausalLM,
     LlamaDecoderLayerWithBias,
