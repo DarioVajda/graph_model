@@ -22,7 +22,7 @@ from src.models.modeling_gtlm_llama_v0 import (
     GraphLlamaConfig,
     GraphAttnBiasConfig,
 )
-from src.models.modeling_gtlm_llama import KHopGraphLlamaForCausalLM, KHopLlamaConfig
+from src.models.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, KHopLlamaConfig
 
 DEVICE = torch.device('cpu')
 

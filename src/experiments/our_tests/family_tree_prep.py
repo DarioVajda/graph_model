@@ -417,17 +417,17 @@ if __name__ == "__main__":
     get_graph_labels = GetGraphLabels(question_end=[ 32, 25 ], tokenizer=tokenizer) # this represents "A:"
 
     # # --------- Save Graph Dataset ----------
-    # graph_datasets = prepare_graph_dataset(raw_datasets)
+    graph_datasets = prepare_graph_dataset(raw_datasets)
 
-    # params = {
-    #     'tokenizer': tokenizer,
-    #     'max_length': 32_768,
-    #     'max_rrwp_steps': 16,
-    #     'magnetic_q': 0.25,
-    #     'get_graph_labels': get_graph_labels,
-    # }
-    # output_dir = "./src/experiments/our_tests/family_tree_graph_dataset"
-    # save_graph_dataset(graph_datasets, output_dir, params)
+    params = {
+        'tokenizer': tokenizer,
+        'max_length': 32_768,
+        'max_rrwp_steps': 16,
+        'magnetic_q': 0.25,
+        'get_graph_labels': get_graph_labels,
+    }
+    output_dir = "./src/experiments/our_tests/family_tree_graph_dataset"
+    save_graph_dataset(graph_datasets, output_dir, params)
 
     
     # # --------- Save Text Dataset ----------
@@ -438,6 +438,6 @@ if __name__ == "__main__":
     # print("Finished preparing and saving text dataset.")
 
     # --------- Save LLaGA Dataset ----------
-    llaga_datasets = prepare_llaga_dataset(raw_datasets)
-    output_dir_llaga = "./src/experiments/our_tests/family_tree_llaga_dataset_v2"
-    save_llaga_dataset(llaga_datasets, output_dir_llaga)
+    # llaga_datasets = prepare_llaga_dataset(raw_datasets)
+    # output_dir_llaga = "./src/experiments/our_tests/family_tree_llaga_dataset_v2"
+    # save_llaga_dataset(llaga_datasets, output_dir_llaga)
