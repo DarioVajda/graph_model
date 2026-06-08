@@ -1,0 +1,80 @@
+[
+  {
+    "config": {
+      "n_nodes": 512,
+      "tokens_per_node": 16,
+      "k_hop": 2
+    },
+    "L": 8304,
+    "block_density": 0.13633136451244354,
+    "gflop": 77.01235536009375,
+    "mb": 737.7117622507325,
+    "arith_intensity": 104.39355762084067,
+    "bound": "memory"
+  },
+  {
+    "config": {
+      "n_nodes": 2048,
+      "tokens_per_node": 8,
+      "k_hop": 2
+    },
+    "L": 16504,
+    "block_density": 0.07199086248874664,
+    "gflop": 160.6370611876953,
+    "mb": 1525.3785765288696,
+    "arith_intensity": 105.30963503711897,
+    "bound": "memory"
+  },
+  {
+    "config": {
+      "n_nodes": 128,
+      "tokens_per_node": 128,
+      "k_hop": 2
+    },
+    "L": 16384,
+    "block_density": 0.1092529296875,
+    "gflop": 240.24973312,
+    "mb": 2145.386496,
+    "arith_intensity": 111.98435972629521,
+    "bound": "memory"
+  },
+  {
+    "config": {
+      "n_nodes": 512,
+      "tokens_per_node": 16,
+      "k_hop": 0
+    },
+    "L": 8304,
+    "block_density": 0.9848520755767822,
+    "gflop": 556.3340343045,
+    "mb": 4482.412379003907,
+    "arith_intensity": 124.11487102579572,
+    "bound": "memory"
+  },
+  {
+    "config": {
+      "n_nodes": 512,
+      "tokens_per_node": 16,
+      "k_hop": 8
+    },
+    "L": 8304,
+    "block_density": 0.4170414209365845,
+    "gflop": 235.58292857925,
+    "mb": 1976.5443655253907,
+    "arith_intensity": 119.18929455278332,
+    "bound": "memory"
+  },
+  {
+    "config": {
+      "n_nodes": 64,
+      "tokens_per_node": 8,
+      "k_hop": 2
+    },
+    "L": 632,
+    "block_density": 0.5600000023841858,
+    "gflop": 1.83236559628125,
+    "mb": 24.670044220947265,
+    "arith_intensity": 74.27492143388189,
+    "bound": "memory"
+  }
+]

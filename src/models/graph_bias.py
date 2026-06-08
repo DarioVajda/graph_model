@@ -164,7 +164,7 @@ class MagneticBias(BaseBias):
                  < num_nodes.unsqueeze(1))                                                       # (B, M) bool
         # Divide by the number of valid eigenvalues, not num_nodes.
         # With full eigenvectors (M=N) these are equal; with truncated (M<N) they differ.
-        n_valid = valid.float().sum(dim=1, keepdim=True).unsqueeze(-1).clamp(min=1)             # (B, 1, 1)
+        n_valid = valid.sum(dim=1, keepdim=True).unsqueeze(-1).to(h_i.dtype).clamp(min=1)       # (B, 1, 1)
         h_avg   = (h_i * valid.unsqueeze(-1)).sum(1, keepdim=True) / n_valid                   # (B, 1, head_dim)
 
         phi = self.deep_set(torch.cat([h_i, h_avg.expand_as(h_i)], dim=-1))                                 # (B, N, magnetic_dim)

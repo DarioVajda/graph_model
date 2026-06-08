@@ -73,9 +73,13 @@ Pass a list of such graphs to `TextGraphDataset`, call the feature-computation m
 
 ```bash
 python -m src.experiments.<your_experiment> \
+    --model_name meta-llama/Llama-3.2-1B \
     --num_epochs 20 \
     --batch_size 4 \
+    --accumulation_steps 4 \
     --learning_rate 3e-5 \
+    --bias_learning_rate 1e-2 \
+    --eval_every 50 \
     --lora_r 16 \
     --k_hop 0 \
     --wandb_project GraphLLM

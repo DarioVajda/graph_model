@@ -1,0 +1,28 @@
+[
+  {
+    "config": {
+      "n_nodes": 512,
+      "tokens_per_node": 16,
+      "k_hop": 2
+    },
+    "phase": "fwd",
+    "kernels": [
+      {
+        "error": "ncu produced no CSV (permissions? need CAP_SYS_ADMIN / `nvidia-smi -lgc` or sudo). stderr tail: "
+      }
+    ]
+  },
+  {
+    "config": {
+      "n_nodes": 512,
+      "tokens_per_node": 16,
+      "k_hop": 2
+    },
+    "phase": "train",
+    "kernels": [
+      {
+        "error": "ncu produced no CSV (permissions? need CAP_SYS_ADMIN / `nvidia-smi -lgc` or sudo). stderr tail: "
+      }
+    ]
+  }
+]
