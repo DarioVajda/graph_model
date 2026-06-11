@@ -14,7 +14,7 @@ features. So this generator:
   * **synthesizes the magnetic-Laplacian eigenvectors** (``magnetic_V`` /
     ``magnetic_lambdas``) as random tensors of the correct shape. A true
     magnetic eigendecomposition at N=2048 would dominate setup time for zero
-    benchmarking value, and the ``current`` and ``flex`` paths are always fed
+    benchmarking value, and the ``eager`` and ``flex`` paths are always fed
     the *identical* ``node_bias`` tensor, so output parity is unaffected.
 
 The packed batch is produced by the real :class:`GraphCollatorV2`, so token
@@ -254,7 +254,7 @@ def make_attention_inputs(
     ``k_hop_mask``, ``num_nodes``), and a precomputed per-layer ``node_bias``
     ``(B, H, N, N)`` built by the real :class:`GraphAttentionBias` from the
     synthetic spd + magnetic features. The same ``node_bias`` is consumed by
-    both the dense (``current``) and ``flex`` paths, guaranteeing parity.
+    both the dense (``eager``) and ``flex`` paths, guaranteeing parity.
     """
     items, meta = _build_items(spec, batch_size)
     batch = _collate(spec, items)

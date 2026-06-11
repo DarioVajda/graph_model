@@ -215,7 +215,7 @@ def dense_reference(
     *,
     node_ids, prompt_node, pad_mask, k_hop_mask, k_hop, node_bias, scaling,
 ):
-    """Eager dense attention matching the model's ``current`` path, for parity.
+    """Eager dense attention matching the model's ``eager`` path, for parity.
 
     Builds the same dense structural mask + token-expanded soft bias the
     sdpa/eager backend uses, then does a plain softmax attention. Reuses the

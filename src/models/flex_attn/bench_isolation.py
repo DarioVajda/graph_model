@@ -3,9 +3,9 @@ Attention-only (isolation) benchmark: one attention layer, three backends.
 
 Methods
 -------
-  * ``current`` — the model's dense path: a ``(B,1,L,L)`` additive structural
+  * ``eager`` — the model's dense path: a ``(B,1,L,L)`` additive structural
     mask + a ``(B,H,L,L)`` token-expanded soft bias, fed to SDPA. (The float
-    mask disables the flash kernel, so this is the realistic current cost.)
+    mask disables the flash kernel, so this is the realistic eager cost.)
   * ``flex``    — ``flex_core``: prebuilt sparse ``BlockMask`` + on-the-fly
     ``node_bias`` gather via ``score_mod``, compiled ``flex_attention``.
   * ``flash``   — plain causal SDPA flash kernel, no bias / no graph structure.
@@ -81,7 +81,7 @@ def emit_result(res: dict) -> None:
 
 # ── the three forward/backward closures ───────────────────────────────────────
 
-def _build_current(ai, scaling):
+def _build_eager(ai, scaling):
     """Return (attn_fn(q,k,v) -> out, captured_grad_tensors).
 
     The bias is a captured leaf (``nb``); q/k/v are supplied by the timing
@@ -189,8 +189,8 @@ def run_isolation(
 
         compile_ms = None
         blockmask_build_ms = None
-        if method == "current":
-            attn_fn, captured, qkv_src = _build_current(ai, scaling)
+        if method == "eager":
+            attn_fn, captured, qkv_src = _build_eager(ai, scaling)
         elif method == "flash":
             attn_fn, captured, qkv_src = _build_flash(ai, scaling)
         elif method == "flex":
@@ -262,7 +262,7 @@ def run_isolation(
 
 def _parse_args(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--method", required=True, choices=["current", "flex", "flash"])
+    p.add_argument("--method", required=True, choices=["eager", "flex", "flash"])
     p.add_argument("--n-nodes", type=int, required=True)
     p.add_argument("--tokens-per-node", type=int, required=True)
     p.add_argument("--prompt-tokens", type=int, default=128)

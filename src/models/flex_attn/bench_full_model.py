@@ -3,7 +3,7 @@ Full-model benchmark: Llama-3.2-1B, three configurations.
 
 Methods
 -------
-  * ``current`` — ``GTLMLlamaForCausalLM`` (spd + magnetic, K-hop) on the stock
+  * ``eager`` — ``GTLMLlamaForCausalLM`` (spd + magnetic, K-hop) on the stock
     ``sdpa`` backend: dense ``(B,1,L,L)`` structural mask + per-layer
     ``(B,H,L,L)`` token-expanded soft bias.
   * ``flex``    — the same model and weights, but each attention layer is routed
@@ -134,7 +134,7 @@ def _install_flex(model, batch, k_hop: int):
         layer.self_attn.forward = MethodType(_flex_attn_forward, layer.self_attn)
     return block_mask
 
-# python -m src.models.flex_attn.run_sweep  --kind both  --methods flash current flex  --nodes 128 512 2048  --tpn 2 8 32 128  --k-hops 0 2  --orderings rcm  --out-dir src/models/flex_attn/results  --max-tokens=400000
+# python -m src.models.flex_attn.run_sweep  --kind both  --methods flash eager flex  --nodes 128 512 2048  --tpn 2 8 32 128  --k-hops 0 2  --orderings rcm  --out-dir src/models/flex_attn/results  --max-tokens=400000
 
 
 # ── model builders ────────────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ def run_full_model(
         result["shape"] = {k: meta[k] for k in ("seq_len", "max_num_nodes", "total_tokens")}
 
         # Mask density — computed on the (unpadded) graph for EVERY method so
-        # token- and block-level sparsity are comparable across current/flex/flash.
+        # token- and block-level sparsity are comparable across eager/flex/flash.
         d = compute_density(batch["node_ids"], batch["prompt_node"],
                             batch["attention_mask"], batch.get("k_hop_mask"),
                             spec.k_hop, block_size=128)
@@ -259,7 +259,7 @@ def run_full_model(
 
 def _parse_args(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--method", required=True, choices=["current", "flex", "flash"])
+    p.add_argument("--method", required=True, choices=["eager", "flex", "flash"])
     p.add_argument("--n-nodes", type=int, required=True)
     p.add_argument("--tokens-per-node", type=int, required=True)
     p.add_argument("--prompt-tokens", type=int, default=128)

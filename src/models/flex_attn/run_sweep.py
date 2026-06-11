@@ -186,7 +186,7 @@ def recompile_probe(bucketed: bool, block_size: int = 128) -> dict:
 
 # ── summary table ─────────────────────────────────────────────────────────────
 
-_METHOD_ORDER = ["flash", "current", "flex"]
+_METHOD_ORDER = ["flash", "eager", "flex"]
 
 
 def _first(rows, *path, default=None):
@@ -333,7 +333,7 @@ def main(argv=None):
     p.add_argument("--kind", default="isolation",
                    choices=["isolation", "full_model", "both"],
                    help="'both' runs the isolated-attention and full-model sweeps back to back")
-    p.add_argument("--methods", nargs="+", default=["flash", "current", "flex"])
+    p.add_argument("--methods", nargs="+", default=["flash", "eager", "flex"])
     p.add_argument("--k-hops", nargs="+", type=int, default=[0, 2, 4])
     p.add_argument("--orderings", nargs="+", default=["rcm", "random"])
     p.add_argument("--nodes", nargs="+", type=int, default=GRID_NODES)

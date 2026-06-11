@@ -1,10 +1,10 @@
 # FlexAttention sweep — `isolation`
 
-_Generated 2026-06-07 00:16. 24 configs, methods: flash, current, flex._
+_Generated 2026-06-07 00:16. 24 configs, methods: flash, eager, flex._
 
 **Legend.** `… ms` = forward+backward latency (median, milliseconds). `… GB` = peak GPU memory during forward+backward. `OOM` = ran out of memory (bold); other bold tags are errors. `tokSp` / `blkSp` = token-level / block-level mask sparsity (fraction of attention masked out; block-level is what flex actually skips). `L` = packed sequence length.
 
-| nodes | tpn | k | order | L | tokSp | blkSp | flash ms | flash GB | current ms | current GB | flex ms | flex GB |
+| nodes | tpn | k | order | L | tokSp | blkSp | flash ms | flash GB | eager ms | eager GB | flex ms | flex GB |
 | --: | --: | --: | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: |
 | 128 | 2 | 0 | rcm | 402 | 0.28 | 0.19 | 0.6 | 0.05 | 6.2 | 0.28 | 0.9 | 0.04 |
 | 128 | 2 | 2 | rcm | 402 | 0.86 | 0.31 | 0.4 | 0.05 | 6.2 | 0.28 | 2.9 | 0.04 |

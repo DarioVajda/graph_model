@@ -27,9 +27,9 @@ magnetic-Laplacian biases? This suite answers that with measurements on an A100_
    preprocessing, and is negligible vs the O(N²)–O(N³) SPD/magnetic precompute that
    must happen anyway.
 5. **End result (Llama-3.2-1B, L≈2.3k, spd+magnetic, k=2):**
-   `current` 1607 ms / 20 GB (fwd+bwd) → `flex` **197 ms / 10 GB** (8× faster,
+   `eager` 1607 ms / 20 GB (fwd+bwd) → `flex` **197 ms / 10 GB** (8× faster,
    ½ memory), within 1.5× of the bias-free `flash` floor (133 ms). At larger L,
-   `current` simply **OOMs** where flex runs.
+   `eager` simply **OOMs** where flex runs.
 
 ## Files
 
@@ -38,7 +38,7 @@ magnetic-Laplacian biases? This suite answers that with measurements on an A100_
 | `inputs.py` | Synthetic graph-batch generator. Real topology (random-geometric → recoverable locality) + real K-hop/SPD; **synthetic** magnetic eigenvectors (shape-faithful — values don't affect timing). RCM/random/identity node ordering. Packs via the real `GraphCollatorV2`. |
 | `density.py` | Element-level vs **block-level** mask coverage, chunked so it never materializes `L×L`. Block density predicts flex speedup (`~1/block_density`). |
 | `flex_core.py` | The real flex implementation: `pad_to_block`, `build_block_mask` (mask_mod → `BlockMask`), `make_score_mod` (node-bias gather), `flex_attention_forward`, and a `dense_reference` for parity. Drops into the `graph_attention_v2.py` flex scaffold. |
-| `bench_isolation.py` | One attention layer, 3 methods (`current` dense SDPA / `flex` / `flash` floor). Times fwd and fwd+bwd separately + peak memory. Correct input-grad lifecycle (fresh leaves per step). |
+| `bench_isolation.py` | One attention layer, 3 methods (`eager` dense SDPA / `flex` / `flash` floor). Times fwd and fwd+bwd separately + peak memory. Correct input-grad lifecycle (fresh leaves per step). |
 | `bench_full_model.py` | Llama-3.2-1B fwd+bwd, same 3 methods. flex is routed at runtime (monkeypatch) — no edits to the model source. |
 | `run_sweep.py` | Drives the 2D (`nodes × tokens/node`) sweep × ordering × K-hop × method, each `(method,config)` in a **fresh subprocess** (OOM isolation). Also `--recompile-probe`. |
 | `profile_ncu.py` | Nsight Compute roofline: per-kernel DRAM% vs compute% (memory- vs compute-bound), fwd vs bwd. |
@@ -59,11 +59,11 @@ python -m src.models.flex_attn.bench_full_model \
 # the full sweep (subprocess-isolated). --out-dir is a folder; the sweep writes
 # {kind}.jsonl (full detail) and {kind}.md (a readable pivot table) into it.
 python -m src.models.flex_attn.run_sweep --kind isolation \
-    --methods flash current flex --k-hops 0 2 4 --orderings rcm random \
+    --methods flash eager flex --k-hops 0 2 4 --orderings rcm random \
     --out-dir src/models/flex_attn/results
 
 python -m src.models.flex_attn.run_sweep --kind full_model \
-    --methods flash current flex --k-hops 0 2 4 \
+    --methods flash eager flex --k-hops 0 2 4 \
     --out-dir src/models/flex_attn/results
 
 # regenerate the markdown table from a saved JSONL (writes <name>.md beside it)
