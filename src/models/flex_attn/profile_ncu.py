@@ -148,8 +148,8 @@ def _driver(args):
                     print("  " + kr["error"]); continue
                 print(f"  {kr['kernel']:<50} compute={kr['compute_pct']:5.1f}%  "
                       f"mem={kr['memory_pct']:5.1f}%  -> {kr['bound']}")
-    os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
-    out = os.path.join(_HERE, "results", "ncu_roofline.json")
+    os.makedirs(os.path.join(_HERE, "results_h100"), exist_ok=True)
+    out = os.path.join(_HERE, "results_h100", "ncu_roofline.json")
     with open(out, "w") as fh:
         json.dump(results, fh, indent=2)
     print(f"\nWrote {out}")
@@ -200,8 +200,8 @@ def _analytic(args):
         results.append(row)
         print(f"{str(cfg):>26} | {L:>6} | {dens.block_density:7.3f} | {flops/1e9:8.2f} | "
               f"{bytes_moved/1e6:7.1f} | {ai_intensity:7.1f} | {bound}")
-    os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
-    with open(os.path.join(_HERE, "results", "analytic_roofline.json"), "w") as fh:
+    os.makedirs(os.path.join(_HERE, "results_h100"), exist_ok=True)
+    with open(os.path.join(_HERE, "results_h100", "analytic_roofline.json"), "w") as fh:
         json.dump(results, fh, indent=2)
     return 0
 

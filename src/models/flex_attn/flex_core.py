@@ -34,29 +34,87 @@ from torch.nn.attention.flex_attention import (
     BlockMask,
 )
 
-# Compiled-callable cache, keyed by (dynamic,). flex_attention must be compiled
-# to get the kernel fusion / sparsity speedup; eager flex is a slow fallback.
+# Compiled-callable cache, keyed by (dynamic, mode). flex_attention must be
+# compiled to get the kernel fusion / sparsity speedup; eager flex is a slow
+# fallback.
 _FLEX_CACHE: dict = {}
 _BLOCKMASK_BUILDER_CACHE: dict = {}
 
+# torch.compile mode for the flex kernels — the TODO #4 decision. Autotuning
+# (H100, 512×32) bought fwd 35.9→7.6 ms (4.7×) at k=2 and 83→46 ms at k=0 for
+# a net fwd+bwd 1.47× / 1.18×, at ~320 s one-time compile per distinct shape —
+# amortized by length bucketing (``bucket_len``) and persisted across processes
+# by inductor's on-disk cache. ``-no-cudagraphs`` because the per-batch
+# BlockMask tensors and fresh grad leaves are not CUDA-graph-safe. Pass
+# ``mode=None`` explicitly for inductor's fast-compiling heuristic configs.
+DEFAULT_COMPILE_MODE: Optional[str] = "max-autotune-no-cudagraphs"
 
-def get_flex_attention(dynamic: bool = False) -> Callable:
-    key = ("flex", bool(dynamic))
+
+def get_flex_attention(dynamic: bool = False,
+                       mode: Optional[str] = DEFAULT_COMPILE_MODE) -> Callable:
+    """Compiled ``flex_attention``, cached per ``(dynamic, mode)``.
+
+    ``mode`` is the ``torch.compile`` mode; see ``DEFAULT_COMPILE_MODE`` for
+    the measured trade-off. Keying the cache on the mode keeps variants
+    comparable within one process.
+    """
+    key = ("flex", bool(dynamic), mode)
     if key not in _FLEX_CACHE:
-        _FLEX_CACHE[key] = torch.compile(flex_attention, dynamic=dynamic)
+        _FLEX_CACHE[key] = torch.compile(flex_attention, dynamic=dynamic, mode=mode)
     return _FLEX_CACHE[key]
 
 
 # ── Sequence-length alignment (REQUIRED for performance) ──────────────────────
 
+def largest_block(block_size) -> int:
+    """The padding granularity for an int or ``(Q_BLOCK, KV_BLOCK)`` block size.
+
+    With rectangular blocks the sequence is padded to the *larger* of the two
+    (both are powers of two, so the smaller always divides it).
+    """
+    if isinstance(block_size, (tuple, list)):
+        q_b, kv_b = block_size
+        if max(q_b, kv_b) % min(q_b, kv_b) != 0:
+            raise ValueError(f"incompatible block sizes {block_size!r}")
+        return max(q_b, kv_b)
+    return block_size
+
+
 def align_len(length: int, block_size: int = 128) -> int:
-    """Round a sequence length up to a multiple of ``block_size``."""
+    """Round a sequence length up to a multiple of ``block_size`` (int or
+    ``(Q_BLOCK, KV_BLOCK)`` — the larger of the two)."""
+    block_size = largest_block(block_size)
     return ((length + block_size - 1) // block_size) * block_size
 
 
-def pad_to_block(q, k, v, node_ids, pad_mask, block_size: int = 128):
+def bucket_len(length: int, block_size: int = 128, midpoints: bool = True) -> int:
+    """Round a length up to a coarse bucket ladder: power-of-2 multiples of
+    ``block_size`` (128, 256, 512, …), with 1.5× midpoints by default
+    (384, 768, 1536, …) so padding waste is bounded at ~33% instead of ~100%.
+
+    Why this exists (and why ``align_len`` alone is not enough): the compiled
+    flex kernel guards on the q/k/v length AND the captured ``node_bias`` /
+    ``node_ids`` shapes, and the ``_compile=True`` BlockMask builder pays a
+    ~5–40 s dynamo compile per *distinct* L — so a training run over
+    heterogeneous graphs should bucket its padded L (and N, e.g.
+    ``bucket_len(N, 128)``) to this ladder, keeping both compile caches small
+    and hit-rates high. Validated by ``run_sweep --recompile-probe``.
+    """
+    if length <= block_size:
+        return block_size
+    n_blocks = (length + block_size - 1) // block_size
+    pow2 = 1 << (n_blocks - 1).bit_length()         # next power of 2 ≥ n_blocks
+    if midpoints:
+        mid = 3 * (pow2 // 4)                       # 1.5× the previous power of 2
+        if n_blocks <= mid:
+            return mid * block_size
+    return pow2 * block_size
+
+
+def pad_to_block(q, k, v, node_ids, pad_mask, block_size=128):
     """Pad q/k/v/node_ids/pad_mask so the sequence length is a multiple of
-    ``block_size``. Returns ``(q, k, v, node_ids, pad_mask, orig_len, padded_len)``.
+    ``block_size`` (an int, or a ``(Q_BLOCK, KV_BLOCK)`` tuple — padding uses
+    the larger). Returns ``(q, k, v, node_ids, pad_mask, orig_len, padded_len)``.
 
     This is not optional tuning — flex_attention's Triton kernel hits a severe
     config cliff at non-``block_size``-aligned lengths (measured ~14× slowdown at
@@ -118,12 +176,16 @@ def build_block_mask(
     q_len: int,
     kv_len: int,
     *,
-    block_size: int = 128,
+    block_size=128,
     device: Optional[torch.device] = None,
     compile_builder="auto",
     compile_threshold: int = 8192,
 ) -> BlockMask:
     """Build a (B, broadcast-over-H, q_len, kv_len) sparse ``BlockMask`` once per batch.
+
+    ``block_size`` is an int or a ``(Q_BLOCK, KV_BLOCK)`` tuple (TODO #6 —
+    smaller KV blocks fit scattered K-hop neighbourhoods more tightly, raising
+    block sparsity at small tokens-per-node, at some per-block kernel cost).
 
     ``compile_builder`` selects how ``create_block_mask`` evaluates ``mask_mod``:
 
@@ -149,6 +211,8 @@ def build_block_mask(
         node_ids, prompt_node, pad_mask, k_hop_mask, k_hop,
         q_offset=kv_len - q_len,
     )
+    if isinstance(block_size, list):
+        block_size = tuple(block_size)
     return create_block_mask(
         mask_mod, B, None, q_len, kv_len,
         device=device, BLOCK_SIZE=block_size,
@@ -188,6 +252,7 @@ def flex_attention_forward(
     scaling: float,
     enable_gqa: bool = True,
     dynamic: bool = False,
+    compile_mode: Optional[str] = DEFAULT_COMPILE_MODE,
     return_lse: bool = False,
 ):
     """Run compiled ``flex_attention`` with the prebuilt BlockMask and score_mod.
@@ -195,8 +260,21 @@ def flex_attention_forward(
     Returns ``attn_output`` (B, H, q_len, d) — or ``(attn_output, lse)`` if
     ``return_lse``. Mirrors the ``(attn_output, attn_weights=None)`` contract of
     the other backends when wired into the dispatch.
+
+    The Triton kernel's tile sizes must *divide* the BlockMask's block sizes
+    (torch 2.6 lowering). Inductor's default mode generates a single 128-tile
+    config and hard-errors on smaller mask blocks; the ``max-autotune`` modes
+    carry 64-tile candidates and simply skip the incompatible ones — so
+    sub-128 / rectangular blocks (TODO #6) require an autotune compile mode.
     """
-    fa = get_flex_attention(dynamic=dynamic)
+    q_bs, kv_bs = block_mask.BLOCK_SIZE
+    if (q_bs < 128 or kv_bs < 128) and not (compile_mode or "").startswith("max-autotune"):
+        raise ValueError(
+            f"BlockMask block size {(q_bs, kv_bs)}: sub-128 blocks need a "
+            f"max-autotune compile mode (got {compile_mode!r}) — inductor's "
+            "default config only generates 128-tile kernels, which must divide "
+            "the mask block size.")
+    fa = get_flex_attention(dynamic=dynamic, mode=compile_mode)
     return fa(
         query, key, value,
         score_mod=score_mod,

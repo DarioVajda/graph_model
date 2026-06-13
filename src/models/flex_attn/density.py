@@ -31,12 +31,13 @@ import torch
 class Density:
     element_density: float          # fraction of allowed (q, k) pairs
     block_density: float            # fraction of non-fully-masked blocks
-    block_size: int
+    block_size: object              # int, or (Q_BLOCK, KV_BLOCK)
     expected_speedup: float         # 1 / block_density (attention-only, ideal)
 
     def as_dict(self) -> dict:
+        bs = self.block_size
         return {
-            "block_size": self.block_size,
+            "block_size": list(bs) if isinstance(bs, (tuple, list)) else bs,
             "element_density": self.element_density,         # fraction of allowed token pairs
             "element_sparsity": 1.0 - self.element_density,  # token-level sparsity
             "block_density": self.block_density,             # fraction of computed blocks
@@ -88,20 +89,24 @@ def compute_density(
     pad_mask: torch.Tensor,
     k_hop_mask: Optional[torch.Tensor],
     k_hop: int,
-    block_size: int = 128,
+    block_size=128,
     chunk: int = 4096,
 ) -> Density:
     """Chunked element- and block-level density for a packed batch.
 
-    ``chunk`` bounds peak memory at ``B * chunk^2`` bools; choose a multiple of
-    ``block_size`` so block reductions tile cleanly.
+    ``block_size`` is an int or a ``(Q_BLOCK, KV_BLOCK)`` tuple. ``chunk``
+    bounds peak memory at ``B * chunk^2`` bools; it is snapped to a multiple of
+    the larger block dimension so block reductions tile cleanly.
     """
     B, L = node_ids.shape
     device = node_ids.device
-    chunk = max(block_size, (chunk // block_size) * block_size)
+    q_bs, kv_bs = (tuple(block_size) if isinstance(block_size, (tuple, list))
+                   else (block_size, block_size))
+    bs_max = max(q_bs, kv_bs)
+    chunk = max(bs_max, (chunk // bs_max) * bs_max)
 
-    n_qb = (L + block_size - 1) // block_size
-    n_kb = (L + block_size - 1) // block_size
+    n_qb = (L + q_bs - 1) // q_bs
+    n_kb = (L + kv_bs - 1) // kv_bs
 
     allowed_total = 0
     pair_total = B * L * L
@@ -117,14 +122,14 @@ def compute_density(
 
             # Reduce this tile into its constituent blocks via padded reshape.
             qh, kh = q1 - q0, k1 - k0
-            qpad = (block_size - qh % block_size) % block_size
-            kpad = (block_size - kh % block_size) % block_size
+            qpad = (q_bs - qh % q_bs) % q_bs
+            kpad = (kv_bs - kh % kv_bs) % kv_bs
             if qpad or kpad:
                 tile = torch.nn.functional.pad(tile, (0, kpad, 0, qpad))
-            tb = tile.view(B, (qh + qpad) // block_size, block_size,
-                                (kh + kpad) // block_size, block_size)
+            tb = tile.view(B, (qh + qpad) // q_bs, q_bs,
+                                (kh + kpad) // kv_bs, kv_bs)
             tile_active = tb.any(dim=4).any(dim=2)               # (B, qb, kb)
-            qb0, kb0 = q0 // block_size, k0 // block_size
+            qb0, kb0 = q0 // q_bs, k0 // kv_bs
             active_blocks[:, qb0:qb0 + tile_active.shape[1],
                              kb0:kb0 + tile_active.shape[2]] |= tile_active
 

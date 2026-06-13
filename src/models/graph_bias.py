@@ -169,10 +169,34 @@ class MagneticBias(BaseBias):
 
         phi = self.deep_set(torch.cat([h_i, h_avg.expand_as(h_i)], dim=-1))                                 # (B, N, magnetic_dim)
 
-        real = (torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phi) + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phi))
-        imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi) - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi))
+        if getattr(self, "legacy_unfolded", False):
+            # Original formulation, kept for parity testing: materializes the
+            # (B,N,N,magnetic_dim) real/imag tensors AND their (…, 2m) cat
+            # before the first projection.
+            real = (torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phi) + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phi))
+            imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi) - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi))
+            b = self.proj(torch.cat([real, imag], dim=-1))
+        else:
+            # Folded formulation (algebraically identical): the first proj
+            # layer is linear, so project phi (B,M,m — tiny) BEFORE the N²
+            # einsums instead of their (B,N,N,2m) cat after. The first hidden
+            # layer (B,N,N,m) is emitted directly; `real`/`imag` and the cat
+            # never exist, halving the largest per-layer intermediates (and
+            # the #7 recompute cost). Uses the same parameters — proj[0]'s
+            # weight is just split into its real/imag column halves.
+            W1, b1 = self.proj[0].weight, self.proj[0].bias       # (m, 2m), (m)
+            m = W1.shape[0]
+            phiR = phi @ W1[:, :m].T                              # (B, M, m)
+            phiI = phi @ W1[:, m:].T                              # (B, M, m)
+            hidden = (
+                torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phiR)
+                + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phiR)
+                + torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phiI)
+                - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phiI)
+            ) + b1                                                # (B, N, N, m)
+            b = self.proj[2](self.proj[1](hidden))                # SiLU, Linear
 
-        b = (self.proj(torch.cat([real, imag], dim=-1)).permute(0, 3, 1, 2).contiguous())                    # (B, H, N, N)
+        b = b.permute(0, 3, 1, 2).contiguous()                    # (B, H, N, N)
         diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
         return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
 
@@ -280,7 +304,10 @@ class GraphAttentionBias(nn.Module):
 
         node_bias = self._apply_k_hop_gate(node_bias, k_hop_mask, dtype, device)
 
-        if node_bias is not None and cache_dict is not None:
+        # Cache only in eval (the read above is eval-only too): it exists for
+        # autoregressive decode. Writing during training would just pin every
+        # layer's (B,H,N,N) output in memory for the rest of the step.
+        if node_bias is not None and cache_dict is not None and not self.training:
             cache_dict[cache_key] = node_bias
 
         return node_bias

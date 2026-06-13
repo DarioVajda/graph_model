@@ -21,6 +21,7 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint
 
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -85,6 +86,7 @@ class GTLMLlamaConfig(LlamaConfig):
         k_hop: int = 0,
         k_hop_directed: bool = False,
         graph_attn_impl: str = "eager",
+        checkpoint_graph_bias: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -100,6 +102,10 @@ class GTLMLlamaConfig(LlamaConfig):
         self.k_hop = k_hop
         self.k_hop_directed = k_hop_directed
         self.graph_attn_impl = graph_attn_impl
+        # Recompute the per-layer bias modules in backward instead of saving
+        # their (B,N,N,·) intermediates — ~40 GB at N=2048 for ms of recompute.
+        # Training-only (eval/generation paths are unaffected by the flag).
+        self.checkpoint_graph_bias = checkpoint_graph_bias
 
 
 # ── Attention (the one substantive override) ────────────────────────────────────
@@ -161,20 +167,32 @@ class GTLMLlamaAttention(LlamaAttention):
         q_len = query_states.shape[2]
         kv_len = key_states.shape[2]
 
-        # Per-layer trainable soft bias → node level → token level.
+        # Per-layer trainable soft bias → node level → token level. Optionally
+        # gradient-checkpointed: the bias compute is milliseconds, but autograd
+        # would otherwise keep every layer's (B,N,N,·) intermediates alive.
+        # Safe to recompute: in training the bias cache is never read, so the
+        # recompute is deterministic.
         feats = ctx["features"]
-        node_bias = self.graph_bias(
-            dtype=query_states.dtype,
-            device=query_states.device,
-            num_nodes=ctx["num_nodes"],
-            spd=feats["spd"],
-            laplacian=feats["laplacian"],
-            rwse=feats["rwse"],
-            rrwp=feats["rrwp"],
-            magnetic=feats["magnetic"],
-            k_hop_mask=None,
-            cache_dict=ctx["cache"],
-        )
+
+        def _bias():
+            return self.graph_bias(
+                dtype=query_states.dtype,
+                device=query_states.device,
+                num_nodes=ctx["num_nodes"],
+                spd=feats["spd"],
+                laplacian=feats["laplacian"],
+                rwse=feats["rwse"],
+                rrwp=feats["rrwp"],
+                magnetic=feats["magnetic"],
+                k_hop_mask=None,
+                cache_dict=ctx["cache"],
+            )
+
+        if (getattr(self.config, "checkpoint_graph_bias", False)
+                and self.training and torch.is_grad_enabled()):
+            node_bias = torch.utils.checkpoint.checkpoint(_bias, use_reentrant=False)
+        else:
+            node_bias = _bias()
         token_soft_bias = (
             expand_node_to_token_bias(node_bias, ctx["node_ids"], q_len, kv_len)
             if node_bias is not None else None

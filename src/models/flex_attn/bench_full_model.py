@@ -69,12 +69,21 @@ def _flex_attn_forward(self, hidden_states, position_embeddings,
                                      {"sin": sin, "cos": cos, "cache_position": cache_position})
 
     feats = ctx["features"]
-    node_bias = self.graph_bias(
-        dtype=q.dtype, device=q.device, num_nodes=ctx["num_nodes"],
-        spd=feats["spd"], laplacian=feats["laplacian"], rwse=feats["rwse"],
-        rrwp=feats["rrwp"], magnetic=feats["magnetic"], k_hop_mask=None,
-        cache_dict=ctx["cache"],
-    )
+
+    def _bias():
+        return self.graph_bias(
+            dtype=q.dtype, device=q.device, num_nodes=ctx["num_nodes"],
+            spd=feats["spd"], laplacian=feats["laplacian"], rwse=feats["rwse"],
+            rrwp=feats["rrwp"], magnetic=feats["magnetic"], k_hop_mask=None,
+            cache_dict=ctx["cache"],
+        )
+
+    # Mirror the real model's bias checkpointing (#7) under the same gate.
+    if (getattr(self.config, "checkpoint_graph_bias", False)
+            and self.training and torch.is_grad_enabled()):
+        node_bias = torch.utils.checkpoint.checkpoint(_bias, use_reentrant=False)
+    else:
+        node_bias = _bias()
     score_mod = flex_core.make_score_mod(node_bias, ctx["node_ids"])
     out = flex_core.flex_attention_forward(
         q, k, v, block_mask=self._flex_block_mask, score_mod=score_mod,
@@ -134,12 +143,12 @@ def _install_flex(model, batch, k_hop: int):
         layer.self_attn.forward = MethodType(_flex_attn_forward, layer.self_attn)
     return block_mask
 
-# python -m src.models.flex_attn.run_sweep  --kind both  --methods flash eager flex  --nodes 128 512 2048  --tpn 2 8 32 128  --k-hops 0 2  --orderings rcm  --out-dir src/models/flex_attn/results  --max-tokens=400000
+# .venv/bin/python -m src.models.flex_attn.run_sweep  --kind both  --methods flash flash_nc eager flex  --nodes 128 512 2048  --tpn 2 8 32 128  --k-hops 0 2 4  --orderings rcm  --out-dir src/models/flex_attn/results_h100  --max-tokens=400000
 
 
 # ── model builders ────────────────────────────────────────────────────────────
 
-def _build_gtlm(spec: GraphSpec, dtype):
+def _build_gtlm(spec: GraphSpec, dtype, checkpoint_bias: bool = True):
     from src.models.modeling_gtlm_llama_v2 import GTLMLlamaConfig, GTLMLlamaForCausalLM
     from transformers import AutoConfig
 
@@ -148,6 +157,7 @@ def _build_gtlm(spec: GraphSpec, dtype):
         **base.to_dict(),
         spd=True, max_spd=32, magnetic=True, magnetic_dim=32, magnetic_q=0.25,
         k_hop=spec.k_hop, k_hop_directed=spec.k_hop_directed, graph_attn_impl="sdpa",
+        checkpoint_graph_bias=checkpoint_bias,
     )
     model = GTLMLlamaForCausalLM.from_pretrained(
         BASE_MODEL, config=cfg, torch_dtype=dtype, attn_implementation="eager",
@@ -172,6 +182,8 @@ def run_full_model(
     spec: GraphSpec,
     method: str,
     batch_size: int = 1,
+    checkpoint_bias: bool = True,
+    gradient_checkpointing: bool = False,
     n_warmup: int = 3,
     n_iter: int = 10,
     dtype: torch.dtype = torch.bfloat16,
@@ -179,7 +191,9 @@ def run_full_model(
     result = {
         "kind": "full_model", "method": method, "ok": False, "error": None,
         "spec": dataclasses.asdict(spec),
-        "run": {"batch_size": batch_size, "block_size": 128, "base_model": BASE_MODEL},
+        "run": {"batch_size": batch_size, "block_size": 128, "base_model": BASE_MODEL,
+                "checkpoint_bias": checkpoint_bias,
+                "gradient_checkpointing": gradient_checkpointing},
         "shape": {}, "density": {}, "timing_ms": {}, "memory_mb": {},
     }
     try:
@@ -201,7 +215,15 @@ def run_full_model(
             inputs = {"input_ids": batch["input_ids"], "attention_mask": batch["attention_mask"],
                       "labels": batch["labels"]}
         else:
-            model = _build_gtlm(spec, dtype)
+            model = _build_gtlm(spec, dtype, checkpoint_bias)
+        if gradient_checkpointing:
+            # Recompute each decoder layer in backward (#9). use_reentrant=False
+            # matches (and nests with) the #7 bias checkpoint; use_cache is
+            # incompatible with checkpointing and unused in training anyway.
+            model.config.use_cache = False
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False})
+        if method != "flash":
             if method == "flex":
                 batch = _pad_batch_for_flex(batch, block_size=128)
             inputs = {k: v for k, v in batch.items() if k != "labels"}
@@ -234,11 +256,28 @@ def run_full_model(
         fb_ms, fb_std = _cuda_time(_fwd_bwd, n_warmup, n_iter)
         torch.cuda.synchronize(); peak_fb = _mb(torch.cuda.max_memory_allocated())
 
+        # direct backward timing (preferred over bwd_est: the no-grad forward
+        # saves no activations, so fwd_bwd − fwd over-estimates the backward)
+        def _bwd_sample() -> float:
+            model.zero_grad(set_to_none=True)
+            loss = model(**inputs).loss
+            torch.cuda.synchronize()
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record(); loss.backward(); end.record()
+            torch.cuda.synchronize()
+            return start.elapsed_time(end)
+
+        for _ in range(n_warmup):
+            _bwd_sample()
+        bwd_direct = torch.tensor([_bwd_sample() for _ in range(n_iter)])
+
         result["ok"] = True
         result["timing_ms"] = {
             "fwd": fwd_ms, "fwd_std": fwd_std,
             "fwd_bwd": fb_ms, "fwd_bwd_std": fb_std,
-            "bwd_est": fb_ms - fwd_ms,
+            "bwd": float(bwd_direct.mean()), "bwd_std": float(bwd_direct.std()),
+            "bwd_est": fb_ms - fwd_ms,              # legacy estimate; biased
             "compile": compile_ms,                  # flex one-time
             "reorder_mean": meta["reorder_time_mean_s"] * 1e3,
             "reorder_max": meta.get("reorder_time_max_s", 0.0) * 1e3,
@@ -271,6 +310,14 @@ def _parse_args(argv=None):
     p.add_argument("--jitter", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--batch-size", type=int, default=1)
+    p.add_argument("--checkpoint-bias", default=True,
+                   action=argparse.BooleanOptionalAction,
+                   help="gradient-checkpoint the per-layer bias modules (#7); "
+                        "--no-checkpoint-bias measures the autograd-saved baseline")
+    p.add_argument("--gradient-checkpointing", default=False,
+                   action=argparse.BooleanOptionalAction,
+                   help="gradient-checkpoint the decoder layers (#9) — trades "
+                        "~1.3x latency for several-x activation memory at large L")
     p.add_argument("--n-warmup", type=int, default=3)
     p.add_argument("--n-iter", type=int, default=10)
     return p.parse_args(argv)
@@ -284,6 +331,8 @@ def main(argv=None):
         magnetic_m=a.magnetic_m, jitter=a.jitter, seed=a.seed,
     )
     res = run_full_model(spec, a.method, batch_size=a.batch_size,
+                         checkpoint_bias=a.checkpoint_bias,
+                         gradient_checkpointing=a.gradient_checkpointing,
                          n_warmup=a.n_warmup, n_iter=a.n_iter)
     emit_result(res)
     return 0 if res["ok"] else 1

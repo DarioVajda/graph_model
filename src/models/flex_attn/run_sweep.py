@@ -5,7 +5,10 @@ Runs the 2D (n_nodes × tokens_per_node) sweep, crossed with node-ordering,
 K-hop, and method, driving each ``(method, config)`` in a **fresh subprocess** so
 that one configuration's OOM cannot poison the others (the only robust way to
 guarantee a clean VRAM slate). Configurations whose token budget exceeds
-``--max-tokens`` (~100k) are pre-skipped.
+``--max-tokens`` (~100k) are pre-skipped. K-independent methods
+(flash/flash_nc/eager — see ``_K_INDEPENDENT``) run once per
+(nodes, tpn, ordering) rather than once per K, so extra ``--k-hops`` values
+only add flex runs; the markdown table folds K into ``flex-{K}`` columns.
 
 Results are appended as JSON lines to ``--out``; a compact table is printed at
 the end. OOM and crashes are recorded as rows with ``ok=False`` rather than
@@ -72,7 +75,8 @@ def build_cells(nodes, tpn, k_hops, orderings, batch_size, prompt_tokens,
 
 def run_subprocess(kind: str, method: str, cell: Cell, *, batch_size: int,
                    prompt_tokens: int, magnetic_m: int, block_size: int,
-                   seed: int, timeout: int) -> dict:
+                   seed: int, timeout: int, bias_mode: str = "full",
+                   compile_mode: str = "default") -> dict:
     module = "src.models.flex_attn.bench_full_model" if kind == "full_model" \
         else "src.models.flex_attn.bench_isolation"
     cmd = [
@@ -88,13 +92,15 @@ def run_subprocess(kind: str, method: str, cell: Cell, *, batch_size: int,
         "--seed", str(seed),
     ]
     if kind != "full_model":
-        cmd += ["--block-size", str(block_size)]
+        bs = block_size if isinstance(block_size, (tuple, list)) else (block_size,)
+        cmd += ["--block-size", *[str(x) for x in bs],
+                "--bias-mode", bias_mode, "--compile-mode", compile_mode]
     env = dict(os.environ, PYTHONPATH=_REPO_ROOT + os.pathsep + os.environ.get("PYTHONPATH", ""))
     try:
         proc = subprocess.run(cmd, cwd=_REPO_ROOT, env=env, capture_output=True,
                               text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return _stub(kind, method, cell, batch_size, "TIMEOUT")
+        return _stub(kind, method, cell, batch_size, "TIMEOUT", bias_mode, block_size)
 
     # The bench prints pretty JSON between BEGIN/END sentinels.
     out = proc.stdout
@@ -104,17 +110,19 @@ def run_subprocess(kind: str, method: str, cell: Cell, *, batch_size: int,
     # No JSON → hard crash (often a non-recoverable CUDA OOM that killed the proc).
     detail = (proc.stderr or proc.stdout)[-300:]
     err = "OOM" if "out of memory" in detail.lower() else "CRASH"
-    r = _stub(kind, method, cell, batch_size, err)
+    r = _stub(kind, method, cell, batch_size, err, bias_mode, block_size)
     r["error_detail"] = detail
     return r
 
 
-def _stub(kind, method, cell, batch_size, err) -> dict:
+def _stub(kind, method, cell, batch_size, err, bias_mode="full",
+          block_size=128) -> dict:
     return {
         "kind": kind, "method": method, "ok": False, "error": err,
         "spec": {"n_nodes": cell.n_nodes, "tokens_per_node": cell.tokens_per_node,
                  "k_hop": cell.k_hop, "ordering": cell.ordering},
-        "run": {"batch_size": batch_size},
+        "run": {"batch_size": batch_size, "bias_mode": bias_mode,
+                "block_size": list(block_size) if isinstance(block_size, tuple) else block_size},
         "shape": {}, "density": {}, "timing_ms": {}, "memory_mb": {},
     }
 
@@ -139,9 +147,6 @@ def recompile_probe(bucketed: bool, block_size: int = 128) -> dict:
     dynamo.utils.counters.clear()          # the 'unique_graphs' counter is cumulative
     dynamo.config.cache_size_limit = 256
 
-    def bucket(x, step):
-        return ((x + step - 1) // step) * step
-
     # A spread of shapes a real run would hit (varying nodes/tokens → varying L,N).
     raw = [(32, 8), (40, 8), (33, 9), (128, 16), (140, 15), (130, 17),
            (512, 8), (520, 9), (500, 8)]
@@ -155,11 +160,12 @@ def recompile_probe(bucketed: bool, block_size: int = 128) -> dict:
         N = nb.shape[-1]
 
         if bucketed:
-            # Bucket BOTH L (to block_size) and N (to a coarse node grid): the
-            # flex kernel guards on q/k/v length AND on the captured node_bias
-            # (B,H,N,N) / node_ids shapes, so both must be stabilized.
-            Lb = bucket(q.shape[2], block_size)
-            Nb = bucket(N, 128)
+            # Bucket BOTH L (to the coarse pow2-with-midpoints ladder) and N
+            # (same ladder at step 128): the flex kernel guards on q/k/v length
+            # AND on the captured node_bias (B,H,N,N) / node_ids shapes, so
+            # both must be stabilized. This is the ladder training should use.
+            Lb = flex_core.bucket_len(q.shape[2], block_size)
+            Nb = flex_core.bucket_len(N, 128)
             q, k, v, node_ids, pm, _, _ = flex_core.pad_to_block(q, k, v, node_ids, pm, block_size)
             if Lb != q.shape[2]:
                 q, k, v, node_ids, pm, _, _ = flex_core.pad_to_block(q, k, v, node_ids, pm, Lb)
@@ -186,7 +192,41 @@ def recompile_probe(bucketed: bool, block_size: int = 128) -> dict:
 
 # ── summary table ─────────────────────────────────────────────────────────────
 
-_METHOD_ORDER = ["flash", "eager", "flex"]
+_METHOD_ORDER = ["flash", "flash_nc", "eager", "flex"]
+
+# Methods only the isolation bench implements; silently inflating the
+# full-model grid with them would just produce CRASH rows.
+_ISOLATION_ONLY = {"flash_nc"}
+
+# Methods whose cost cannot depend on the K-hop value: flash/flash_nc never see
+# the graph at all, and eager's dense SDPA does identical work regardless of
+# mask content (verified on the A100 sweep: ≤0.5% timing delta and identical
+# peak memory between k=0 and k=2). The sweep runs these once per
+# (nodes, tpn, ordering) — at the first swept K — and the markdown table gives
+# them a single column, while K-dependent methods (flex) get one column group
+# per K, labelled ``<method>-<K>``.
+_K_INDEPENDENT = {"flash", "flash_nc", "eager"}
+
+# Methods that carry the node bias, i.e. the only ones the ``--bias-modes``
+# backward-decomposition axis (isolation kind only) applies to. flash/flash_nc
+# have no bias and run only at the first mode. Non-"full" modes are labelled
+# ``<method>[<mode>]`` in the table.
+_BIAS_SENSITIVE = {"flex", "eager"}
+
+# Methods the ``--block-sizes`` axis (#6, isolation kind only) applies to —
+# only flex consumes the BlockMask. Non-default block sizes are labelled
+# ``<method>@<size>`` in the table (e.g. ``flex@64``, ``flex@128x64``).
+_BLOCK_SENSITIVE = {"flex"}
+
+
+def _parse_block_size(s: str):
+    """'128' -> 128; '128x64' (or '128,64') -> (128, 64) = (Q_BLOCK, KV_BLOCK)."""
+    parts = [int(p) for p in s.replace(",", "x").split("x")]
+    return parts[0] if len(parts) == 1 else tuple(parts)
+
+
+def _bs_label(bs) -> str:
+    return "x".join(str(x) for x in bs) if isinstance(bs, (tuple, list)) else str(bs)
 
 
 def _first(rows, *path, default=None):
@@ -201,25 +241,61 @@ def _first(rows, *path, default=None):
 
 
 def render_markdown(rows: list[dict], kind: str) -> str:
-    """Pivot the flat JSONL records into a per-config × method markdown table.
+    """Pivot the flat JSONL records into two per-config × method markdown
+    tables: **latency** (fwd+bwd ms) and **peak memory** (GB), over identical
+    rows.
 
-    The JSONL file stays the source of truth (full detail, one record/line); this
-    is the human-readable cross-tab. Each method contributes two explicit columns:
-      * ``<method> ms`` — forward+backward latency (median); or ``OOM`` / an error tag.
-      * ``<method> GB`` — peak GPU memory during forward+backward.
-    Plus per-config ``tokSp`` (token-level) and ``blkSp`` (block-level) mask sparsity.
+    The JSONL file stays the source of truth (full detail, one record/line);
+    this is the human-readable cross-tab. One row per ``(nodes, tpn,
+    ordering)``; K is folded into the columns:
+
+      * K-independent methods (``flash``/``flash_nc``/``eager``) get a single
+        column — their cost doesn't depend on K (legacy per-K duplicates
+        collapse to the first row seen).
+      * K-dependent methods (``flex``) get one column per swept K, labelled
+        ``<method>-<K>``, preceded in the latency table by that K's mask
+        sparsity (``tokSp-<K>`` / ``blkSp-<K>``).
+
+    ``OOM`` / error tags appear in the latency table; the memory table shows
+    ``—`` for failed runs.
     """
     from collections import OrderedDict
     import datetime as _dt
 
     groups: "OrderedDict[tuple, dict]" = OrderedDict()
+    densities: dict = {}                  # (rowkey, k) -> density dict
+    dep_ks, all_ks = set(), set()
     for r in rows:
         sp = r.get("spec", {})
-        key = (sp.get("n_nodes"), sp.get("tokens_per_node"), sp.get("k_hop"), sp.get("ordering"))
-        groups.setdefault(key, {})[r["method"]] = r
+        key = (sp.get("n_nodes"), sp.get("tokens_per_node"), sp.get("ordering"))
+        k = sp.get("k_hop")
+        all_ks.add(k)
+        m = r["method"]
+        run = r.get("run") or {}
+        mode = run.get("bias_mode")
+        if mode and mode != "full":
+            m = f"{m}[{mode}]"            # bias-decomposition variants (#3)
+        bs = run.get("block_size", 128)
+        if bs not in (None, 128) and r["method"] in _BLOCK_SENSITIVE:
+            m = f"{m}@{_bs_label(bs)}"    # block-size variants (#6)
+        if m in _K_INDEPENDENT:
+            col = m
+        else:
+            col = (m, k)
+            dep_ks.add(k)
+        groups.setdefault(key, {}).setdefault(col, r)   # keep-first on duplicates
+        if r.get("density") and (key, k) not in densities:
+            densities[(key, k)] = r["density"]
 
-    present = [m for m in _METHOD_ORDER if any(m in g for g in groups.values())]
-    present += [m for g in groups.values() for m in g if m not in present and m not in _METHOD_ORDER]
+    # Per-K column groups come from the K-dependent methods; if none were swept,
+    # fall back to all seen K values so the sparsity columns still render.
+    ks = sorted(dep_ks or all_ks, key=lambda v: -1 if v is None else v)
+
+    indep = [m for m in _METHOD_ORDER
+             if m in _K_INDEPENDENT and any(m in g for g in groups.values())]
+    dep_present = {c[0] for g in groups.values() for c in g if isinstance(c, tuple)}
+    dep = [m for m in _METHOD_ORDER if m in dep_present]
+    dep += sorted(m for m in dep_present if m not in dep)
 
     def ms_cell(r: dict | None) -> str:
         if r is None:
@@ -235,45 +311,58 @@ def render_markdown(rows: list[dict], kind: str) -> str:
         gb = r.get("memory_mb", {}).get("peak_fwd_bwd")
         return f"{gb/1024:.2f}" if gb is not None else "?"
 
+    methods_str = ", ".join(indep + [f"{m}-{{{','.join(str(k) for k in ks)}}}" for m in dep])
     # Header + legend
     out = [
         f"# FlexAttention sweep — `{kind}`",
         "",
         f"_Generated {_dt.datetime.now():%Y-%m-%d %H:%M}. {len(groups)} configs, "
-        f"methods: {', '.join(present)}._",
+        f"methods: {methods_str}._",
         "",
-        "**Legend.** `… ms` = forward+backward latency (median, milliseconds). "
-        "`… GB` = peak GPU memory during forward+backward. "
-        "`OOM` = ran out of memory (bold); other bold tags are errors. "
-        "`tokSp` / `blkSp` = token-level / block-level mask sparsity "
-        "(fraction of attention masked out; block-level is what flex actually skips). "
-        "`L` = packed sequence length.",
-        "",
+        "**Legend.** Two tables over the same configs: **latency** (median "
+        "forward+backward, milliseconds; `OOM` and error tags show up here, in "
+        "bold) and **peak memory** (during forward+backward, GB; `—` for failed "
+        "runs). `flash`/`flash_nc`/`eager` are K-independent (one column; run "
+        "once per config); `flex-{K}` = flex with the K-hop-{K} mask. "
+        "`tokSp-{K}` / `blkSp-{K}` = token-level / block-level sparsity of that "
+        "mask (fraction of attention masked out; block-level is what flex "
+        "actually skips — latency table only). `L` = packed sequence length.",
     ]
-
-    # Column spec
-    cols = ["nodes", "tpn", "k", "order", "L", "tokSp", "blkSp"]
-    for m in present:
-        cols += [f"{m} ms", f"{m} GB"]
-    align = ["--:", "--:", "--:", ":--", "--:", "--:", "--:"] + ["--:"] * (2 * len(present))
-    out.append("| " + " | ".join(cols) + " |")
-    out.append("| " + " | ".join(align) + " |")
 
     def _sp(v):
         return f"{v:.2f}" if v is not None else "—"
 
-    for key in sorted(groups, key=lambda t: tuple((x if x is not None else -1) for x in t)):
-        n, t, k, order = key
-        g = groups[key]
-        allr = list(g.values())
-        L = _first(allr, "shape", "seq_len", default="—")
-        cells = [str(n), str(t), str(k), str(order), str(L),
-                 _sp(_first(allr, "density", "element_sparsity")),
-                 _sp(_first(allr, "density", "block_sparsity"))]
-        for m in present:
-            cells += [ms_cell(g.get(m)), gb_cell(g.get(m))]
-        out.append("| " + " | ".join(cells) + " |")
+    row_keys = sorted(groups, key=lambda t: (t[0] if t[0] is not None else -1,
+                                             t[1] if t[1] is not None else -1,
+                                             str(t[2])))
 
+    def _table(title: str, cell_fn, with_sparsity: bool) -> list[str]:
+        cols = ["nodes", "tpn", "order", "L"] + list(indep)
+        for k in ks:
+            if with_sparsity:
+                cols += [f"tokSp-{k}", f"blkSp-{k}"]
+            cols += [f"{m}-{k}" for m in dep]
+        align = ["--:", "--:", ":--", "--:"] + ["--:"] * (len(cols) - 4)
+        lines = ["", f"## {title}", "",
+                 "| " + " | ".join(cols) + " |",
+                 "| " + " | ".join(align) + " |"]
+        for key in row_keys:
+            n, t, order = key
+            g = groups[key]
+            L = _first(list(g.values()), "shape", "seq_len", default="—")
+            cells = [str(n), str(t), str(order), str(L)]
+            cells += [cell_fn(g.get(m)) for m in indep]
+            for k in ks:
+                if with_sparsity:
+                    den = densities.get((key, k), {})
+                    cells += [_sp(den.get("element_sparsity")),
+                              _sp(den.get("block_sparsity"))]
+                cells += [cell_fn(g.get((m, k))) for m in dep]
+            lines.append("| " + " | ".join(cells) + " |")
+        return lines
+
+    out += _table("Latency — forward+backward (ms)", ms_cell, with_sparsity=True)
+    out += _table("Peak memory — forward+backward (GB)", gb_cell, with_sparsity=False)
     out.append("")
     return "\n".join(out)
 
@@ -292,33 +381,66 @@ def load_rows(path: str) -> list[dict]:
 
 def _run_kind(kind: str, cells: list[Cell], args) -> None:
     """Run the full method × config grid for one kind, writing {kind}.jsonl/.md."""
+    methods = list(args.methods)
+    if kind == "full_model":
+        skipped = [m for m in methods if m in _ISOLATION_ONLY]
+        if skipped:
+            print(f"(full_model: skipping isolation-only methods: {', '.join(skipped)})")
+            methods = [m for m in methods if m not in _ISOLATION_ONLY]
+    # K-independent methods run once per (nodes, tpn, ordering) — at the first
+    # swept K — instead of once per K value; re-running them with a new K
+    # repeats the identical computation. The --bias-modes and --block-sizes
+    # axes (isolation only) apply only to the methods they can affect.
+    bias_modes = args.bias_modes if kind == "isolation" else ["full"]
+    block_sizes = ([_parse_block_size(s) for s in args.block_sizes]
+                   if kind == "isolation" else [128])
+    runs, seen_base, n_dedup = [], set(), 0
+    for cell in cells:
+        base = (cell.n_nodes, cell.tokens_per_node, cell.ordering)
+        first_k = base not in seen_base
+        seen_base.add(base)
+        for method in methods:
+            modes = bias_modes if method in _BIAS_SENSITIVE else ["full"]
+            sizes = block_sizes if method in _BLOCK_SENSITIVE else block_sizes[:1]
+            for mode in modes:
+                for bs in sizes:
+                    if method in _K_INDEPENDENT and not first_k:
+                        n_dedup += 1
+                        continue
+                    runs.append((cell, method, mode, bs))
+
     jsonl_path = os.path.join(args.out_dir, f"{kind}.jsonl")
     md_path = os.path.join(args.out_dir, f"{kind}.md")
-    total = len(cells) * len(args.methods)
-    print(f"\n=== Sweep ({kind}): {len(cells)} cells × {len(args.methods)} methods "
+    total = len(runs)
+    print(f"\n=== Sweep ({kind}): {len(cells)} cells × {len(methods)} methods "
+          f"(bias modes: {', '.join(bias_modes)}) − {n_dedup} K-duplicate runs "
           f"= {total} runs → {jsonl_path} + {md_path} ===")
 
     rows, done, t_start = [], 0, time.time()
     with open(jsonl_path, "w") as fh:
-        for cell in cells:
-            for method in args.methods:
-                done += 1
-                r = run_subprocess(kind, method, cell, batch_size=args.batch_size,
-                                   prompt_tokens=args.prompt_tokens, magnetic_m=args.magnetic_m,
-                                   block_size=args.block_size, seed=args.seed, timeout=args.timeout)
-                fh.write(json.dumps(r) + "\n"); fh.flush()
-                rows.append(r)
-                tag = "ok" if r["ok"] else (r.get("error") or "fail")
-                shp, tim, mem, den = (r.get("shape", {}), r.get("timing_ms", {}),
-                                      r.get("memory_mb", {}), r.get("density", {}))
-                fwd = tim.get("fwd")
-                blk_sp = den.get("block_sparsity")
-                print(f"[{done:>3}/{total}] {kind:<10} n={cell.n_nodes:<4} t={cell.tokens_per_node:<3} "
-                      f"k={cell.k_hop} {cell.ordering:<6} {method:<7} -> {tag:<6} "
-                      f"L={shp.get('seq_len','?')} "
-                      f"blkSparse={f'{blk_sp:.2f}' if blk_sp is not None else '-':<5} "
-                      f"fwd={f'{fwd:.2f}ms' if fwd is not None else '-':<8} "
-                      f"peakFB={mem.get('peak_fwd_bwd','-')}")
+        for cell, method, mode, bs in runs:
+            done += 1
+            r = run_subprocess(kind, method, cell, batch_size=args.batch_size,
+                               prompt_tokens=args.prompt_tokens, magnetic_m=args.magnetic_m,
+                               block_size=bs, seed=args.seed,
+                               timeout=args.timeout, bias_mode=mode,
+                               compile_mode=args.compile_mode)
+            fh.write(json.dumps(r) + "\n"); fh.flush()
+            rows.append(r)
+            tag = "ok" if r["ok"] else (r.get("error") or "fail")
+            shp, tim, mem, den = (r.get("shape", {}), r.get("timing_ms", {}),
+                                  r.get("memory_mb", {}), r.get("density", {}))
+            fwd = tim.get("fwd")
+            blk_sp = den.get("block_sparsity")
+            mlabel = method if mode == "full" else f"{method}[{mode}]"
+            if bs != 128:
+                mlabel += f"@{_bs_label(bs)}"
+            print(f"[{done:>3}/{total}] {kind:<10} n={cell.n_nodes:<4} t={cell.tokens_per_node:<3} "
+                  f"k={cell.k_hop} {cell.ordering:<6} {mlabel:<12} -> {tag:<6} "
+                  f"L={shp.get('seq_len','?')} "
+                  f"blkSparse={f'{blk_sp:.2f}' if blk_sp is not None else '-':<5} "
+                  f"fwd={f'{fwd:.2f}ms' if fwd is not None else '-':<8} "
+                  f"peakFB={mem.get('peak_fwd_bwd','-')}")
             # Refresh the markdown table as we go, so a partial/interrupted sweep
             # still leaves a readable table.
             write_markdown(rows, md_path, kind)
@@ -328,12 +450,23 @@ def _run_kind(kind: str, cells: list[Cell], args) -> None:
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--out-dir", default=os.path.join(_HERE, "results"),
-                   help="directory to write {kind}.jsonl (detail) and {kind}.md (table)")
+    p.add_argument("--out-dir", default=os.path.join(_HERE, "results_h100"),
+                   help="directory to write {kind}.jsonl (detail) and {kind}.md (table); "
+                        "results dirs are per-GPU (results_a100 holds the archived A100 sweep)")
     p.add_argument("--kind", default="isolation",
                    choices=["isolation", "full_model", "both"],
                    help="'both' runs the isolated-attention and full-model sweeps back to back")
     p.add_argument("--methods", nargs="+", default=["flash", "eager", "flex"])
+    p.add_argument("--bias-modes", nargs="+", default=["full"],
+                   choices=["full", "frozen", "none"],
+                   help="bias decomposition axis (#3, isolation kind only; applies "
+                        "to flex/eager): full = gather + scatter-add grad, frozen = "
+                        "gather only, none = bare masked kernel")
+    p.add_argument("--compile-mode", default="max-autotune-no-cudagraphs",
+                   help="torch.compile mode for the flex kernels (#4, isolation "
+                        "kind only — the full-model bench uses flex_core's "
+                        "default). The autotuned mode is the decided final "
+                        "config; pass 'default' to iterate quickly")
     p.add_argument("--k-hops", nargs="+", type=int, default=[0, 2, 4])
     p.add_argument("--orderings", nargs="+", default=["rcm", "random"])
     p.add_argument("--nodes", nargs="+", type=int, default=GRID_NODES)
@@ -341,10 +474,14 @@ def main(argv=None):
     p.add_argument("--batch-size", type=int, default=1)
     p.add_argument("--prompt-tokens", type=int, default=128)
     p.add_argument("--magnetic-m", type=int, default=32)
-    p.add_argument("--block-size", type=int, default=128)
+    p.add_argument("--block-sizes", nargs="+", default=["128"],
+                   help="BlockMask block-size axis (#6, isolation kind, flex "
+                        "only): square ('64') or rectangular Q×KV ('128x64')")
     p.add_argument("--max-tokens", type=int, default=100_000)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--timeout", type=int, default=900)
+    p.add_argument("--timeout", type=int, default=1800,
+                   help="per-run subprocess timeout; sized for the ~320 s "
+                        "max-autotune compile on top of the bench itself")
     p.add_argument("--recompile-probe", action="store_true")
     p.add_argument("--summarize", metavar="JSONL", default=None,
                    help="regenerate the markdown table (next to the file) from an existing JSONL")

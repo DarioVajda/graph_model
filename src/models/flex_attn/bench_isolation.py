@@ -1,5 +1,5 @@
 """
-Attention-only (isolation) benchmark: one attention layer, three backends.
+Attention-only (isolation) benchmark: one attention layer, four backends.
 
 Methods
 -------
@@ -12,15 +12,38 @@ Methods
     A *floor* reference, NOT functionally equivalent (it can't express the bias,
     bidirectional prefix, or K-hop) — it answers "what does ideal dense
     attention cost at this shape".
+  * ``flash_nc`` — the same flash kernel, non-causal (full L×L). The
+    *work-matched* floor for k=0, where the graph mask is bidirectional-prefix
+    and ~dense (blkSp ≈ 0) so flex computes ~2× the blocks causal flash does;
+    comparing flex to ``flash`` there overstates the kernel overhead ~2×.
 
-We time **forward and backward separately** (CUDA events) and record **peak
-memory** for each pass. For ``flex`` we additionally report the one-time
+We time **forward, forward+backward, and the backward alone** (CUDA events; the
+direct ``bwd`` is preferred over the ``bwd_est`` subtraction, which is biased
+when the no-grad and grad-mode forwards select different compiled kernels) and
+record **peak memory** for each pass. For ``flex`` we additionally report the one-time
 ``compile_ms`` and the per-batch ``blockmask_build_ms`` (amortized across all
 layers in the real model, so reported separately rather than folded in).
 
 The node bias is detached to a leaf before timing, so the backward measures the
 attention + bias-gather (incl. the scatter-add into ``node_bias`` we flagged as
 the real backward cost) but NOT the bias module's internal backprop.
+
+``--bias-mode`` decomposes that backward cost (TODO #3), for ``flex``/``eager``:
+
+  * ``full``   (default) — bias is a leaf with ``requires_grad=True``: forward
+    gather + backward scatter-add into ``node_bias``.
+  * ``frozen`` — bias present but ``requires_grad=False``: the forward (and the
+    backward's score recompute) still gather, but no scatter-add.
+  * ``none``   — no bias at all (``score_mod=None``): the bare masked kernel.
+
+So ``bwd_est(full) − bwd_est(frozen)`` ≈ the atomic scatter-add cost and
+``bwd_est(frozen) − bwd_est(none)`` ≈ the gather/recompute cost.
+
+For ``flex`` we also report ``blockmask_build_warm`` (TODO #2): a second
+``build_block_mask`` at the same L. The cold number includes the one-time
+``_compile=True`` builder compile per distinct L; the warm number is the
+per-batch cost a training run pays once lengths are bucketed
+(``flex_core.bucket_len``).
 """
 
 from __future__ import annotations
@@ -79,9 +102,22 @@ def emit_result(res: dict) -> None:
     print(RESULT_END)
 
 
-# ── the three forward/backward closures ───────────────────────────────────────
+# ── the forward/backward closures ─────────────────────────────────────────────
 
-def _build_eager(ai, scaling):
+def _bias_leaf(ai, bias_mode: str):
+    """Return ``(node_bias_leaf, captured_grad_tensors)`` for a bias mode."""
+    nb = ai["node_bias"]
+    if nb is None or bias_mode == "none":
+        return None, []
+    if bias_mode == "frozen":
+        return nb.detach(), []
+    if bias_mode == "full":
+        nb = nb.detach().requires_grad_(True)
+        return nb, [nb]
+    raise ValueError(f"unknown bias_mode {bias_mode!r}")
+
+
+def _build_eager(ai, scaling, bias_mode="full"):
     """Return (attn_fn(q,k,v) -> out, captured_grad_tensors).
 
     The bias is a captured leaf (``nb``); q/k/v are supplied by the timing
@@ -93,7 +129,7 @@ def _build_eager(ai, scaling):
         build_dense_structural_mask, expand_node_to_token_bias,
     )
     L = ai["q_len"]
-    nb = None if ai["node_bias"] is None else ai["node_bias"].detach().requires_grad_(True)
+    nb, captured = _bias_leaf(ai, bias_mode)
     Hkv = ai["key"].shape[1]
 
     def attn_fn(q, k, v):
@@ -107,43 +143,54 @@ def _build_eager(ai, scaling):
         return F.scaled_dot_product_attention(
             q, repeat_kv(k, n_rep), repeat_kv(v, n_rep), attn_mask=attn_mask, scale=scaling,
         )
-    return attn_fn, ([nb] if nb is not None else []), (ai["query"], ai["key"], ai["value"])
+    return attn_fn, captured, (ai["query"], ai["key"], ai["value"])
 
 
-def _build_flex(ai, scaling, block_size, dynamic):
+def _build_flex(ai, scaling, block_size, dynamic, bias_mode="full", compile_mode=None):
     """Flex path. Pads the sequence to a multiple of ``block_size`` (REQUIRED:
     non-aligned L hits a ~14× Triton kernel cliff) and slices the output back."""
-    nb = None if ai["node_bias"] is None else ai["node_bias"].detach().requires_grad_(True)
+    nb, captured = _bias_leaf(ai, bias_mode)
     qp, kp, vp, nidp, pmp, L, Lb = flex_core.pad_to_block(
         ai["query"], ai["key"], ai["value"], ai["node_ids"], ai["pad_mask"], block_size,
     )
 
-    t0 = time.perf_counter()
-    bm = flex_core.build_block_mask(
-        nidp, ai["prompt_node"], pmp, ai["k_hop_mask"], ai["k_hop"],
-        Lb, Lb, block_size=block_size, device=ai["query"].device,
-    )
-    torch.cuda.synchronize()
-    blockmask_build_ms = (time.perf_counter() - t0) * 1e3
+    def _timed_build():
+        t0 = time.perf_counter()
+        bm = flex_core.build_block_mask(
+            nidp, ai["prompt_node"], pmp, ai["k_hop_mask"], ai["k_hop"],
+            Lb, Lb, block_size=block_size, device=ai["query"].device,
+        )
+        torch.cuda.synchronize()
+        return bm, (time.perf_counter() - t0) * 1e3
+
+    # Cold build includes the one-time `_compile=True` builder compile per
+    # distinct L (when L > the compile threshold); the warm rebuild at the same
+    # L is the steady-state per-batch cost training pays once lengths are
+    # bucketed (flex_core.bucket_len).
+    bm, blockmask_build_ms = _timed_build()
+    _, blockmask_build_warm_ms = _timed_build()
     smod = flex_core.make_score_mod(nb, nidp)
 
     def attn_fn(q, k, v):
         out = flex_core.flex_attention_forward(
             q, k, v, block_mask=bm, score_mod=smod, scaling=scaling,
-            enable_gqa=True, dynamic=dynamic,
+            enable_gqa=True, dynamic=dynamic, compile_mode=compile_mode,
         )
         return out[:, :, :L]                                    # drop padded query rows
-    return attn_fn, ([nb] if nb is not None else []), (qp, kp, vp), blockmask_build_ms
+    return attn_fn, captured, (qp, kp, vp), blockmask_build_ms, blockmask_build_warm_ms
 
 
-def _build_flash(ai, scaling):
+def _build_flash(ai, scaling, causal: bool = True):
+    """Bias-free SDPA flash floor. ``causal=False`` (the ``flash_nc`` method)
+    runs the full L×L — work-matched to the ~dense bidirectional k=0 mask,
+    which ``is_causal=True`` undercounts by ~2×."""
     Hkv = ai["key"].shape[1]
 
     def attn_fn(q, k, v):
         n_rep = q.shape[1] // Hkv
         with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
             return F.scaled_dot_product_attention(
-                q, repeat_kv(k, n_rep), repeat_kv(v, n_rep), is_causal=True, scale=scaling,
+                q, repeat_kv(k, n_rep), repeat_kv(v, n_rep), is_causal=causal, scale=scaling,
             )
     return attn_fn, [], (ai["query"], ai["key"], ai["value"])
 
@@ -157,8 +204,10 @@ def run_isolation(
     num_heads: int = 32,
     num_kv_heads: int = 8,
     head_dim: int = 64,
-    block_size: int = 128,
+    block_size=128,
     dynamic: bool = False,
+    bias_mode: str = "full",
+    compile_mode: Optional[str] = None,
     n_warmup: int = 5,
     n_iter: int = 20,
     dtype: torch.dtype = torch.bfloat16,
@@ -169,7 +218,10 @@ def run_isolation(
         "spec": dataclasses.asdict(spec),
         "run": {
             "batch_size": batch_size, "num_heads": num_heads, "num_kv_heads": num_kv_heads,
-            "head_dim": head_dim, "block_size": block_size, "dynamic": dynamic,
+            "head_dim": head_dim,
+            "block_size": list(block_size) if isinstance(block_size, tuple) else block_size,
+            "dynamic": dynamic,
+            "bias_mode": bias_mode, "compile_mode": compile_mode or "default",
         },
         "shape": {}, "density": {}, "timing_ms": {}, "memory_mb": {},
     }
@@ -189,12 +241,16 @@ def run_isolation(
 
         compile_ms = None
         blockmask_build_ms = None
+        blockmask_build_warm_ms = None
         if method == "eager":
-            attn_fn, captured, qkv_src = _build_eager(ai, scaling)
+            attn_fn, captured, qkv_src = _build_eager(ai, scaling, bias_mode)
         elif method == "flash":
             attn_fn, captured, qkv_src = _build_flash(ai, scaling)
+        elif method == "flash_nc":
+            attn_fn, captured, qkv_src = _build_flash(ai, scaling, causal=False)
         elif method == "flex":
-            attn_fn, captured, qkv_src, blockmask_build_ms = _build_flex(ai, scaling, block_size, dynamic)
+            attn_fn, captured, qkv_src, blockmask_build_ms, blockmask_build_warm_ms = \
+                _build_flex(ai, scaling, block_size, dynamic, bias_mode, compile_mode)
         else:
             raise ValueError(f"unknown method {method!r}")
 
@@ -233,13 +289,41 @@ def run_isolation(
         torch.cuda.synchronize()
         peak_bwd_mb = _mb(torch.cuda.max_memory_allocated())
 
+        # ── direct backward timing ──
+        # ``bwd_est = fwd_bwd − fwd`` is biased: the no-grad forward can select
+        # a different compiled-kernel config than the grad-mode forward
+        # (measured ~10 ms apart at L≈17k on H100), which can even push the
+        # estimate below zero work. So we also time ``.backward()`` alone:
+        # untimed grad-mode forward builds the graph, then events bracket just
+        # the backward. ``bwd`` is the number to use; ``bwd_est`` is kept for
+        # continuity with old result files.
+        def _bwd_sample() -> float:
+            for c in captured:
+                c.grad = None
+            qg = q0.detach().requires_grad_(True)
+            kg = k0.detach().requires_grad_(True)
+            vg = v0.detach().requires_grad_(True)
+            loss = attn_fn(qg, kg, vg).sum()
+            torch.cuda.synchronize()
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record(); loss.backward(); end.record()
+            torch.cuda.synchronize()
+            return start.elapsed_time(end)
+
+        for _ in range(n_warmup):
+            _bwd_sample()
+        bwd_direct = torch.tensor([_bwd_sample() for _ in range(n_iter)])
+
         result["ok"] = True
         result["timing_ms"] = {
             "fwd": fwd_ms, "fwd_std": fwd_std,
             "fwd_bwd": bwd_ms_total, "fwd_bwd_std": bwd_std,
-            "bwd_est": bwd_ms_total - fwd_ms,       # backward ≈ (fwd+bwd) − fwd
+            "bwd": float(bwd_direct.mean()), "bwd_std": float(bwd_direct.std()),
+            "bwd_est": bwd_ms_total - fwd_ms,       # legacy estimate; biased (see above)
             "compile": compile_ms,                  # flex one-time
-            "blockmask_build": blockmask_build_ms,  # flex per-batch (amortized over layers)
+            "blockmask_build": blockmask_build_ms,  # flex, cold (incl. builder compile)
+            "blockmask_build_warm": blockmask_build_warm_ms,  # flex, steady-state per batch
             "reorder_mean": meta["reorder_time_mean_s"] * 1e3,
             "reorder_max": meta["reorder_time_max_s"] * 1e3,
         }
@@ -262,7 +346,7 @@ def run_isolation(
 
 def _parse_args(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--method", required=True, choices=["eager", "flex", "flash"])
+    p.add_argument("--method", required=True, choices=["eager", "flex", "flash", "flash_nc"])
     p.add_argument("--n-nodes", type=int, required=True)
     p.add_argument("--tokens-per-node", type=int, required=True)
     p.add_argument("--prompt-tokens", type=int, default=128)
@@ -277,8 +361,18 @@ def _parse_args(argv=None):
     p.add_argument("--num-heads", type=int, default=32)
     p.add_argument("--num-kv-heads", type=int, default=8)
     p.add_argument("--head-dim", type=int, default=64)
-    p.add_argument("--block-size", type=int, default=128)
+    p.add_argument("--block-size", type=int, nargs="+", default=[128],
+                   help="BlockMask block size: one value (square) or two "
+                        "(Q_BLOCK KV_BLOCK, e.g. --block-size 128 64)")
     p.add_argument("--dynamic", action="store_true")
+    p.add_argument("--bias-mode", default="full", choices=["full", "frozen", "none"],
+                   help="bias decomposition for flex/eager: full grad, frozen "
+                        "(gather only, no scatter), or none (bare masked kernel)")
+    p.add_argument("--compile-mode", default="max-autotune-no-cudagraphs",
+                   help="torch.compile mode for the flex kernels (#4). The "
+                        "autotuned mode is the decided final config; pass "
+                        "'default' for inductor's fast-compiling heuristic "
+                        "configs when iterating")
     p.add_argument("--n-warmup", type=int, default=5)
     p.add_argument("--n-iter", type=int, default=20)
     return p.parse_args(argv)
@@ -286,6 +380,7 @@ def _parse_args(argv=None):
 
 def main(argv=None):
     a = _parse_args(argv)
+    block_size = a.block_size[0] if len(a.block_size) == 1 else tuple(a.block_size)
     spec = GraphSpec(
         n_nodes=a.n_nodes, tokens_per_node=a.tokens_per_node, prompt_tokens=a.prompt_tokens,
         k_hop=a.k_hop, k_hop_directed=a.k_hop_directed, ordering=a.ordering, directed=a.directed,
@@ -293,8 +388,10 @@ def main(argv=None):
     )
     res = run_isolation(
         spec, a.method, batch_size=a.batch_size, num_heads=a.num_heads,
-        num_kv_heads=a.num_kv_heads, head_dim=a.head_dim, block_size=a.block_size,
-        dynamic=a.dynamic, n_warmup=a.n_warmup, n_iter=a.n_iter,
+        num_kv_heads=a.num_kv_heads, head_dim=a.head_dim, block_size=block_size,
+        dynamic=a.dynamic, bias_mode=a.bias_mode,
+        compile_mode=None if a.compile_mode == "default" else a.compile_mode,
+        n_warmup=a.n_warmup, n_iter=a.n_iter,
     )
     emit_result(res)
     return 0 if res["ok"] else 1

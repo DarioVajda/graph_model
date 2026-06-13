@@ -16,8 +16,8 @@ are excluded from averages; lines simply end where data runs out.
 
 Usage:
     python -m src.models.flex_attn.plot_results \
-        --results-dir src/models/flex_attn/results \
-        --out-dir     src/models/flex_attn/results
+        --results-dir src/models/flex_attn/results_h100 \
+        --out-dir     src/models/flex_attn/results_h100
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+
+from src.models.flex_attn.run_sweep import _K_INDEPENDENT
 
 matplotlib.rcParams.update({
     "font.family": "serif",
@@ -57,6 +59,7 @@ _STYLE: dict[str, dict] = {
     "flex (k=2)":     {"color": "#009988", "ls": "-", "marker": "o"},
     "flex":           {"color": "#0077BB", "ls": "-", "marker": "o"},
     "flash":          {"color": "#EE7733", "ls": "-", "marker": "o"},
+    "flash_nc":       {"color": "#EE7733", "ls": "--", "marker": "s"},
 }
 
 
@@ -80,6 +83,10 @@ def _series(
     (both axes of the sweep are powers of 2).  Rows sharing the same
     (n_nodes, tpn) target are averaged; OOM/failed rows are excluded.
     The returned arrays are sorted by x.
+
+    K-independent methods (flash/flash_nc/eager) ignore the ``k_hop`` filter:
+    the sweep runs them only at the first swept K, and their cost doesn't
+    depend on K anyway.
     """
     buckets: dict[int, list[tuple[float, float]]] = defaultdict(list)
 
@@ -89,7 +96,7 @@ def _series(
             continue
         if ordering and sp.get("ordering") != ordering:
             continue
-        if sp.get("k_hop") != k_hop:
+        if method not in _K_INDEPENDENT and sp.get("k_hop") != k_hop:
             continue
         if not r.get("ok"):
             continue
@@ -301,8 +308,8 @@ _THREE = [
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--results-dir", default="src/models/flex_attn/results")
-    p.add_argument("--out-dir",     default="src/models/flex_attn/results")
+    p.add_argument("--results-dir", default="src/models/flex_attn/results_h100")
+    p.add_argument("--out-dir",     default="src/models/flex_attn/results_h100")
     args = p.parse_args(argv)
 
     os.makedirs(args.out_dir, exist_ok=True)
