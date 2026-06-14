@@ -46,6 +46,10 @@ from .graph_attention_v2 import (
     build_dense_structural_mask,
     expand_node_to_token_bias,
     graph_attention_dispatch,
+    build_flex_block_mask,
+    make_soft_score_mod,
+    flex_attention_forward,
+    flex_block_size,
 )
 from .model_utils import load_bias_parameters
 
@@ -203,22 +207,36 @@ class GTLMLlamaAttention(LlamaAttention):
             node_bias = torch.utils.checkpoint.checkpoint(_bias, use_reentrant=False)
         else:
             node_bias = _bias()
-        token_soft_bias = (
-            expand_node_to_token_bias(node_bias, ctx["node_ids"], q_len, kv_len)
-            if node_bias is not None else None
-        )
 
-        attn_output, attn_weights = graph_attention_dispatch(
-            impl=ctx["impl"],
-            module=self,
-            query=query_states,
-            key=key_states,
-            value=value_states,
-            structural_mask=ctx["structural_mask"],
-            token_soft_bias=token_soft_bias,
-            scaling=self.scaling,
-            dropout=0.0 if not self.training else self.attention_dropout,
-        )
+        if ctx["impl"] == "flex":
+            # Flex keeps the bias at node level (B,H,N,N) and gathers it inside
+            # the kernel against the shared per-batch BlockMask — no (B,H,L,L)
+            # token expansion. The int32 node_ids (#10) drive the gather.
+            score_mod = make_soft_score_mod(node_bias, ctx["node_ids_flex"])
+            attn_output, attn_weights = flex_attention_forward(
+                query_states, key_states, value_states,
+                block_mask=ctx["block_mask"],
+                score_mod=score_mod,
+                scaling=self.scaling,
+                enable_gqa=True,
+                compile_mode=self.config.flex_compile_mode,
+            )
+        else:
+            token_soft_bias = (
+                expand_node_to_token_bias(node_bias, ctx["node_ids"], q_len, kv_len)
+                if node_bias is not None else None
+            )
+            attn_output, attn_weights = graph_attention_dispatch(
+                impl=ctx["impl"],
+                module=self,
+                query=query_states,
+                key=key_states,
+                value=value_states,
+                structural_mask=ctx["structural_mask"],
+                token_soft_bias=token_soft_bias,
+                scaling=self.scaling,
+                dropout=0.0 if not self.training else self.attention_dropout,
+            )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -325,24 +343,55 @@ class GTLMLlamaForCausalLM(LlamaForCausalLM):
         else:
             pad_mask = torch.ones((node_ids.shape[0], kv_len), dtype=torch.long, device=device)
 
-        structural_mask = build_dense_structural_mask(
-            node_ids=node_ids,
-            prompt_node=prompt_node,
-            pad_mask=pad_mask,
-            k_hop_mask=k_hop_mask,
-            k_hop=self.config.k_hop,
-            q_len=q_len,
-            kv_len=kv_len,
-            dtype=embed_dtype,
-            device=device,
-        )
+        # Backend selection. Flex serves the full-sequence case (training /
+        # prefill, q_len == kv_len): we build a sparse BlockMask once per batch
+        # instead of the dense (B,1,L,L) mask. Incremental decode (q_len < kv_len,
+        # typically q_len == 1) falls back to the dense sdpa path — flex gives no
+        # benefit at q_len == 1 and this keeps generation untouched.
+        impl = self.config.graph_attn_impl
+        use_flex = (impl == "flex" and q_len == kv_len)
+
+        structural_mask = None
+        block_mask = None
+        node_ids_flex = None
+        if use_flex:
+            block_size = self.config.flex_block_size or flex_block_size(self.config.k_hop)
+            if kv_len % block_size != 0:
+                raise ValueError(
+                    f"flex requires the sequence length to be a multiple of the "
+                    f"block size ({block_size}); got L={kv_len}. Pad the batch in "
+                    f"the dataloader (GraphCollatorV2(pad_to_block=True)) — the "
+                    f"flex kernel hits a ~14x slowdown at unaligned lengths."
+                )
+            node_ids_flex = node_ids.to(torch.int32)
+            block_mask = build_flex_block_mask(
+                node_ids_flex, prompt_node, pad_mask, k_hop_mask,
+                self.config.k_hop, q_len, kv_len,
+                block_size=block_size, device=device,
+            )
+            eff_impl = "flex"
+        else:
+            eff_impl = "sdpa" if impl == "flex" else impl
+            structural_mask = build_dense_structural_mask(
+                node_ids=node_ids,
+                prompt_node=prompt_node,
+                pad_mask=pad_mask,
+                k_hop_mask=k_hop_mask,
+                k_hop=self.config.k_hop,
+                q_len=q_len,
+                kv_len=kv_len,
+                dtype=embed_dtype,
+                device=device,
+            )
 
         magnetic = (magnetic_V, magnetic_lambdas) if magnetic_V is not None else None
         ctx = {
-            "impl": self.config.graph_attn_impl,
+            "impl": eff_impl,
             "node_ids": node_ids,
+            "node_ids_flex": node_ids_flex,
             "num_nodes": num_nodes,
             "structural_mask": structural_mask,
+            "block_mask": block_mask,
             "cache": self._graph_bias_cache,
             "features": {
                 "spd": shortest_path_dists,

@@ -45,7 +45,7 @@ model. It is updated as work proceeds.
 3. **Model forward + attention branch** — `GTLMLlamaForCausalLM.forward` builds
    a per-batch `BlockMask` (+ int32 node_ids) for full-seq flex and falls back
    to dense for decode; `GTLMLlamaAttention.forward` gets the flex branch
-   (node-level bias + score_mod), preserving #7/#9 checkpointing. ⬜
+   (node-level bias + score_mod), preserving #7/#9 checkpointing. ✅
 4. **Collator padding + dataset RCM** — `GraphCollatorV2` opt-in bucket padding;
    `TextGraphDataset` RCM method + precompute flag. ⬜
 5. **Tests** — model parity (flex vs eager fwd + grads, k=0/k=2), ckpt nesting
@@ -69,3 +69,14 @@ model. It is updated as work proceeds.
   (default autotune) and `flex_block_size` (None = K-hop gate). Verified:
   wrappers callable, dispatch guard fires, config defaults + serialization
   round-trip, gate returns 64/128.
+- **Step 3 done.** `GTLMLlamaForCausalLM.forward`: when `impl=="flex"` and
+  `q_len==kv_len`, casts `node_ids` to int32 (#10), resolves block size from the
+  K-hop gate (or `config.flex_block_size`), asserts L-alignment, and builds the
+  shared per-batch `BlockMask`; otherwise builds the dense mask, with flex decode
+  (`q_len<kv_len`) downgraded to `sdpa`. `ctx` now carries `node_ids_flex` +
+  `block_mask`. `GTLMLlamaAttention.forward` branches on `ctx["impl"]`: flex
+  builds the score_mod from node-level bias and calls the flex kernel (#7 bias
+  checkpoint still wraps the bias compute); dense path unchanged. Smoke-tested
+  on H100 (real Llama-3.2-1B, spd+magnetic): flex vs eager loss 13.50 vs 13.50
+  (bf16, rel|Δlogits|≈0.04), 9/9 finite layer-0 bias grads, and `generate()`
+  runs the dense decode fallback. Rigorous fp32 parity deferred to step 5.
