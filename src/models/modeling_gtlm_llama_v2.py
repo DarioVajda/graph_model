@@ -93,6 +93,7 @@ class GTLMLlamaConfig(LlamaConfig):
         checkpoint_graph_bias: bool = True,
         flex_compile_mode: str = "max-autotune-no-cudagraphs",
         flex_block_size: Optional[int] = None,
+        flex_cache_size_limit: int = 32,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -118,8 +119,14 @@ class GTLMLlamaConfig(LlamaConfig):
         #     shape. Pass "default" (or None) for inductor's fast heuristics.
         #   flex_block_size: BlockMask block size; None uses the K-hop gate
         #     (64 when k_hop>0, else 128 — #6), an int overrides it.
+        #   flex_cache_size_limit: torch._dynamo cache_size_limit to raise to when
+        #     the flex path runs. Each distinct (L, N) shape is a separate compiled
+        #     kernel; dynamo's default limit of 8 would silently fall back to eager
+        #     past 8 distinct shapes. Set this above the number of (L, N) buckets a
+        #     run actually hits (collator len_buckets x node_buckets).
         self.flex_compile_mode = flex_compile_mode
         self.flex_block_size = flex_block_size
+        self.flex_cache_size_limit = flex_cache_size_limit
 
 
 # ── Attention (the one substantive override) ────────────────────────────────────
@@ -350,6 +357,15 @@ class GTLMLlamaForCausalLM(LlamaForCausalLM):
         # benefit at q_len == 1 and this keeps generation untouched.
         impl = self.config.graph_attn_impl
         use_flex = (impl == "flex" and q_len == kv_len)
+
+        if use_flex:
+            # Each distinct (L, N) shape compiles its own flex kernel; raise
+            # dynamo's recompile cap (default 8) so we don't silently fall back to
+            # eager once a run touches more than 8 buckets. Only ever raise it, so
+            # a user who set a higher limit manually keeps theirs.
+            import torch._dynamo
+            if torch._dynamo.config.cache_size_limit < self.config.flex_cache_size_limit:
+                torch._dynamo.config.cache_size_limit = self.config.flex_cache_size_limit
 
         structural_mask = None
         block_mask = None

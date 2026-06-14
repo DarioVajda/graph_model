@@ -41,6 +41,7 @@ Packing semantics (identical to v0's ``_prepare_inputs`` with ``padding_side
 import torch
 
 from .text_graph_dataset import TextGraph
+from ..models.flex_kernel import bucketize, default_len_buckets, default_node_buckets
 
 
 # ── K-hop reachability helpers (kept self-contained for the v2 stack) ──────────
@@ -105,7 +106,9 @@ class GraphCollatorV2:
     """Collate a list of :class:`TextGraph` items into a standard packed batch."""
 
     def __init__(self, tokenizer=None, pad_token_id: int = None, k_hop: int = 0,
-                 k_hop_directed: bool = False, magnetic_m: int = 0):
+                 k_hop_directed: bool = False, magnetic_m: int = 0,
+                 pad_to_block: bool = False, block_size: int = 128,
+                 len_buckets=None, node_buckets=None):
         """
         Args:
             tokenizer:   Optional tokenizer; used only to source ``pad_token_id``.
@@ -122,11 +125,36 @@ class GraphCollatorV2:
                          k_hop_directed=cfg.k_hop_directed)``.
             magnetic_m:  When > 0, magnetic eigenvectors are truncated to the first
                          min(stored_m, magnetic_m) columns before batching.
+            pad_to_block: When True (required for ``graph_attn_impl='flex'``), both
+                         the packed sequence length L *and* the node count N are
+                         padded up to coarse buckets (see ``len_buckets`` /
+                         ``node_buckets``) instead of the raw batch max. This keeps
+                         the flex kernel off its ~14x unaligned-length cliff AND
+                         bounds the number of distinct (L, N) shapes the compiled
+                         flex kernel guards on — both L and N trigger recompiles,
+                         so without N bucketing every distinct max-node-count would
+                         force a fresh autotune. Harmless for the dense backends
+                         (padded tokens/nodes are masked / unused).
+            block_size:  Kernel block-mask alignment for L (64 | 128). Every L
+                         bucket must be a multiple of it; 128 is safe for both flex
+                         block sizes (a 128-aligned L is also 64-divisible, #6).
+            len_buckets: Sequence-length bucketing spec — ``None`` (use the default
+                         512-multiple+midpoint ladder), a callable ``f(L)->L``, or
+                         a sorted list of allowed lengths. Each resulting bucket
+                         must be a multiple of ``block_size``.
+            node_buckets: Node-count bucketing spec — ``None`` (use the default
+                         power-of-two-floored-at-32 ladder), a callable
+                         ``f(N)->N``, or a sorted list of allowed node counts. No
+                         alignment constraint (N is not a kernel tile dimension).
         """
         self.tokenizer      = tokenizer
         self.k_hop          = k_hop
         self.k_hop_directed = k_hop_directed
         self.magnetic_m     = magnetic_m
+        self.pad_to_block   = pad_to_block
+        self.block_size     = block_size
+        self.len_buckets    = len_buckets  if len_buckets  is not None else default_len_buckets
+        self.node_buckets   = node_buckets if node_buckets is not None else default_node_buckets
 
         if pad_token_id is not None:
             self.pad_token_id = pad_token_id
@@ -149,11 +177,25 @@ class GraphCollatorV2:
         packed = [self._pack_one(item) for item in batch]
         max_len = max(p['length'] for p in packed)
 
-        input_ids      = torch.full((B, max_len), self.pad_token_id, dtype=torch.long)
-        position_ids   = torch.zeros((B, max_len), dtype=torch.long)
-        node_ids       = prompt_nodes.view(B, 1).expand(B, max_len).clone()  # pad → prompt node
-        attention_mask = torch.zeros((B, max_len), dtype=torch.long)
-        labels         = torch.full((B, max_len), -100, dtype=torch.long) if has_labels else None
+        # Flex bucketing: pad both L (block-aligned, off the ~14x cliff) and N
+        # (the (B,H,N,N) bias dim the compiled kernel guards on) up to coarse
+        # buckets so torch.compile sees few distinct (L, N) shapes. The pad
+        # defaults below (pad_token_id / 0 / prompt node / mask 0 / label -100)
+        # are already correct for the extra positions, and the extra node slots
+        # are simply never gathered — so only the allocation sizes change.
+        target_len = bucketize(max_len, self.len_buckets) if self.pad_to_block else max_len
+        target_n   = bucketize(max_num_nodes, self.node_buckets) if self.pad_to_block else max_num_nodes
+        if self.pad_to_block and target_len % self.block_size != 0:
+            raise ValueError(
+                f"len bucket {target_len} (from L={max_len}) is not a multiple of "
+                f"block_size={self.block_size}; the flex kernel requires "
+                f"block-aligned lengths. Fix the len_buckets spec.")
+
+        input_ids      = torch.full((B, target_len), self.pad_token_id, dtype=torch.long)
+        position_ids   = torch.zeros((B, target_len), dtype=torch.long)
+        node_ids       = prompt_nodes.view(B, 1).expand(B, target_len).clone()  # pad → prompt node
+        attention_mask = torch.zeros((B, target_len), dtype=torch.long)
+        labels         = torch.full((B, target_len), -100, dtype=torch.long) if has_labels else None
 
         for i, p in enumerate(packed):
             L = p['length']
@@ -182,11 +224,11 @@ class GraphCollatorV2:
         if has_labels:
             out['labels'] = labels
 
-        # ── Structural feature tensors (padded to max_num_nodes) ───────────────
-        out.update(self._collate_features(batch, B, max_num_nodes))
+        # ── Structural feature tensors (padded to the node bucket target_n) ────
+        out.update(self._collate_features(batch, B, target_n))
 
         if self.k_hop > 0:
-            masks = torch.zeros(B, max_num_nodes, max_num_nodes, dtype=torch.bool)
+            masks = torch.zeros(B, target_n, target_n, dtype=torch.bool)
             for i, item in enumerate(batch):
                 N = item['num_nodes']
                 masks[i, :N, :N] = _single_k_hop_mask(
@@ -222,24 +264,28 @@ class GraphCollatorV2:
             'prompt_len': prompt_len,
         }
 
-    def _collate_features(self, batch: list[TextGraph], B: int, max_num_nodes: int) -> dict:
-        """Pad the per-graph structural features into dense batch tensors."""
+    def _collate_features(self, batch: list[TextGraph], B: int, n_pad: int) -> dict:
+        """Pad the per-graph structural features into dense (B, n_pad, …) tensors.
+
+        ``n_pad`` is the target node-count (the bucketed ``target_n`` under
+        ``pad_to_block``, otherwise the raw batch max); each graph fills its
+        first ``num_nodes`` slots and the rest stay at the pad value."""
         spectral_dim = batch[0]['laplacian_coordinates'].shape[1] if "laplacian_coordinates" in batch[0] else 0
         rwse_dim     = batch[0]['rwse'].shape[1] if "rwse" in batch[0] else 0
         max_rw_steps = batch[0]['rrwp'].shape[2] if "rrwp" in batch[0] else 0
 
-        laplacian_coordinates = torch.zeros(B, max_num_nodes, spectral_dim, dtype=torch.float)
-        shortest_path_dists   = torch.full((B, max_num_nodes, max_num_nodes), max_num_nodes, dtype=torch.long)
-        rwse                  = torch.zeros(B, max_num_nodes, rwse_dim, dtype=torch.float)
-        rrwp                  = torch.zeros(B, max_num_nodes, max_num_nodes, max_rw_steps, dtype=torch.float)
+        laplacian_coordinates = torch.zeros(B, n_pad, spectral_dim, dtype=torch.float)
+        shortest_path_dists   = torch.full((B, n_pad, n_pad), n_pad, dtype=torch.long)
+        rwse                  = torch.zeros(B, n_pad, rwse_dim, dtype=torch.float)
+        rrwp                  = torch.zeros(B, n_pad, n_pad, max_rw_steps, dtype=torch.float)
 
         max_m = max(
             (item['magnetic_V'].shape[1] for item in batch if 'magnetic_V' in item),
-            default=max_num_nodes,
+            default=n_pad,
         )
         if self.magnetic_m > 0:
             max_m = min(max_m, self.magnetic_m)
-        magnetic_V       = torch.zeros(B, max_num_nodes, max_m, 2, dtype=torch.float)
+        magnetic_V       = torch.zeros(B, n_pad, max_m, 2, dtype=torch.float)
         magnetic_lambdas = torch.zeros(B, max_m, dtype=torch.float)
         any_magnetic = False
 

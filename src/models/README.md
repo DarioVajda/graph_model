@@ -18,9 +18,16 @@ model. It is updated as work proceeds.
 - **Decode path:** flex fires only on full-sequence (`q_len == kv_len`:
   training + prefill). Incremental decode (`q_len < kv_len`) falls back to the
   existing dense `sdpa`/`eager` path. Generation stays untouched.
-- **Padding + bucketing:** in `GraphCollatorV2` (opt-in flag). Pad to a 128
-  multiple via the `bucket_len` ladder (128-aligned is also 64-divisible, safe
-  for both block sizes).
+- **Padding + bucketing:** in `GraphCollatorV2` (opt-in `pad_to_block`). Bucket
+  **both L and N** — both drive flex recompiles (the kernel guards on the
+  `(B,H,N,N)` bias shape, confirmed empirically). Defaults: L → 512-multiple +
+  midpoint ladder; N → power-of-two floored at 32. Custom `len_buckets` /
+  `node_buckets` (None | list | callable) override. L buckets must be multiples
+  of the kernel `block_size` (64/128).
+- **Recompile cap:** dynamo `cache_size_limit` defaults to **8** — past 8
+  distinct (L,N) shapes the flex frame silently falls back to eager. The model
+  raises it to `config.flex_cache_size_limit` (default 32) on the flex path.
+  Keep the realistic co-occurring (L,N) pair count below it (~≤16 target).
 - **RCM node ordering:** computed in the **dataset class**
   (`TextGraphDataset`) — a method that computes the per-graph RCM permutation,
   plus an `__init__` flag that precomputes/applies it across the whole dataset.
@@ -47,7 +54,7 @@ model. It is updated as work proceeds.
    to dense for decode; `GTLMLlamaAttention.forward` gets the flex branch
    (node-level bias + score_mod), preserving #7/#9 checkpointing. ✅
 4. **Collator padding + dataset RCM** — `GraphCollatorV2` opt-in bucket padding;
-   `TextGraphDataset` RCM method + precompute flag. ⬜
+   `TextGraphDataset` RCM method + precompute flag. ✅
 5. **Tests** — model parity (flex vs eager fwd + grads, k=0/k=2), ckpt nesting
    (#7/#9), generation smoke (dense fallback), plus collator padding and dataset
    RCM unit tests. ⬜
@@ -80,3 +87,34 @@ model. It is updated as work proceeds.
   on H100 (real Llama-3.2-1B, spd+magnetic): flex vs eager loss 13.50 vs 13.50
   (bf16, rel|Δlogits|≈0.04), 9/9 finite layer-0 bias grads, and `generate()`
   runs the dense decode fallback. Rigorous fp32 parity deferred to step 5.
+- **Step 4 done.** `GraphCollatorV2` gained `pad_to_block` / `block_size`: when
+  on, the packed length is raised via `bucket_len` (the existing pad defaults are
+  already correct for the extra positions, so only the alloc length changes —
+  zero change to the dense path). `TextGraphDataset` gained `_rcm_relabel_graph`
+  (RCM reorder, remaps `prompt_node`, keeps `original_id`), `apply_rcm_ordering()`
+  (post-construction, rebuilds `text`/`prompt_node`, raises if node-indexed
+  features already exist), and an `rcm_ordering=True` `__init__` flag (reorders
+  before features so they inherit the order). Verified: bucketed L is
+  128-aligned and real positions / labels are byte-identical to the unpadded
+  collation; RCM preserves node/edge counts, remaps prompt in range, original_id
+  stays a permutation, the guard fires when features are present.
+- **Step 4 follow-up (persistent ordering label).** `TextGraphDataset` now
+  records `node_ordering` (`"original"`/`"rcm"`/`"mixed"`, via `ORDERING_*`
+  constants) with an `is_rcm_ordered` property. Set by the `rcm_ordering` flag
+  and `apply_rcm_ordering()`; **persisted in `metadata.json`** (legacy datasets
+  default to `"original"`); propagated through `select()` (carry) and `__add__`
+  (`"mixed"` if the two sides differ); shown in `__repr__`. So a reloaded
+  dataset always knows its node ordering. Verified end-to-end: construct/flag/
+  method → save → reload round-trips the label; select carries it; merge yields
+  rcm/mixed correctly.
+- **Step 4 follow-up (L+N bucketing & recompile cap).** Confirmed empirically
+  that N recompiles the flex kernel (guard failure on the captured `node_bias`
+  N dim). Fixes: `flex_kernel` gained `bucketize(value, spec)` (None | list |
+  callable) + `default_len_buckets` (×512 midpoint) / `default_node_buckets`
+  (pow2 floored at 32). `GraphCollatorV2` now buckets **both** L and N under
+  `pad_to_block`, with overridable `len_buckets` / `node_buckets` and an L-bucket
+  alignment guard; `_collate_features` + k_hop_mask pad to the N bucket. Added
+  `GTLMLlamaConfig.flex_cache_size_limit` (32); the forward raises dynamo's
+  `cache_size_limit` to it on the flex path (only ever upward). Verified: ladders,
+  bucketize forms + overflow error, config round-trip, features/k_hop padded to
+  the N bucket, custom specs, alignment guard, and the dynamo raise.

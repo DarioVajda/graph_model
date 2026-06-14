@@ -2,6 +2,7 @@ import os
 import shutil
 import pickle
 import networkx as nx
+from networkx.utils import reverse_cuthill_mckee_ordering
 import torch
 from datasets import Dataset as HFDataset, load_from_disk, concatenate_datasets
 from torch.utils.data import Dataset
@@ -33,18 +34,37 @@ class TextGraphDataset(Dataset):
     Backend: Hugging Face Datasets (Arrow) + NetworkX (Topology).
     """
 
-    def __init__(self, graphs: List[nx.Graph] = None, _hf_dataset: Optional[HFDataset] = None, dataset_label: Optional[str] = None, per_graph_versions=1):
+    # Node-ordering labels recorded in ``self.node_ordering`` (persisted in
+    # metadata.json). "original" = construction order; "rcm" = reverse
+    # Cuthill-McKee; "mixed" = a merge of datasets with differing orders.
+    ORDERING_ORIGINAL = "original"
+    ORDERING_RCM = "rcm"
+    ORDERING_MIXED = "mixed"
+
+    def __init__(self, graphs: List[nx.Graph] = None, _hf_dataset: Optional[HFDataset] = None, dataset_label: Optional[str] = None, per_graph_versions=1, rcm_ordering: bool = False, node_ordering: Optional[str] = None):
         """
         Args:
             graphs: List of NetworkX graphs. Nodes must have 'text' attribute. Should have N x per_graph_versions graphs structured like this: [g1_v1,... g1_vk, g2_v1,... g2_vk, ...] where k=per_graph_versions. The prompt node index should be stored in graph.graph['prompt_node']
             _hf_dataset: (Internal use only) Used by .load() to bypass re-initialization.
             dataset_label: Optional label for the dataset.
             per_graph_versions: Number of versions of each graph, item i will return one of the versions of graph i (used for data augmentation, default=1 means no augmentation)
+            rcm_ordering: When True, every graph's nodes are reordered into reverse
+                Cuthill-McKee order at construction (before features are computed),
+                concentrating each node's K-hop neighbourhood into contiguous token
+                blocks so flex attention can skip far more BlockMask blocks (see
+                :meth:`apply_rcm_ordering` and the flex_attn README). Only applies
+                when building from ``graphs`` (not when reloading an ``_hf_dataset``).
+            node_ordering: (Internal use only) The ordering label to carry over
+                when reconstructing from an ``_hf_dataset`` (load / select / merge);
+                see :attr:`node_ordering`. Ignored when ``rcm_ordering`` is set.
         """
         if graphs is None:
             graphs = []
 
         self.per_graph_versions = per_graph_versions
+        # The node ordering of this dataset's graphs (see ORDERING_* constants).
+        # Persisted across save/load and propagated through select()/__add__.
+        self.node_ordering = node_ordering or self.ORDERING_ORIGINAL
 
         if _hf_dataset is not None:
             self.graphs = graphs
@@ -59,14 +79,79 @@ class TextGraphDataset(Dataset):
                 mapping = {old_label: new_int for new_int, old_label in enumerate(g.nodes())}
                 g_int = nx.relabel_nodes(g, mapping, copy=True)
                 nx.set_node_attributes(g_int, {new_int: old for old, new_int in mapping.items()}, "original_id")
-                
+
                 old_prompt = g_int.graph.get('prompt_node', -1)
                 if old_prompt != -1 and old_prompt in mapping:
                     g_int.graph['prompt_node'] = mapping[old_prompt]
-                    
+
                 self.graphs.append(g_int)
-            
+
+            # Reorder nodes into RCM order before any feature is computed, so the
+            # downstream feature computations all inherit the new ordering.
+            if rcm_ordering:
+                self.graphs = [self._rcm_relabel_graph(g) for g in self.graphs]
+                self.node_ordering = self.ORDERING_RCM
+
             self._build_initial_dataset(dataset_name)
+
+    @property
+    def is_rcm_ordered(self) -> bool:
+        """True iff this dataset's graphs are recorded as reverse Cuthill-McKee
+        ordered (see :attr:`node_ordering`)."""
+        return self.node_ordering == self.ORDERING_RCM
+
+    @staticmethod
+    def _rcm_relabel_graph(g: nx.Graph) -> nx.Graph:
+        """Return a copy of ``g`` (nodes 0..N-1) relabeled into reverse
+        Cuthill-McKee order.
+
+        RCM concentrates each node's neighbourhood into a contiguous band, so a
+        node's K-hop neighbourhood lands in contiguous token blocks and far more
+        of the flex ``BlockMask`` becomes fully skippable (flex_attn README #5).
+        Node attributes (incl. ``original_id``) travel with the relabeling;
+        directed graphs are symmetrised only to compute the ordering. The
+        graph-level ``prompt_node`` index is remapped explicitly (NetworkX does
+        not touch graph-level attributes).
+        """
+        H = g.to_undirected() if g.is_directed() else g
+        order = list(reverse_cuthill_mckee_ordering(H))
+        mapping = {old: new for new, old in enumerate(order)}
+        g2 = nx.relabel_nodes(g, mapping, copy=True)
+        p = g.graph.get('prompt_node', -1)
+        if p != -1 and p in mapping:
+            g2.graph['prompt_node'] = mapping[p]
+        return g2
+
+    def apply_rcm_ordering(self):
+        """Reorder every graph's nodes into reverse Cuthill-McKee order in place.
+
+        Must run BEFORE computing node-indexed features (``input_ids``,
+        ``laplacian_coordinates``, ``shortest_path_dists``, ``rwse``, ``rrwp``,
+        ``magnetic_V``) so those are produced in the new order; raises if any are
+        already present. The ``text`` and ``prompt_node`` columns are rebuilt
+        from the reordered graphs. (For construction-time reordering, prefer the
+        ``rcm_ordering=True`` flag — it avoids rebuilding any column.)
+        """
+        node_indexed = {
+            "input_ids", "laplacian_coordinates", "shortest_path_dists",
+            "rwse", "rrwp", "magnetic_V",
+        }
+        present = node_indexed & set(self._hf_dataset.column_names)
+        if present:
+            raise ValueError(
+                f"apply_rcm_ordering() must run before computing node-indexed "
+                f"features; found {sorted(present)} already present. Reorder right "
+                f"after construction (or pass rcm_ordering=True to __init__)."
+            )
+        self.graphs = [self._rcm_relabel_graph(g) for g in self.graphs]
+        texts = [[g.nodes[i].get('text', "") for i in range(g.number_of_nodes())]
+                 for g in self.graphs]
+        prompts = [g.graph.get('prompt_node', -1) for g in self.graphs]
+        for col, vals in (("text", texts), ("prompt_node", prompts)):
+            if col in self._hf_dataset.column_names:
+                self._hf_dataset = self._hf_dataset.remove_columns(col)
+            self._hf_dataset = self._hf_dataset.add_column(col, vals)
+        self.node_ordering = self.ORDERING_RCM
 
     def _build_initial_dataset(self, dataset_label):
         """
@@ -198,11 +283,12 @@ class TextGraphDataset(Dataset):
         subset_graphs = [self.graphs[i] for i in actual_indices]
         subset_hf = self._hf_dataset.select(actual_indices)
         
-        # 3. Return a new instantiated dataset
+        # 3. Return a new instantiated dataset (carrying the node ordering)
         return TextGraphDataset(
-            graphs=subset_graphs, 
-            _hf_dataset=subset_hf, 
-            per_graph_versions=self.per_graph_versions
+            graphs=subset_graphs,
+            _hf_dataset=subset_hf,
+            per_graph_versions=self.per_graph_versions,
+            node_ordering=self.node_ordering,
         )
 
     def __add__(self, other: 'TextGraphDataset') -> 'TextGraphDataset':
@@ -223,12 +309,15 @@ class TextGraphDataset(Dataset):
 
         # 1. Merge the raw NetworkX graphs (standard Python list concatenation)
         merged_graphs = self.graphs + other.graphs
-        
+
         # 2. Merge the Hugging Face arrow tables
         merged_hf = concatenate_datasets([self._hf_dataset, other._hf_dataset])
-        
-        # 3. Return a new instance using your existing internal constructor
-        return TextGraphDataset(graphs=merged_graphs, _hf_dataset=merged_hf, per_graph_versions=self.per_graph_versions)
+
+        # 3. Combine node orderings: keep the shared label, else mark "mixed".
+        merged_ordering = self.node_ordering if self.node_ordering == other.node_ordering else self.ORDERING_MIXED
+
+        # 4. Return a new instance using your existing internal constructor
+        return TextGraphDataset(graphs=merged_graphs, _hf_dataset=merged_hf, per_graph_versions=self.per_graph_versions, node_ordering=merged_ordering)
 
     def assign_label(self, label: str):
         """Assigns a label to the entire dataset."""
@@ -555,7 +644,10 @@ class TextGraphDataset(Dataset):
         with open(os.path.join(temp_path, "graphs.pkl"), "wb") as f:
             pickle.dump(self.graphs, f)
 
-        metadata = { "per_graph_versions": self.per_graph_versions }
+        metadata = {
+            "per_graph_versions": self.per_graph_versions,
+            "node_ordering": self.node_ordering,
+        }
         with open(os.path.join(temp_path, "metadata.json"), "w") as f:
             json.dump(metadata, f)
             
@@ -589,10 +681,12 @@ class TextGraphDataset(Dataset):
         hf_dataset = load_from_disk(features_path)
 
         per_graph_versions = 1
+        node_ordering = cls.ORDERING_ORIGINAL
         if os.path.exists(metadata_path):
             with open(metadata_path, "r") as f:
                 metadata = json.load(f)
                 per_graph_versions = metadata.get("per_graph_versions", 1)
+                node_ordering = metadata.get("node_ordering", cls.ORDERING_ORIGINAL)
         else:
             print(f"Legacy dataset detected (no metadata.json). Defaulting per_graph_versions to 1.")
         
@@ -602,7 +696,7 @@ class TextGraphDataset(Dataset):
             print(f"Legacy dataset detected at {path}. Injecting random 'ds_label': {fallback_label}")
             hf_dataset = hf_dataset.add_column("ds_label", [fallback_label] * len(hf_dataset))
             
-        return cls(graphs=graphs, _hf_dataset=hf_dataset, per_graph_versions=per_graph_versions)
+        return cls(graphs=graphs, _hf_dataset=hf_dataset, per_graph_versions=per_graph_versions, node_ordering=node_ordering)
     #endregion
     # ------------------------------------------------------------------------
 
@@ -631,6 +725,7 @@ class TextGraphDataset(Dataset):
             f"  Total Items: {total_items}\n"
             f"  Versions per Item: {self.per_graph_versions}\n"
             f"  Total Graphs: {total_graphs}\n"
+            f"  Node Ordering: {self.node_ordering}\n"
             f"  Computed Features: [{formatted_features}]\n"
             f")"
         )

@@ -122,6 +122,49 @@ def bucket_len(length: int, block_size: int = 128, midpoints: bool = True) -> in
     return pow2 * block_size
 
 
+def default_len_buckets(length: int) -> int:
+    """Default sequence-length ladder for flex training: multiples of 512 with
+    1.5× midpoints (512, 1024, 1536, 2048, 3072, …). Coarser than the raw
+    block-size ladder — small L is cheap, so the extra padding there is free, and
+    fewer distinct L keep the per-shape compile/autotune count low."""
+    return bucket_len(length, 512)
+
+
+def default_node_buckets(n: int) -> int:
+    """Default node-count ladder for flex training: pure powers of two floored at
+    32 (32, 64, 128, 256, 512, 1024, …). Coarse on purpose — N drives the
+    ``(B,H,N,N)`` bias shape that the compiled flex kernel guards on, so few
+    distinct N values are what keep recompiles bounded; small N is tiny in
+    absolute memory, so the headroom there is cheap."""
+    return bucket_len(n, 32, midpoints=False)
+
+
+def bucketize(value: int, spec) -> int:
+    """Round ``value`` up to an allowed bucket. ``spec`` is one of:
+
+      * ``None`` — no bucketing (returns ``value`` unchanged);
+      * a callable ``f(value) -> bucket`` (e.g. :func:`default_len_buckets`);
+      * a sorted iterable of allowed sizes — the smallest entry ``>= value``.
+
+    Raises if a list ``spec`` has no entry large enough, or if the result is
+    smaller than ``value`` (a malformed callable/list).
+    """
+    if spec is None:
+        return value
+    if callable(spec):
+        out = spec(value)
+    else:
+        spec = list(spec)
+        out = next((b for b in spec if b >= value), None)
+        if out is None:
+            raise ValueError(
+                f"value {value} exceeds the largest bucket {spec[-1] if spec else None}; "
+                f"widen the bucket list.")
+    if out < value:
+        raise ValueError(f"bucketize produced {out} < value {value} (bad spec).")
+    return out
+
+
 def pad_to_block(q, k, v, node_ids, pad_mask, block_size=128):
     """Pad q/k/v/node_ids/pad_mask so the sequence length is a multiple of
     ``block_size`` (an int, or a ``(Q_BLOCK, KV_BLOCK)`` tuple — padding uses
