@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import networkx as nx
 import pytest
+import torch
 
 from src.utils.text_graph_dataset import TextGraphDataset
 
@@ -43,6 +44,43 @@ def test_rcm_relabel_preserves_structure():
     # original_id is a permutation of 0..N-1 (relabeling is a bijection)
     oids = sorted(g2.nodes[i]["original_id"] for i in range(g2.number_of_nodes()))
     assert oids == list(range(g2.number_of_nodes()))
+
+
+def test_rcm_canonical_node_order():
+    """Regression: after RCM relabel the node *insertion* order must equal the
+    label order 0..N-1. nx.relabel_nodes keeps the original insertion order, so
+    without re-canonicalizing, nx.to_numpy_array (used by SPD/RRWP/magnetic
+    feature computation) would be misaligned with the labels the model indexes
+    by — silently scrambling every RCM run."""
+    g = TextGraphDataset(_graphs(1)).graphs[0]
+    g2 = TextGraphDataset._rcm_relabel_graph(g)
+    assert list(g2.nodes()) == sorted(g2.nodes()) == list(range(g2.number_of_nodes()))
+    # insertion-order adjacency must equal label-order adjacency
+    A_insertion = nx.to_numpy_array(g2)
+    A_label = nx.to_numpy_array(g2, nodelist=sorted(g2.nodes()))
+    assert (A_insertion == A_label).all()
+
+
+def test_rcm_feature_consistency_spd():
+    """End-to-end: SPD computed *after* RCM equals the permuted original SPD, i.e.
+    the dataset reorders graph topology and features consistently. This is the
+    property the insertion-order bug broke (and that the GPU permutation test
+    catches only indirectly)."""
+    graphs = _graphs(3)
+    a = TextGraphDataset([g.copy() for g in graphs])
+    a.compute_shortest_path_distances(use_gpu=False)
+    b = TextGraphDataset([g.copy() for g in graphs], rcm_ordering=True)
+    b.compute_shortest_path_distances(use_gpu=False)
+
+    for idx in range(len(a)):
+        ia, ib = a[idx], b[idx]
+        # b's current index -> original node id
+        perm = [None] * ib["num_nodes"]
+        for orig, cur in ib["original_ids"].items():
+            perm[cur] = orig
+        permuted_orig = ia["shortest_path_dists"][perm][:, perm]
+        assert torch.equal(permuted_orig, ib["shortest_path_dists"]), \
+            f"graph {idx}: RCM SPD is not a consistent permutation of the original"
 
 
 def test_rcm_prompt_node_follows_relabel():

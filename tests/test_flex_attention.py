@@ -113,6 +113,10 @@ def test_flex_matches_eager_forward(bias_name, k_hop):
     with torch.no_grad():
         oe = eager(**batch)
         of = flex(**batch)
+    # guard against a silent fallback making this a trivial eager-vs-eager check
+    ctx = flex.model.layers[0].self_attn._graph_ctx
+    assert ctx["impl"] == "flex" and ctx["block_mask"] is not None, "flex path did not run"
+
     mask = batch["attention_mask"].bool()
     diff = (oe.logits[mask] - of.logits[mask]).abs().max().item()
     assert diff < LOGIT_TOL, f"[{bias_name}, k={k_hop}] flex-vs-eager logit diff {diff}"
@@ -130,15 +134,15 @@ def test_flex_bias_grad_parity(k_hop):
     flex(**batch).loss.backward()
 
     eg = dict(eager.named_parameters())
-    worst = 0.0
+    compared = 0
     for name, p in flex.named_parameters():
         if "graph_bias" not in name or p.grad is None:
             continue
         ge, gf = eg[name].grad, p.grad
         assert torch.allclose(ge, gf, rtol=GRAD_RTOL, atol=GRAD_ATOL), \
             f"k={k_hop}: grad mismatch on {name} (max {(ge-gf).abs().max().item():.2e})"
-        worst = max(worst, (ge - gf).abs().max().item())
-    assert worst > 0.0  # sanity: we actually compared some grads
+        compared += 1
+    assert compared > 0, "no graph_bias grads were compared"
 
 
 # ── #7 bias-checkpointing parity (flex) ──────────────────────────────────────
@@ -269,5 +273,8 @@ def test_flex_generation_dense_fallback():
         "magnetic_V", "magnetic_lambdas", "k_hop_mask") if k in batch}
     L = batch["input_ids"].shape[1]
     out = flex.generate(max_new_tokens=4, do_sample=False, **gen_kwargs)
-    assert out.shape[1] == L + 4          # decode ran (q_len<kv_len fallback)
-    assert torch.isfinite(flex.lm_head.weight).all()
+    assert out.shape[1] == L + 4                       # decode produced tokens
+    assert (out >= 0).all() and (out < _BASE["vocab_size"]).all()
+    # the last forward was an incremental decode step (q_len<kv_len) -> it must
+    # have taken the dense fallback, not flex
+    assert flex.model.layers[0].self_attn._graph_ctx["impl"] == "sdpa"
