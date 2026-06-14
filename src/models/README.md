@@ -41,7 +41,7 @@ model. It is updated as work proceeds.
    becomes a re-export shim. No behavior change. ✅
 2. **Scaffold impl + config** — implement the `graph_attention_v2.py` flex
    stubs over `flex_kernel`; add `flex_compile_mode` / `flex_block_size` config
-   fields + `flex_block_size()` gate helper. ⬜
+   fields + `flex_block_size()` gate helper. ✅
 3. **Model forward + attention branch** — `GTLMLlamaForCausalLM.forward` builds
    a per-batch `BlockMask` (+ int32 node_ids) for full-seq flex and falls back
    to dense for decode; `GTLMLlamaAttention.forward` gets the flex branch
@@ -60,3 +60,12 @@ model. It is updated as work proceeds.
   `flex_block_size(k_hop)` gate helper). Rewrote `flex_attn/flex_core.py` as a
   re-export shim that keeps the bench-only `dense_reference` + self-test.
   Verified: imports resolve, bench symbols intact, no dangling refs.
+- **Step 2 done.** Implemented the `graph_attention_v2.py` flex seams as thin
+  wrappers over `flex_kernel`: `build_flex_block_mask`, `make_soft_score_mod`,
+  `flex_attention_forward` (returns `(B,q,H,d)` + `None` to match the dense
+  backends), plus a `flex_block_size()` re-export. `graph_attention_dispatch`
+  now rejects `impl='flex'` with a clear message (flex is routed from the
+  attention forward in step 3). Added `GTLMLlamaConfig.flex_compile_mode`
+  (default autotune) and `flex_block_size` (None = K-hop gate). Verified:
+  wrappers callable, dispatch guard fires, config defaults + serialization
+  round-trip, gate returns 64/128.

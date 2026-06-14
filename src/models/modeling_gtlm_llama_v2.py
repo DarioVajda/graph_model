@@ -87,6 +87,8 @@ class GTLMLlamaConfig(LlamaConfig):
         k_hop_directed: bool = False,
         graph_attn_impl: str = "eager",
         checkpoint_graph_bias: bool = True,
+        flex_compile_mode: str = "max-autotune-no-cudagraphs",
+        flex_block_size: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -106,6 +108,14 @@ class GTLMLlamaConfig(LlamaConfig):
         # their (B,N,N,·) intermediates — ~40 GB at N=2048 for ms of recompute.
         # Training-only (eval/generation paths are unaffected by the flag).
         self.checkpoint_graph_bias = checkpoint_graph_bias
+        # FlexAttention knobs (only used when graph_attn_impl == "flex").
+        #   flex_compile_mode: torch.compile mode for the flex kernel (#4); the
+        #     autotune default buys ~1.47x step for a ~320s one-time compile per
+        #     shape. Pass "default" (or None) for inductor's fast heuristics.
+        #   flex_block_size: BlockMask block size; None uses the K-hop gate
+        #     (64 when k_hop>0, else 128 — #6), an int overrides it.
+        self.flex_compile_mode = flex_compile_mode
+        self.flex_block_size = flex_block_size
 
 
 # ── Attention (the one substantive override) ────────────────────────────────────

@@ -20,20 +20,26 @@ Backends:
     structural mask and delegate the actual attention to HuggingFace's own
     ``eager_attention_forward`` / ``sdpa_attention_forward`` (no softmax/SDPA
     reimplementation).
-  * ``flex`` — scaffolded.  The seams (``build_flex_block_mask`` for the hard
-    structure, ``make_soft_score_mod`` for the additive bias, ``flex_attention_forward``
-    for the call) are defined and raise ``NotImplementedError`` so the dispatch
-    wiring is in place and the kernel can be dropped in later.
+  * ``flex`` — implemented over :mod:`src.models.flex_kernel`.  The seams
+    (``build_flex_block_mask`` for the hard structure, ``make_soft_score_mod``
+    for the additive bias, ``flex_attention_forward`` for the call) are thin
+    wrappers over the promoted kernel.  The flex path keeps the soft bias at
+    node level ``(B,H,N,N)`` and gathers it inside the kernel (no token-level
+    expansion), so it is routed directly from ``GTLMLlamaAttention.forward``
+    rather than through :func:`graph_attention_dispatch` (whose contract is the
+    dense structural-mask + token-expanded bias).
 """
 
 import torch
-from typing import Optional
+from typing import Callable, Optional
 
 from transformers.models.llama.modeling_llama import (
     eager_attention_forward,
     repeat_kv,  # noqa: F401  (re-exported for the future flex path)
 )
 from transformers.integrations.sdpa_attention import sdpa_attention_forward
+
+from . import flex_kernel
 
 
 GRAPH_ATTN_IMPLS = ("eager", "sdpa", "flex")
@@ -160,45 +166,86 @@ def graph_attention_dispatch(
         )
 
     if impl == "flex":
-        return flex_attention_forward(
-            module, query, key, value, structural_mask, token_soft_bias,
-            scaling=scaling, dropout=dropout,
+        # Flex does not use the dense structural mask / token-expanded bias, so
+        # it is routed directly from GTLMLlamaAttention.forward (which keeps the
+        # bias at node level and gathers it in-kernel), not through this dispatch.
+        raise RuntimeError(
+            "graph_attention_dispatch was called with impl='flex'; the flex path "
+            "is handled in GTLMLlamaAttention.forward, not here."
         )
 
     raise ValueError(f"Unknown graph attention implementation '{impl}'. Expected one of {GRAPH_ATTN_IMPLS}.")
 
 
-# ── FlexAttention scaffold (to be implemented) ──────────────────────────────────
+# ── FlexAttention path ──────────────────────────────────────────────────────────
+#
+# Thin wrappers over src.models.flex_kernel. Built once per batch
+# (``build_flex_block_mask``) and per layer (``make_soft_score_mod`` +
+# ``flex_attention_forward``), and called directly from
+# GTLMLlamaAttention.forward.
 
-def build_flex_block_mask(*args, **kwargs):
-    """
-    TODO(flex): build a ``torch.nn.attention.flex_attention.BlockMask`` from a
-    ``mask_mod(b, h, q_idx, kv_idx)`` closure that captures ``node_ids``,
-    ``prompt_node`` and ``k_hop_mask`` to express causal + bidirectional-prefix +
-    K-hop + padding as sparse block structure (the speedup over dense masks).
-    """
-    raise NotImplementedError("FlexAttention block-mask builder is not implemented yet.")
+def flex_block_size(k_hop: int) -> int:
+    """Recommended BlockMask block size for a K-hop setting: 64 when k>0 (#6),
+    else 128. Re-exported from :mod:`flex_kernel`."""
+    return flex_kernel.flex_block_size(k_hop)
 
 
-def make_soft_score_mod(*args, **kwargs):
+def build_flex_block_mask(
+    node_ids:    torch.Tensor,            # (B, kv_len) int
+    prompt_node: torch.Tensor,            # (B,)
+    pad_mask:    torch.Tensor,            # (B, kv_len) {0,1}
+    k_hop_mask:  Optional[torch.Tensor],  # (B, N, N) bool, or None
+    k_hop:       int,
+    q_len:       int,
+    kv_len:      int,
+    *,
+    block_size=128,
+    device: Optional[torch.device] = None,
+):
+    """Build a sparse ``BlockMask`` expressing causal + bidirectional-prefix +
+    K-hop + padding as block structure (the speedup over dense masks). One per
+    batch, shared by every layer. Delegates to :func:`flex_kernel.build_block_mask`.
     """
-    TODO(flex): return a ``score_mod(score, b, h, q_idx, kv_idx)`` closure that
-    captures this layer's node-level soft bias and adds the token-expanded value
-    (indexing via ``node_ids``) to the attention score.
+    return flex_kernel.build_block_mask(
+        node_ids, prompt_node, pad_mask, k_hop_mask, k_hop, q_len, kv_len,
+        block_size=block_size, device=device,
+    )
+
+
+def make_soft_score_mod(
+    node_bias: Optional[torch.Tensor],   # (B, H, N, N) float, or None
+    node_ids:  torch.Tensor,             # (B, kv_len) int
+    q_offset:  int = 0,
+) -> Optional[Callable]:
+    """Return a ``score_mod(score, b, h, q_idx, kv_idx)`` closure that gathers
+    this layer's node-level soft bias (indexing via ``node_ids``) and adds it to
+    the attention score — no token-level ``(B,H,L,L)`` expansion. ``None`` when
+    there is no bias. Delegates to :func:`flex_kernel.make_score_mod`.
     """
-    raise NotImplementedError("FlexAttention score-mod builder is not implemented yet.")
+    return flex_kernel.make_score_mod(node_bias, node_ids, q_offset=q_offset)
 
 
 def flex_attention_forward(
-    module, query, key, value, structural_mask, token_soft_bias, *, scaling, dropout,
+    query, key, value,
+    *,
+    block_mask,
+    score_mod,
+    scaling: float,
+    enable_gqa: bool = True,
+    compile_mode: Optional[str] = flex_kernel.DEFAULT_COMPILE_MODE,
 ):
+    """Run compiled ``flex_attention`` with the prebuilt BlockMask and score_mod
+    (``enable_gqa=True`` for grouped-query attention).
+
+    Returns ``(attn_output, attn_weights)`` shaped like the other backends:
+    the kernel yields ``(B, H, q, d)``; we transpose to ``(B, q, H, d)`` so the
+    caller's shared ``reshape(B, q, -1)`` works for every backend, and
+    ``attn_weights`` is ``None`` (flex never materializes the score matrix).
     """
-    TODO(flex): call ``torch.compile``'d ``flex_attention`` with the BlockMask
-    from :func:`build_flex_block_mask` and the per-layer score_mod from
-    :func:`make_soft_score_mod` (``enable_gqa=True`` for grouped-query attention),
-    returning ``(attn_output, None)`` shaped like the other backends.
-    """
-    raise NotImplementedError(
-        "graph_attn_impl='flex' is scaffolded but not yet implemented. "
-        "Use 'eager' or 'sdpa' for now."
-    )
+    out = flex_kernel.flex_attention_forward(
+        query, key, value,
+        block_mask=block_mask, score_mod=score_mod, scaling=scaling,
+        enable_gqa=enable_gqa, compile_mode=compile_mode,
+    )                                                        # (B, H, q, d)
+    out = out.transpose(1, 2).contiguous()                   # (B, q, H, d)
+    return out, None
