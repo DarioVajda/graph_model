@@ -117,6 +117,19 @@ class TextGraphDataset(Dataset):
         order = list(reverse_cuthill_mckee_ordering(H))
         mapping = {old: new for new, old in enumerate(order)}
         g2 = nx.relabel_nodes(g, mapping, copy=True)
+
+        # CRITICAL: relabel_nodes changes labels but keeps the original *insertion*
+        # order, so g2.nodes() is no longer 0..N-1 in order. Downstream feature
+        # computations (compute_shortest_path_distances, rrwp, magnetic, …) and
+        # nx.to_numpy_array use insertion order, so without reordering the computed
+        # features would be misaligned with the node labels the model indexes by.
+        # Rebuild with nodes inserted in sorted-label order to realign the two.
+        ordered = g2.__class__()
+        ordered.add_nodes_from(sorted(g2.nodes(data=True), key=lambda nd: nd[0]))
+        ordered.add_edges_from(g2.edges(data=True))
+        ordered.graph.update(g2.graph)
+        g2 = ordered
+
         p = g.graph.get('prompt_node', -1)
         if p != -1 and p in mapping:
             g2.graph['prompt_node'] = mapping[p]

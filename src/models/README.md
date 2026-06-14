@@ -37,6 +37,15 @@ model. It is updated as work proceeds.
   overridable via `GTLMLlamaConfig.flex_block_size`.
 - **node_ids dtype:** int32 copy captured for the flex gather + BlockMask (#10).
 - **Default `graph_attn_impl`:** stays `"eager"` — flex is strictly opt-in.
+- **Compiled-kernel cache shipping:** bundle the compiled flex kernels with the
+  model so they're reused on load (local + HF Hub). Route is **version-adaptive**:
+  torch≥2.7 uses the portable `torch.compiler.save/load_cache_artifacts` blob;
+  torch 2.6 falls back to tar-bundling the `TORCHINDUCTOR_CACHE_DIR` directory.
+  An env-fingerprint (`torch`/`triton`/`cuda`/GPU-arch) gates load — **mismatch
+  → warn + skip, never fatal** (compiled kernels are arch+version specific, so
+  the bundle is a fast path only when the env matches; otherwise it recompiles).
+  Cache population is via an **opt-in warmup helper** (compile each (L,N) bucket)
+  the user calls before saving — `save_pretrained` does not auto-compile.
 
 ## Out of scope (parked)
 - #11 per-KV-head bias (needs a training ablation).
@@ -56,8 +65,12 @@ model. It is updated as work proceeds.
 4. **Collator padding + dataset RCM** — `GraphCollatorV2` opt-in bucket padding;
    `TextGraphDataset` RCM method + precompute flag. ✅
 5. **Tests** — model parity (flex vs eager fwd + grads, k=0/k=2), ckpt nesting
-   (#7/#9), generation smoke (dense fallback), plus collator padding and dataset
-   RCM unit tests. ⬜
+   (#7/#9), generation smoke (dense fallback), plus collator L/N bucketing and
+   dataset RCM/ordering unit tests. ✅
+6. **Compiled-kernel cache shipping** — version-adaptive `save_compile_cache` /
+   `load_compile_cache` (blob on torch≥2.7, dir-tar on 2.6) with env-fingerprint
+   gating; hooked into `save_pretrained` / `from_pretrained` (non-fatal, Hub-
+   compatible); opt-in `warm_flex_cache(buckets)` helper; round-trip tests. ⬜
 
 ## Progress log
 
@@ -118,3 +131,25 @@ model. It is updated as work proceeds.
   `cache_size_limit` to it on the flex path (only ever upward). Verified: ladders,
   bucketize forms + overflow error, config round-trip, features/k_hop padded to
   the N bucket, custom specs, alignment guard, and the dynamo raise.
+- **Step 5 done.** Three test files (95 tests pass total, no regressions):
+  `test_dataset_ordering.py` (RCM relabel/structure, init flag + method, feature
+  guard, select/add/save-load label propagation), `test_collator_bucketing.py`
+  (ladders, bucketize, L+N padding, real-position preservation, custom specs,
+  alignment guard, and an **fp64 eager loss-neutrality** check at atol=1e-9),
+  and `test_flex_attention.py` (GPU-gated: flex-vs-eager forward + bias-grad
+  parity at k=0/2, #7 and #9 checkpoint parity, decode-fallback generation;
+  forced block_size=128 + default compile mode + a fixed (L,N) bucket to stay
+  fast — 22s cold, faster warm via inductor's on-disk cache).
+- **Step 5 follow-up (permutation invariance + a real RCM bug it caught).**
+  Added `test_flex_permutation_invariance_via_rcm`: reorder the prefix via the
+  dataset's RCM and assert the **prompt-span logits are unchanged**. Writing it
+  surfaced a genuine bug: `nx.relabel_nodes` keeps the original *insertion*
+  order, so after RCM `g.nodes()` was not `0..N-1` in order, and feature
+  computations that use `nx.to_numpy_array` (SPD/RRWP/magnetic) came out
+  misaligned with the node labels the model indexes by — silently corrupting
+  every RCM run. Fixed `_rcm_relabel_graph` to rebuild the graph in sorted-label
+  order. Notes on the property tested: the prompt node is always packed last, so
+  RCM relabeling it is output-invariant (verified bit-identical); the model's
+  prompt representation is permutation-invariant over the prefix; only the
+  first-prompt-token *loss* shifts (causal teacher-forcing boundary), which is
+  never a prediction target — so the test compares prompt logits, not loss.
