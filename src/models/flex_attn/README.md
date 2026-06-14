@@ -44,6 +44,7 @@ bias-checkpointing #7 on):
 |---|---|---|
 | compile mode | `max-autotune-no-cudagraphs` (**default**, `flex_core.DEFAULT_COMPILE_MODE`) | 1.2–1.5× faster step for a ~320s one-time compile per bucketed shape (vs ~16s); amortized by bucketing + inductor's on-disk cache. `--compile-mode default` for quick iteration. |
 | `BLOCK_SIZE` | **64 when k>0, 128 when k=0** | 64-blocks: 1.3–1.6× on fwd *and* bwd at k>0, but ~20% slower fwd at k=0 (nothing to skip, smaller tiles on dense work). Sub-128 requires the autotune mode. Harness default stays 128 for table continuity — sweep `--block-sizes 128 64`. |
+| `node_id` dtype (#10) | **int32** (cast before capture) | free & lossless (bitwise-identical): net fwd+bwd −1.4 to −20% vs int64, biggest where the backward gather is DRAM-bound (large-N). int16 impossible (torch index-dtype rule). `--node-id-dtype int32`. |
 | `checkpoint_graph_bias` (#7) | **True** (model-config default) | ~free at small N (+0.7%); at N=2048 costs ~+20% step for **−36 GB** and turns `2048×8` from OOM into runnable. Training-only; eval/decode untouched. |
 | decoder gradient checkpointing (#9) | on when L ≳ 16k or memory-bound | +13–23% step for −26/−30 GB at L≈17.5k. `--gradient-checkpointing` on the bench; `model.gradient_checkpointing_enable(use_reentrant=False)` in training. Nests exactly with #7. |
 | padding & bucketing | pad L to a block multiple (**mandatory** — ~14× cliff otherwise); bucket L *and* N with `flex_core.bucket_len` in the dataloader | ≤33% padding waste for ~20 distinct compile shapes below 100k tokens; per-batch BlockMask rebuild is then ~3 ms. |
@@ -53,9 +54,9 @@ bias-checkpointing #7 on):
 ### Known walls
 
 - **L≈70k OOMs for *every* method, even flash with full checkpointing** — the
-  unchunked LM-head cross-entropy (~90 GB of logits+loss at L=70k) → item #11.
+  unchunked LM-head cross-entropy (~90 GB of logits+loss at L=70k) → item #12.
 - **The flex backward is ~66% atomic scatter-add** into the bias grad — pure
-  same-address contention, dtype-independent. Remaining levers: #10 (model
+  same-address contention, dtype-independent. Remaining levers: #11 (model
   change) or the parked custom-kernel ideas at the bottom.
 
 ---
@@ -98,10 +99,11 @@ in the optimization log below starts from there.
 | `inputs.py` | Synthetic graph-batch generator. Real topology (random-geometric → recoverable locality) + real K-hop/SPD; **synthetic** magnetic eigenvectors (shape-faithful — values don't affect timing). RCM/random/identity node ordering. Packs via the real `GraphCollatorV2`. |
 | `density.py` | Element-level vs **block-level** mask coverage, chunked so it never materializes `L×L`. Block density predicts flex speedup (`~1/block_density`). |
 | `flex_core.py` | The real flex implementation: `pad_to_block`, `build_block_mask` (mask_mod → `BlockMask`; block size int or `(Q, KV)`), `make_score_mod` (node-bias gather), `flex_attention_forward` (compiled with `DEFAULT_COMPILE_MODE = max-autotune-no-cudagraphs`), `bucket_len` (the L/N padding ladder for training), and a `dense_reference` for parity. Drops into the `graph_attention_v2.py` flex scaffold. |
-| `bench_isolation.py` | One attention layer, 4 methods (`eager` dense SDPA / `flex` / `flash` causal floor / `flash_nc` non-causal work-matched floor). Times fwd, fwd+bwd, and the backward directly (`bwd`) + peak memory; warm BlockMask timing; `--bias-mode` decomposition, `--compile-mode` and `--block-size` knobs. Correct input-grad lifecycle (fresh leaves per step). |
+| `bench_isolation.py` | One attention layer, 4 methods (`eager` dense SDPA / `flex` / `flash` causal floor / `flash_nc` non-causal work-matched floor). Times fwd, fwd+bwd, and the backward directly (`bwd`) + peak memory; warm BlockMask timing; `--bias-mode` decomposition, `--compile-mode`, `--block-size`, and `--node-id-dtype` (#10) knobs. Correct input-grad lifecycle (fresh leaves per step). |
 | `bench_full_model.py` | Llama-3.2-1B fwd+bwd, same 3 methods. flex is routed at runtime (monkeypatch — the model source has no flex backend yet); `--checkpoint-bias` / `--gradient-checkpointing` arms for #7 / #9. |
 | `run_sweep.py` | Drives the 2D (`nodes × tokens/node`) sweep × ordering × K-hop × method (× bias modes × block sizes), each run in a **fresh subprocess** (OOM isolation), with K-independent methods deduped to one run per config. Also `--recompile-probe`. |
 | `profile_ncu.py` | Nsight Compute roofline: per-kernel DRAM% vs compute% (memory- vs compute-bound), fwd vs bwd. |
+| `exp_node_id_dtype.py` | The #10 driver: flex-output **parity** across `node_ids` dtypes (int32 bitwise-identical to int64; int16 rejected) + a subprocess-isolated int64-vs-int32 **timing** sweep. Configurable `--nodes/--tpn/--k-hops` grid; `--repeats N --fresh-autotune` re-autotunes each repeat from a unique `TORCHINDUCTOR_CACHE_DIR` to expose autotune variance (reports mean ± std). Writes `results_h100_nodeid_v2/`. |
 | `plot_results.py` | Publication figures (latency / peak memory vs sequence length) from the sweep JSONLs. |
 
 ### Running
@@ -178,7 +180,7 @@ sentinels. Each record is grouped into:
 
 - `spec` — the swept graph parameters (`n_nodes`, `tokens_per_node`, `k_hop`, `ordering`, …).
 - `run` — kernel/harness knobs (`num_heads`, `head_dim`, `block_size`, `dynamic`,
-  `bias_mode`, `compile_mode`, `checkpoint_bias`, `gradient_checkpointing`, …).
+  `bias_mode`, `compile_mode`, `node_id_dtype`, `checkpoint_bias`, `gradient_checkpointing`, …).
 - `shape` — realized sizes after jitter (`seq_len`, `max_num_nodes`, `total_tokens`).
 - `density` — `element_density`/`element_sparsity` (token level) and
   `block_density`/`block_sparsity` (block level — what flex skips), `expected_attn_speedup`.
@@ -235,8 +237,9 @@ cost to watch, consistent with the isolation timings.
 
 ## Optimization log
 
-Nine experiments in three rounds, all complete; raw numbers in `results_h100*/`.
-Phases 1–2 fixed the measurements and tuned the kernel; Phase 3 fixed memory.
+Ten experiments in three rounds, all complete; raw numbers in `results_h100*/`.
+Phases 1–2 fixed the measurements and tuned the kernel; Phase 3 fixed memory;
+#10 is a free, lossless index-width micro-opt on the gather.
 
 | # | Experiment | Outcome |
 |---|---|---|
@@ -248,7 +251,8 @@ Phases 1–2 fixed the measurements and tuned the kernel; Phase 3 fixed memory.
 | 6 | Block size 64 vs 128 | 64-blocks win **1.3–1.6× on fwd *and* bwd** at k=2 (speedup ≈ active-block ratio); ~20% *slower* fwd at k=0 — 64 when k>0, 128 when k=0 |
 | 7 | Checkpoint the bias modules | **−36.3 GB at 2048×2, un-OOMs `2048×8`** for +20% step at N=2048 (~0 at small N); grads bitwise identical; on by default |
 | 8 | MagneticBias restructure | −8.9 GB (no-ckpt path), −3% step with ckpt; **exact parity** (fp64 at machine epsilon); folded path is the default |
-| 9 | Decoder gradient checkpointing | **−26/−30 GB at L≈17.5k** for +13/+23%; exposed #11 (unchunked CE) as the true large-L wall |
+| 9 | Decoder gradient checkpointing | **−26/−30 GB at L≈17.5k** for +13/+23%; exposed #12 (unchunked CE) as the true large-L wall |
+| 10 | int32 `node_ids` | lossless (bitwise-identical), free one-line cast: **net fwd+bwd faster in all 8 configs** (−1.4 to −20.1%, 3 fresh-autotune repeats); biggest where the backward gather is DRAM-bound (large-N k=0 −24.6% bwd). Earlier single-shot +9.7% bwd was autotune noise (→ −6.6% repeated). int16 impossible (torch index-dtype rule) |
 
 ### 1. Honest baselines: `flash_nc` and the k=0 scope note
 
@@ -359,7 +363,7 @@ allocated fp32** regardless of the leaf dtype
 `dsT` is cast `.to(tl.float32)` *before* `tl.atomic_add`, and the grad is
 downcast to bf16 afterwards in a separate cheap kernel. The scatter already
 runs native fp32 atomics; its ~24 ms is pure same-address **contention**.
-Dtype is not a lever. The levers that remain: per-KV-head bias (#10 — 4×
+Dtype is not a lever. The levers that remain: per-KV-head bias (#11 — 4×
 fewer conflicting atomics), or the parked custom-kernel ideas.
 
 ### 6. Block size: 64 vs 128 — 64 wins wherever there is sparsity
@@ -449,13 +453,75 @@ unchunked LM-head loss. `peak_fwd` (a no-grad forward!) is already ~23.5 GB
 at L=17.6k: logits are (L, 128k-vocab) → bf16 + fp32-upcast + log_softmax
 ≈ 23 GB there and ≈ **90 GB at L=70k**, before any transformer activation.
 The original study's "512×128 OOMs for every method" was the cross-entropy
-all along → item #11.
+all along → item #12.
+
+### 10. int32 `node_ids` — a free, lossless win on the gather
+
+The score_mod's core op gathers `node_bias[b,h,node_ids[q],node_ids[k]]` per
+(q,kv) element, and the structural BlockMask builder indexes the same
+`node_ids`. Both bake the tensor's dtype into the compiled Triton, so a 64-bit
+id means an 8-byte index load per element and 64-bit address arithmetic in the
+inner loop. Node counts are ≤ a few thousand, so narrowing the captured ids is
+lossless — the only question is whether it buys time, and where. Run via
+`bench_isolation --node-id-dtype {int64,int32}` and the `exp_node_id_dtype.py`
+driver; the authoritative run is `results_h100_nodeid_v2/` (8-config grid,
+3 fresh-autotune repeats, `--repeats 3 --fresh-autotune`).
+
+**int16 is impossible, int32 is the floor.** `node_ids[q]` is *used as an index*
+into `node_bias`, and torch requires index tensors to be long/int/byte/bool
+("tensors used as indices must be long, int, byte or bool") — int16 is rejected
+at trace time. uint8 (`byte`) would pass but caps at 255 nodes, so **int32 is
+the narrowest generally-usable width.**
+
+**Parity:** flex with int32 ids is **bitwise identical** to int64 (max|Δ| = 0,
+k=0 and k=2) — only the index width changes, never a value — and matches the
+dense reference. So this is a pure-upside cast with no ablation needed.
+
+**Measured** (H100, autotune + #6 block-size gate; **8-config grid × 3 repeats,
+each repeat re-autotuned from a fresh inductor cache** so the numbers carry an
+honest variance band; %Δ is on the means, full mean ± std (min) in
+`results_h100_nodeid_v2/`):
+
+| config | L | blkSp | fwd Δ | bwd Δ | **fwd+bwd Δ** |
+|---|---|---|---|---|---|
+| k=0 512×8 | 4.5k | 0.03 | −6.5% | −6.8% | **−5.8%** |
+| k=0 512×32 | 17.6k | 0.01 | −5.5% | −9.9% | **−8.7%** |
+| k=0 2048×8 | 17.4k | 0.01 | +6.3% | −24.6% | **−20.1%** |
+| k=0 2048×32 | 69k | 0.00 | −0.7% | −8.8% | **−7.8%** |
+| k=2 512×8 | 4.5k | 0.85 | −2.3% | −7.5% | **−6.9%** |
+| k=2 512×32 | 17.6k | 0.93 | −2.6% | −6.6% | **−5.8%** |
+| k=2 2048×8 | 17.4k | 0.95 | −2.4% | −1.6% | **−1.4%** |
+| k=2 2048×32 | 69k | 0.98 | −2.2% | −4.9% | **−4.5%** |
+
+**Net (fwd+bwd) is faster with int32 in all 8 configs — −1.4% to −20.1%, never
+a net regression.** The repeated run also settled the one doubt from the first
+pass: the originally-reported **+9.7% k=2 512×32 backward was an autotune
+artifact** — over 3 fresh-autotune repeats it is **−6.6%**. That single-shot
+number was the autotuner picking a worse config on one draw (the same per-shape
+selection variance #4 flagged); averaging independent autotunes removes it.
+
+The win tracks the gather's share. The **backward gains most where the gather is
+*bandwidth*-bound** — k=0's dense gather and especially **large-N k=0 2048×8
+(−24.6%)**, where the `(B,H,N,N)` bias table spills L2 and the gather goes
+DRAM-bound (finding #5), exactly where halving the index-load width pays.
+Forward improves in 6/8 (−2 to −6.5%) and is flat at k=0 2048×32; the one
+reproducible forward *regression* is k=0 2048×8 (**+6.3%**, std≈0 — the
+autotuner lands on a worse fwd config there), but that same config posts the
+largest backward win, so net is −20.1%. Bonus: int32 often **stabilizes** kernel
+selection too (k=0 2048×8 backward std 67 ms → 0.26 ms).
+
+**Verdict: adopt.** Free (a one-line `node_ids.to(torch.int32)` *before
+capture*, so the compiled kernel emits int32 loads), lossless (bitwise-identical
+output), and **net faster in every config measured** (1.4–20%), with the biggest
+wins exactly where the backward gather is the bottleneck. Fold the cast into the
+`graph_attention_v2` integration where `node_ids` is captured for the score_mod
+and BlockMask builder.
 
 ---
 
 ## Remaining work
 
-**10. Per-KV-head bias (32 → 8 heads) — modeling change, needs a training ablation.**
+**11. Per-KV-head bias (32 → 8 heads) — modeling change, needs a training ablation.**
 - **Why:** GQA already shares K/V across query-head groups; sharing the graph
   bias the same way shrinks the `(B,H,N,N)` tensor, the gather traffic, and the
   scatter-add contention all by 4× — it attacks the speed *and* memory
@@ -473,7 +539,7 @@ all along → item #11.
   MagneticBias rewrite (#8) are all settled — this is ready whenever a
   training run is affordable.
 
-**11. Chunked / fused cross-entropy — the L≈70k gate (discovered by #9).**
+**12. Chunked / fused cross-entropy — the L≈70k gate (discovered by #9).**
 - **Why:** at L≈70k the (L, 128k-vocab) logits cost ~18 GB bf16 + ~36 GB
   fp32-upcast + ~36 GB log_softmax ≈ **90 GB before any transformer
   activation** — every method incl. flash OOMs on it, with or without
@@ -487,7 +553,7 @@ all along → item #11.
 - **Evaluate:** does `512×128` / `2048×32` (L≈70k) become runnable for flash
   and flex with #9 on; new floor at L=17.6k.
 - **Gain:** unlocks the largest configs for *all* methods; several-× lower
-  loss-spike memory everywhere. Independent of #10.
+  loss-spike memory everywhere. Independent of #11.
 
 ## Parked: deeper kernel ideas (revisit if the last 1.5–2× matters)
 
@@ -506,8 +572,9 @@ tokens-per-node² redundancy that flex's elementwise API cannot see.
   load the few-element per-tile bias sub-block to SMEM once and broadcast.
   Removes the gather (77% of the k=0 forward). Requires replacing flex's
   forward entirely; biggest effort.
-- **int32 `node_ids`** (~1 h): cast before capture — halves index-load width
-  and avoids 64-bit address math in the inner loop; maybe 10–20% of the gather.
+- ~~**int32 `node_ids`**~~: **done — promoted to #10** (free, lossless; net
+  fwd+bwd faster in all 8 configs, −1.4 to −20%, biggest where the backward
+  gather is DRAM-bound). int16 is not an option (torch index-dtype rule).
 - **Replica-split scatter** (~1 afternoon): capture the bias as a materialized
   `(B,H,R,N,N)` and index with `q_idx % R` — R× less atomic contention for R×
   bias-grad memory; autograd reduces replicas with one sum.

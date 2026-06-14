@@ -146,12 +146,23 @@ def _build_eager(ai, scaling, bias_mode="full"):
     return attn_fn, captured, (ai["query"], ai["key"], ai["value"])
 
 
-def _build_flex(ai, scaling, block_size, dynamic, bias_mode="full", compile_mode=None):
+def _build_flex(ai, scaling, block_size, dynamic, bias_mode="full", compile_mode=None,
+                node_id_dtype="int64"):
     """Flex path. Pads the sequence to a multiple of ``block_size`` (REQUIRED:
-    non-aligned L hits a ~14× Triton kernel cliff) and slices the output back."""
+    non-aligned L hits a ~14× Triton kernel cliff) and slices the output back.
+
+    ``node_id_dtype`` (int64 / int32 / int16, #10) narrows the captured
+    ``node_ids`` *before* it is baked into the compiled score_mod gather and the
+    BlockMask builder — halving (int32) or quartering (int16) the per-element
+    index-load width and dropping the inner loop to 32-/16-bit address math. The
+    cast is lossless here: node counts are ≤ a few thousand (int16 max 32767).
+    """
     nb, captured = _bias_leaf(ai, bias_mode)
+    node_ids = ai["node_ids"]
+    if node_id_dtype != "int64":
+        node_ids = node_ids.to(getattr(torch, node_id_dtype))
     qp, kp, vp, nidp, pmp, L, Lb = flex_core.pad_to_block(
-        ai["query"], ai["key"], ai["value"], ai["node_ids"], ai["pad_mask"], block_size,
+        ai["query"], ai["key"], ai["value"], node_ids, ai["pad_mask"], block_size,
     )
 
     def _timed_build():
@@ -208,6 +219,7 @@ def run_isolation(
     dynamic: bool = False,
     bias_mode: str = "full",
     compile_mode: Optional[str] = None,
+    node_id_dtype: str = "int64",
     n_warmup: int = 5,
     n_iter: int = 20,
     dtype: torch.dtype = torch.bfloat16,
@@ -222,6 +234,7 @@ def run_isolation(
             "block_size": list(block_size) if isinstance(block_size, tuple) else block_size,
             "dynamic": dynamic,
             "bias_mode": bias_mode, "compile_mode": compile_mode or "default",
+            "node_id_dtype": node_id_dtype,
         },
         "shape": {}, "density": {}, "timing_ms": {}, "memory_mb": {},
     }
@@ -250,7 +263,8 @@ def run_isolation(
             attn_fn, captured, qkv_src = _build_flash(ai, scaling, causal=False)
         elif method == "flex":
             attn_fn, captured, qkv_src, blockmask_build_ms, blockmask_build_warm_ms = \
-                _build_flex(ai, scaling, block_size, dynamic, bias_mode, compile_mode)
+                _build_flex(ai, scaling, block_size, dynamic, bias_mode, compile_mode,
+                            node_id_dtype=node_id_dtype)
         else:
             raise ValueError(f"unknown method {method!r}")
 
@@ -373,6 +387,10 @@ def _parse_args(argv=None):
                         "autotuned mode is the decided final config; pass "
                         "'default' for inductor's fast-compiling heuristic "
                         "configs when iterating")
+    p.add_argument("--node-id-dtype", default="int64", choices=["int64", "int32", "int16"],
+                   help="dtype the captured node_ids are narrowed to before the "
+                        "score_mod gather / BlockMask build (#10): int32 halves / "
+                        "int16 quarters the index-load width and address-math cost")
     p.add_argument("--n-warmup", type=int, default=5)
     p.add_argument("--n-iter", type=int, default=20)
     return p.parse_args(argv)
@@ -391,6 +409,7 @@ def main(argv=None):
         num_kv_heads=a.num_kv_heads, head_dim=a.head_dim, block_size=block_size,
         dynamic=a.dynamic, bias_mode=a.bias_mode,
         compile_mode=None if a.compile_mode == "default" else a.compile_mode,
+        node_id_dtype=a.node_id_dtype,
         n_warmup=a.n_warmup, n_iter=a.n_iter,
     )
     emit_result(res)
