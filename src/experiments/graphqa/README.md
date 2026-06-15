@@ -19,7 +19,8 @@ python3 -m src.experiments.graphqa \
     --without={None/spd/rrwp/magnetic} \
     --graph_type={standard/indicence} \
     --task={chosen_task} \
-    --lora_r=R
+    --lora_r=R \
+    --seed=42
 
 ```
 Available tasks to train the model on are: node_count, edge_count, cycle_check, triangle_counting, node_degree, connected_nodes, reachability, edge_existence, shortest_path.

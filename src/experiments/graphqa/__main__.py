@@ -7,4 +7,5 @@ if __name__ == "__main__":
         graph_type=args.graph_type,
         task=args.task,
         lora_r=args.lora_r,
+        seed=args.seed,
     )

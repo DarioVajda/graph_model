@@ -306,11 +306,11 @@ def parse_args():
     parser.add_argument("--graph_type", type=str, default="standard", help="Type of graph representation to use. Options: 'standard' or 'incidence'")
     parser.add_argument("--task", type=str, default="shortest_path", help="Which GraphQA task to train on. Options: node_count, edge_count, cycle_check, triangle_counting, node_degree, connected_nodes, reachability, edge_existence, shortest_path")
     parser.add_argument("--lora_r", type=int, default=16, help="The rank for LoRA adapters. If 0 or None, LoRA will not be applied.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility (used for both the global seed and data seed).")
 
     args = parser.parse_args()
-    without, graph_type, task, lora_r = args.without, args.graph_type, args.task, args.lora_r
 
-    return without, graph_type, task, lora_r
+    return args
 
 def run_training(without, graph_type, task, lora_r, seed, run_name=None, use_wandb=True):
     # --------------------------------------------------------------------------
@@ -432,4 +432,5 @@ if __name__ == "__main__":
         graph_type=args.graph_type,
         task=args.task,
         lora_r=args.lora_r,
+        seed=args.seed,
     )
