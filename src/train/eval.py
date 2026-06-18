@@ -6,7 +6,7 @@ import torch
 from transformers import TrainingArguments
 
 from ..utils import GraphTrainer, GraphCollator
-from ..models.modeling_gtlm_llama_v1 import KHopLlamaConfig, KHopGraphLlamaForCausalLM
+from ..models.legacy.modeling_gtlm_llama_v1 import KHopLlamaConfig, KHopGraphLlamaForCausalLM
 from ..models.model_utils import load_bias_parameters
 
 

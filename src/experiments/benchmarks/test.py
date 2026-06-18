@@ -5,7 +5,7 @@ import json
 from transformers import TrainingArguments, AutoTokenizer
 
 from ...utils import GraphTrainer, GraphCollator
-from ...models.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM
+from ...models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM
 from .load_data import load_dataset
 from .train_utils import get_device, compute_exact_match
 

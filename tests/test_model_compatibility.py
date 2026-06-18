@@ -17,12 +17,12 @@ import pytest
 import torch
 import networkx as nx
 from src.utils.magnetic_lap import get_magnetic_laplacian_coords
-from src.models.modeling_gtlm_llama_v0 import (
+from src.models.legacy.modeling_gtlm_llama_v0 import (
     GraphLlamaForCausalLM,
     GraphLlamaConfig,
     GraphAttnBiasConfig,
 )
-from src.models.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, KHopLlamaConfig
+from src.models.legacy.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, KHopLlamaConfig
 
 DEVICE = torch.device('cpu')
 

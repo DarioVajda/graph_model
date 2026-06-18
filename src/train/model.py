@@ -2,7 +2,7 @@ import torch
 from transformers import AutoTokenizer
 from peft import LoraConfig, get_peft_model
 
-from ..models.modeling_gtlm_llama_v1 import KHopLlamaConfig, KHopGraphLlamaForCausalLM
+from ..models.legacy.modeling_gtlm_llama_v1 import KHopLlamaConfig, KHopGraphLlamaForCausalLM
 
 
 def get_device():

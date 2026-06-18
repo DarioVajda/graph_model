@@ -1,5 +1,5 @@
 from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
+from ...models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
 
 from .load_dataset import load_graphqa_datasets
 

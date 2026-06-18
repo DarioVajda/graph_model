@@ -16,7 +16,7 @@ import torch.nn as nn
 import math
 
 from src.models.graph_bias import GraphAttentionBias
-from src.models.modeling_gtlm_llama_v1 import expand_node_to_token_bias
+from src.models.legacy.modeling_gtlm_llama_v1 import expand_node_to_token_bias
 from src.utils.text_graph_collator import GraphCollator, _k_hop_reachability
 
 

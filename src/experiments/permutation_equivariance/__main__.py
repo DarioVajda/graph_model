@@ -4,7 +4,7 @@ from transformers import LlamaForCausalLM, LlamaConfig, AutoTokenizer
 
 import networkx as nx
 
-from ...models.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
+from ...models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
 from ...utils.text_graph_dataset import TextGraphDataset, prepare_example_labels
 from ...utils.text_graph_collator import GraphCollator
 print("src/experiments/backward_compatibility/__main__.py: Imports completed successfully.")

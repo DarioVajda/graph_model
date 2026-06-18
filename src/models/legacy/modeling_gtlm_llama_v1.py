@@ -47,8 +47,8 @@ from .modeling_gtlm_llama_v0 import (
     LlamaDecoderLayerWithBias,
     LlamaModelWithBias,
 )
-from .graph_bias import GraphAttentionBias
-from ..utils.text_graph_dataset import TextGraph
+from ..graph_bias import GraphAttentionBias
+from ...utils.text_graph_dataset import TextGraph
 
 
 # ── Config ────────────────────────────────────────────────────────────────────

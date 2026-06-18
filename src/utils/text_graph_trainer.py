@@ -245,7 +245,7 @@ if __name__ == "__main__":
     collator = GraphCollator(tokenizer=tokenizer)
 
     # load the model
-    from ..models.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM
+    from ..models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM
     model = GraphLlamaForCausalLM.from_pretrained(model_name)
 
     # ---------------------------------------------------------------

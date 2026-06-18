@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
 import torch
 
-from src.models.modeling_gtlm_llama_v0 import GraphAttnBiasConfig
-from src.models.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, KHopLlamaConfig
+from src.models.legacy.modeling_gtlm_llama_v0 import GraphAttnBiasConfig
+from src.models.legacy.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, KHopLlamaConfig
 from src.models.modeling_gtlm_llama_v2 import GTLMLlamaConfig, GTLMLlamaForCausalLM
 from src.utils.text_graph_collator import GraphCollator
 from src.utils.text_graph_collator_v2 import GraphCollatorV2, _single_k_hop_mask
