@@ -45,7 +45,7 @@ from transformers.cache_utils import DynamicCache
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 from ...utils.text_graph_dataset import TextGraphDataset, TextGraph, generate_text_graph_example, prepare_example_labels
-from ..model_utils import save_bias_parameters, load_bias_parameters
+from ..io import save_bias_parameters, load_bias_parameters
 from peft import PeftModel
 
 from transformers.models.llama.modeling_llama import (

@@ -125,7 +125,7 @@ def _build_eager(ai, scaling, bias_mode="full"):
     across compiled-flex calls inflates timings ~10×; fresh leaves per step is
     the correct methodology).
     """
-    from src.models.graph_attention_v2 import (
+    from src.models.structural_mask import (
         build_dense_structural_mask, expand_node_to_token_bias,
     )
     L = ai["q_len"]

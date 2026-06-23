@@ -19,7 +19,7 @@ import torch
 
 from src.utils.text_graph_collator_v2 import GraphCollatorV2
 from src.models.flex_kernel import default_len_buckets, default_node_buckets, bucketize
-from src.models.modeling_gtlm_llama_v2 import GTLMLlamaConfig, GTLMLlamaForCausalLM
+from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 
 _BASE = dict(
     hidden_size=64, num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,

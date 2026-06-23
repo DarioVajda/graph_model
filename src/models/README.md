@@ -1,21 +1,31 @@
-# GTLM-Llama (v2) — user manual
+# GTLM-Llama — user manual
 
 A graph-biased Llama causal LM. Each attention layer combines a **trainable
 soft graph bias** (SPD / Laplacian / RWSE / RRWP / Magnetic) with a **structural
 mask** (causal + bidirectional-prefix + K-hop + padding), so the model can read
 text attached to graph nodes while respecting graph structure.
 
-Currently only the **Llama-3** family is adapted. The clean, HuggingFace-native
-implementation is `modeling_gtlm_llama_v2.py` (`GTLMLlamaForCausalLM` /
-`GTLMLlamaConfig`); `v0`/`v1` are legacy.
+The implementation is **backbone-agnostic**: all graph logic lives in shared,
+backbone-neutral modules, and each base LLM is a thin `modeling_gtlm_<backbone>.py`
+adapter (flat in this package). Currently only the **Llama-3** family is adapted
+(`modeling_gtlm_llama.py` — `GTLMLlamaForCausalLM` / `GTLMLlamaConfig`); `v0`/`v1`
+are legacy. Import the public classes from the package: `from src.models import
+GTLMLlamaForCausalLM, GTLMLlamaConfig` (see REFACTOR.md §3c to add a backbone).
 
-The three moving parts:
+Checkpoints are **HuggingFace Hub-compatible**: `save_pretrained` bundles the model
+code into the checkpoint, so others can load a published checkpoint with
+`AutoModelForCausalLM.from_pretrained(repo, trust_remote_code=True)` without
+installing this package.
+
+The moving parts:
 
 | Component | File | Role |
 |---|---|---|
-| Model | `modeling_gtlm_llama_v2.py` | `GTLMLlamaForCausalLM` — standard HF I/O + graph feature columns |
-| Attention plumbing | `graph_attention_v2.py` | structural mask, node→token bias, backend dispatch (`eager`/`sdpa`/`flex`) |
-| Bias modules | `graph_bias.py` | the per-layer `GraphAttentionBias` (SPD/Laplacian/RWSE/RRWP/Magnetic) |
+| Backbone adapter | `modeling_gtlm_llama.py` | wires Llama base classes to the graph mixins (`GTLMLlamaForCausalLM` / `GTLMLlamaConfig`); HF auto-class registration + bundling manifest |
+| Orchestration mixins | `causal_lm.py` / `config.py` / `attention.py` | backbone-neutral forward / generate / loader, config fields, per-layer bias owner |
+| Attention functions | `dispatch.py` | the registered `gtlm_eager`/`gtlm_sdpa`/`gtlm_flex` functions + backend dispatch |
+| Structural mask | `structural_mask.py` | shared causal + bidirectional-prefix + K-hop + padding mask, node→token bias |
+| Bias modules | `bias.py` | the per-layer `GraphAttentionBias` (SPD/Laplacian/RWSE/RRWP/Magnetic) |
 | Flex kernel | `flex_kernel.py` | the FlexAttention BlockMask builder, score-mod gather, compiled forward |
 | Dataset | `../utils/text_graph_dataset.py` | `TextGraphDataset` — stores topology + precomputed features |
 | Collator | `../utils/text_graph_collator_v2.py` | `GraphCollatorV2` — packs a batch into the model's columns |
@@ -48,7 +58,7 @@ features are produced in the reordered layout.
 ```python
 from transformers import AutoConfig, Trainer, TrainingArguments
 from src.utils.text_graph_collator_v2 import GraphCollatorV2
-from src.models.modeling_gtlm_llama_v2 import GTLMLlamaConfig, GTLMLlamaForCausalLM
+from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 
 cfg = GTLMLlamaConfig(
     **AutoConfig.from_pretrained("meta-llama/Llama-3.2-1B").to_dict(),
@@ -81,6 +91,14 @@ out = model.generate(**batch, max_new_tokens=64)
 Generation runs the dense backend automatically for the incremental decode steps
 (see *FlexAttention → Decoding*), so `"flex"` and `"sdpa"`/`"eager"` all generate
 correctly.
+
+A checkpoint published to the HuggingFace Hub loads with no local install —
+`save_pretrained` bundled the model code into it:
+
+```python
+from transformers import AutoModelForCausalLM
+model = AutoModelForCausalLM.from_pretrained("org/my-gtlm", trust_remote_code=True)
+```
 
 ---
 
@@ -116,7 +134,7 @@ through `save_pretrained`/`from_pretrained` with no custom code.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `flex_compile_mode` | `"max-autotune-no-cudagraphs"` | `torch.compile` mode. Autotune is fastest at runtime but pays a one-time ~320s compile per shape; use `"default"` (~16s) for quick iteration. |
+| `flex_compile_mode` | `"max-autotune-no-cudagraphs"` | `torch.compile` mode. Autotune is fastest at runtime but pays a one-time \~320s compile per shape; use `"default"` (\~16s) for quick iteration. |
 | `flex_block_size` | `None` | BlockMask block size. `None` uses the K-hop gate (64 when `k_hop>0`, else 128); set an int to override. |
 | `flex_cache_size_limit` | `32` | raises `torch._dynamo`'s recompile cap on the flex path (see *Recompiles* below). |
 
@@ -131,10 +149,10 @@ Select with `graph_attn_impl`:
   Most memory-hungry; fine for small inputs and tests.
 - **`sdpa`** — same dense math through PyTorch SDPA. The recommended dense
   backend for generation/eval.
-- **`flex`** — `torch.compile`d FlexAttention. The bias stays at node level
+- **`flex`** — `torch.compile` FlexAttention. The bias stays at node level
   `(B,H,N,N)` and is gathered inside the kernel; the structural mask becomes a
   sparse `BlockMask` so fully-masked blocks are skipped. **Much faster and far
-  lower memory when `k_hop>0`**, where graphs are sparse; needs CUDA and a
+  lower memory** (especially with `k_hop>0` where graphs are sparse); needs CUDA and a
   block-aligned batch (see below). Falls back to dense for incremental decode.
 
 GTLM-Llama is **incompatible with FlashAttention-2** (it can't express the graph
@@ -205,7 +223,7 @@ Flex is opt-in (`graph_attn_impl="flex"`) and aimed at sparse, K-hop training.
 
 1. **CUDA + `torch.compile`.** Flex does not run on CPU.
 2. **Block-aligned, bucketed batches:** construct the collator with
-   `pad_to_block=True`. This is mandatory — the kernel hits a ~14× slowdown at
+   `pad_to_block=True`. This is mandatory — the kernel hits a >10× slowdown at
    non-aligned lengths, and the model raises a clear error if a flex batch isn't
    aligned.
 3. **RCM ordering** (`rcm_ordering=True` on the dataset) — recommended; this is
@@ -276,11 +294,18 @@ compile mode, int32 node ids, checkpointing, roofline), see
 ```
 
 - `tests/test_modeling_gtlm_llama_v2.py` — v2-vs-v1 parity, sdpa==eager, K-hop.
+- `tests/test_gtlm_attn_functions.py` — the Strategy-B `gtlm_eager`/`gtlm_sdpa`
+  functions in isolation: registered in `ALL_ATTENTION_FUNCTIONS` and bit-identical
+  to the reference dispatch when driven through `module._graph_ctx`.
+- `tests/test_graph_bias.py` — `GraphAttentionBias`, the K-hop collator mask, and
+  `expand_node_to_token_bias`.
 - `tests/test_collator_bucketing.py` — L/N bucketing + fp64 loss-neutrality.
 - `tests/test_dataset_ordering.py` — RCM relabel/consistency + ordering label.
 - `tests/test_flex_cpu.py` — flex unit logic + eager permutation invariance (CPU).
 - `tests/test_flex_attention.py` — flex-vs-eager parity, checkpointing, decode
   fallback, permutation invariance (**requires a GPU**; auto-skips otherwise).
+- `tests/test_model_compatibility.py` — legacy weight-transfer parity against the
+  pre-plugin `v0`/`v1` graph models.
 
 ---
 

@@ -1,0 +1,30 @@
+"""
+GTLM — graph-biased causal LMs, backbone-agnostic.
+
+This package's public surface is the Llama adapter's classes. Importing the
+package wires everything together as an import side-effect:
+
+  * the ``gtlm_eager`` / ``gtlm_sdpa`` / ``gtlm_flex`` attention functions are
+    registered into HF's ``ALL_ATTENTION_FUNCTIONS`` (via :mod:`dispatch`), and
+  * ``GTLMLlamaConfig`` / ``GTLMLlamaForCausalLM`` are registered with
+    ``AutoConfig`` / ``AutoModelForCausalLM`` (via the backbone adapter).
+
+Adding a new backbone is a thin ``modeling_gtlm_<backbone>.py`` adapter in this
+package (see REFACTOR.md §3c); re-export its classes here.
+"""
+
+from .modeling_gtlm_llama import (
+    GTLMLlamaConfig,
+    GTLMLlamaAttention,
+    GTLMLlamaDecoderLayer,
+    GTLMLlamaModel,
+    GTLMLlamaForCausalLM,
+)
+
+__all__ = [
+    "GTLMLlamaConfig",
+    "GTLMLlamaAttention",
+    "GTLMLlamaDecoderLayer",
+    "GTLMLlamaModel",
+    "GTLMLlamaForCausalLM",
+]

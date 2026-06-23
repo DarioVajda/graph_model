@@ -18,8 +18,8 @@ import networkx as nx
 import pytest
 import torch
 
-from src.models.graph_attention_v2 import graph_attention_dispatch, flex_block_size
-from src.models.modeling_gtlm_llama_v2 import GTLMLlamaConfig, GTLMLlamaForCausalLM
+from src.models.dispatch import graph_attention_dispatch, flex_block_size
+from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 from src.utils.text_graph_collator_v2 import GraphCollatorV2
 from src.utils.text_graph_dataset import TextGraphDataset
 
@@ -37,7 +37,10 @@ def test_flex_block_size_gate():
 
 
 def test_dispatch_rejects_flex():
-    with pytest.raises(RuntimeError, match="flex"):
+    # graph_attention_dispatch handles only the dense (eager/sdpa) backends; the
+    # flex path is owned by gtlm_flex / flex_attention_forward. Passing "flex"
+    # here is a programming error and is rejected.
+    with pytest.raises(ValueError, match="flex"):
         graph_attention_dispatch("flex", None, None, None, None, None, None,
                                  scaling=1.0, dropout=0.0)
 

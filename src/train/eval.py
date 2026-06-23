@@ -7,7 +7,7 @@ from transformers import TrainingArguments
 
 from ..utils import GraphTrainer, GraphCollator
 from ..models.legacy.modeling_gtlm_llama_v1 import KHopLlamaConfig, KHopGraphLlamaForCausalLM
-from ..models.model_utils import load_bias_parameters
+from ..models.io import load_bias_parameters
 
 
 def make_compute_metrics(include_f1=False):

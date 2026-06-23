@@ -47,7 +47,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from src.utils.text_graph_collator_v2 import GraphCollatorV2, _single_k_hop_mask  # noqa: E402
-from src.models.graph_bias import GraphAttentionBias  # noqa: E402
+from src.models.bias import GraphAttentionBias  # noqa: E402
 
 
 # ── Configuration ────────────────────────────────────────────────────────────

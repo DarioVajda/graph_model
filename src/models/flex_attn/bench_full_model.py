@@ -121,7 +121,7 @@ def _install_flex(model, batch, k_hop: int):
     """Patch the model for the flex path and build the shared per-batch BlockMask.
 
     ``batch`` must already be block-aligned (see :func:`_pad_batch_for_flex`)."""
-    import src.models.modeling_gtlm_llama_v2 as mod
+    import src.models.causal_lm as mod
 
     # 1) Neutralize the dense (B,1,L,L) structural-mask build (we use a BlockMask).
     mod.build_dense_structural_mask = lambda **kw: None
@@ -149,7 +149,7 @@ def _install_flex(model, batch, k_hop: int):
 # ── model builders ────────────────────────────────────────────────────────────
 
 def _build_gtlm(spec: GraphSpec, dtype, checkpoint_bias: bool = True):
-    from src.models.modeling_gtlm_llama_v2 import GTLMLlamaConfig, GTLMLlamaForCausalLM
+    from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
     from transformers import AutoConfig
 
     base = AutoConfig.from_pretrained(BASE_MODEL)

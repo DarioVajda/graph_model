@@ -32,7 +32,7 @@ try:
 except Exception:  # pragma: no cover
     PeftModel = None
 
-from ..models.model_utils import save_bias_parameters
+from ..models.io import save_bias_parameters
 
 
 class GraphTrainerV2(Trainer):

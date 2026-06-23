@@ -53,7 +53,7 @@ def dense_reference(
     sdpa/eager backend uses, then does a plain softmax attention. Reuses the
     real model functions so the reference can't silently diverge.
     """
-    from src.models.graph_attention_v2 import (
+    from src.models.structural_mask import (
         build_dense_structural_mask,
         expand_node_to_token_bias,
     )

@@ -3,7 +3,7 @@ import torch
 from transformers import Trainer
 from peft import PeftModel
 
-from ..models.model_utils import save_bias_parameters
+from ..models.io import save_bias_parameters
 
 class GraphTrainer(Trainer):
     def __init__(self, *args, custom_prediction_step=None, active_params=None, bias_lr=None, **kwargs):

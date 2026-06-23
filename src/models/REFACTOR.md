@@ -1,8 +1,34 @@
 # GTLM refactor plan — making the model backbone-agnostic
 
-Status: **proposal / under discussion.** No code beyond the `legacy/` move has been
-written yet. This document is the agreed-design artifact; open decisions are
-collected at the end and must be resolved before implementation.
+Status: **implemented (Llama, Strategy B).** Steps 1–4 of §5 are done: the flat
+package layout, the split into `structural_mask.py` + `dispatch.py` with the
+registered `gtlm_*` functions, the extracted mixins + typed `GraphContext`, and
+the thin `modeling_gtlm_llama.py` adapter. The full v1↔v2 parity suite is green
+against the Strategy-B model. This document remains the design record; the
+§3c contract describes how to add the next backbone.
+
+Note: `register_for_auto_class` (Hub `trust_remote_code` source-bundling) **is
+enabled** — `save_pretrained` bundles the adapter and its flat module closure
+into the checkpoint and sets `auto_map`, so
+`AutoModelForCausalLM.from_pretrained(repo, trust_remote_code=True)` works for
+Hub-shared checkpoints without the package installed. Two constraints from HF's
+bundler shape the layout (verified end-to-end against transformers 4.50.3):
+
+- **The closure must be flat with single-dot imports.** HF's source-bundler
+  regex only follows `from .<mod> import …` (single-dot, same directory). It
+  cannot resolve `..` parent-package imports or subpackages, and it does **not**
+  match the `from . import <mod>` form (the dot must be glued to the module
+  name). So every GTLM module lives flat in `src/models/` and `dispatch.py`
+  imports flex_kernel as `from .flex_kernel import …`, not `from . import
+  flex_kernel`.
+- **Local-checkpoint loads copy only the entry file's *direct* imports.** When a
+  checkpoint is loaded from a local directory, `get_cached_module_file` does not
+  recurse into transitive imports (Hub *downloads* do). So
+  `modeling_gtlm_llama.py` carries an explicit "bundling manifest" — one
+  `from .<mod> import name` per flat module not already pulled in directly —
+  pinning the whole closure for local loads too. The in-process
+  `AutoConfig`/`AutoModelForCausalLM.register` calls remain for the
+  package-installed path.
 
 Goal: adapting GTLM to a new base LLM (Qwen2, Mistral, Gemma2, …) should be a
 ~40–80 line adapter file, not a 1,100-line fork. Everything that is *not*
@@ -149,34 +175,55 @@ parameters still live on a real submodule, so they keep first-class autograd /
   2. *Bias-only / LoRA* (frozen-backbone training; don't write the multi-GB base)
      — select the bias params by **module type** (`isinstance(m, GraphAttentionBias)`),
      not by name substring as today's `model_utils.py` does. Type-based selection
-     can't silently miss/over-match and survives renames. Becomes `gtlm/io.py`;
+     can't silently miss/over-match and survives renames. Becomes `io.py`;
      load with `load_state_dict(strict=False)`.
 
 ### 3b. Package layout (proposed)
 
+GTLM is the only model in this repo, so `src/models/` *is* the GTLM package. The
+shared library modules and the per-backbone adapters all sit **flat** in
+`src/models/` — no `backbones/` subpackage. This flatness is not just taste: HF's
+`trust_remote_code` source-bundler can only follow single-dot, same-directory
+imports (see the status note up top), so a subpackage would break Hub loading.
+Each backbone adapter is a `modeling_gtlm_<backbone>.py` file; the
+`modeling_gtlm_` prefix makes adapters cluster in folder listings and signals "HF
+entry file with the core class" the way `modeling_*.py` does on the Hub. The
+library modules coexist with the (visually distinct) support dirs `legacy/`,
+`configs/`, and the `flex_attn/` benchmark suite.
+
 ```
-src/models/gtlm/
-  __init__.py            # re-export GTLMLlamaConfig / GTLMLlamaForCausalLM (+ registry)
-  bias.py                # ← graph_bias.py (verbatim)
-  flex_kernel.py         # ← flex_kernel.py (verbatim)
-  structural_mask.py     # ← build_dense_structural_mask + expand_node_to_token_bias
-  dispatch.py            # backend dispatch + the gtlm_eager/sdpa/flex attn functions
-  context.py             # the per-batch GraphContext (typed) + install/reset helpers
-  config.py              # GraphConfigMixin (the flat graph fields + validation)
-  causal_lm.py           # GraphCausalLMMixin (forward/generate/prepare/from_pretrained)
-  attention.py           # GraphAttentionMixin (owns graph_bias; Strategy-A helper too)
-  io.py                  # ← model_utils.py (bias param save/load)
-  backbones/
-    llama.py             # GTLMLlama{Config,Attention,DecoderLayer,Model,ForCausalLM}
-    # qwen2.py, mistral.py, … added later, each ~40–80 lines
-  README.md              # ← current README.md (user manual), paths updated
-  legacy/                # v0, v1 (already moved)
+src/models/
+  __init__.py                # re-export GTLMLlama* (re-exports the adapter; registration is a side-effect of the adapter import)
+  modeling_gtlm_llama.py     # GTLMLlama{Config,Attention,DecoderLayer,Model,ForCausalLM} + registration + bundling manifest
+  # modeling_gtlm_qwen2.py, modeling_gtlm_mistral.py, … added later, each ~40–80 lines
+  bias.py                    # ← graph_bias.py (verbatim)
+  flex_kernel.py             # ← flex_kernel.py (verbatim, stays in place)
+  structural_mask.py         # ← build_dense_structural_mask + expand_node_to_token_bias
+  dispatch.py                # backend dispatch + the gtlm_eager/sdpa/flex attn functions
+  context.py                 # the per-batch GraphContext (typed) + install/reset helpers
+  config.py                  # GraphConfigMixin (the flat graph fields + validation)
+  causal_lm.py               # GraphCausalLMMixin (forward/generate/prepare/from_pretrained)
+  attention.py               # GraphAttentionMixin (owns graph_bias; Strategy-A helper too)
+  io.py                      # ← model_utils.py (bias param save/load)
+  README.md                  # current README.md (user manual), paths updated
+  REFACTOR.md                # this document
+  legacy/                    # v0, v1 (already moved)
   configs/
   flex_attn/
 ```
 
-`graph_attention_v2.py` splits into `structural_mask.py` + `dispatch.py` because
-it currently mixes the two concerns; the flex seams fold into `dispatch.py`.
+Most moves stay *in place* in `src/models/` (rename only): `graph_bias.py → bias.py`,
+`model_utils.py → io.py`, `flex_kernel.py` unchanged. `graph_attention_v2.py` splits
+into `structural_mask.py` + `dispatch.py` because it currently mixes the two
+concerns; the flex seams fold into `dispatch.py`. The adapter
+`modeling_gtlm_llama_v2.py` becomes `modeling_gtlm_llama.py`. No new dirs.
+
+Registration side-effects fire on import: `dispatch.py` registers the `gtlm_*`
+functions into `ALL_ATTENTION_FUNCTIONS`, and `modeling_gtlm_llama.py` does the
+`AutoConfig`/`AutoModel` + `register_for_auto_class` registration. `__init__.py`
+re-exports the adapter, so importing anything under `src.models` triggers all of
+it. Trade-off accepted (rather than scoping to a `gtlm` import). Fine for a
+single-model repo.
 
 ### 3c. The backbone adapter contract
 
@@ -199,35 +246,39 @@ A backbone adapter must supply (most are one-liners or class attributes):
    (#5).
 
 Registration (`AutoConfig.register` + `AutoModelForCausalLM.register` +
-`register_for_auto_class`) is done once by a small helper, given the adapter's
-classes.
+`register_for_auto_class`) lives at the bottom of each `modeling_gtlm_<backbone>.py`,
+next to a **bundling manifest** — explicit `from .<mod> import name` lines pinning
+every flat module so local `trust_remote_code` checkpoint loads copy the whole
+closure (see status note up top).
 
 ---
 
 ## 4. Naming scheme (dropping `_v2`)
 
-- **Files/modules**: `modeling_gtlm_llama_v2.py` → `gtlm/backbones/llama.py`;
-  `graph_bias.py` → `gtlm/bias.py`; `graph_attention_v2.py` →
-  `gtlm/structural_mask.py` + `gtlm/dispatch.py`; `flex_kernel.py` →
-  `gtlm/flex_kernel.py`; `model_utils.py` → `gtlm/io.py`.
+- **Files/modules**: `modeling_gtlm_llama_v2.py` → `modeling_gtlm_llama.py`;
+  `graph_bias.py` → `bias.py`; `graph_attention_v2.py` →
+  `structural_mask.py` + `dispatch.py`; `flex_kernel.py` unchanged;
+  `model_utils.py` → `io.py`. All flat in `src/models/`. New backbones add a
+  `modeling_gtlm_<backbone>.py` next to the Llama one.
 - **Public class names**: unchanged — `GTLMLlamaConfig`, `GTLMLlamaForCausalLM`,
   `GTLMLlamaAttention`, etc. New backbones follow `GTLM<Backbone>...`.
 - **`model_type`**: keep `"gtlm_llama"` (sensible name; no longer a back-compat
   constraint — see D2). New backbones get `"gtlm_qwen2"`, etc.
-- **Convenience top-level re-exports** in `gtlm/__init__.py` so users write
-  `from src.models.gtlm import GTLMLlamaForCausalLM`.
+- **Convenience re-exports** in `src/models/__init__.py` so users write
+  `from src.models import GTLMLlamaForCausalLM`.
 
 ---
 
 ## 5. Migration steps
 
-1. Create `gtlm/` package; move `graph_bias`/`flex_kernel`/`model_utils` in
-   (git mv) → `bias.py` / `flex_kernel.py` / `io.py`, with import-path fixes only.
+1. Rename in place (git mv) within `src/models/`: `graph_bias.py → bias.py`,
+   `model_utils.py → io.py`; `flex_kernel.py` stays. Add `src/models/__init__.py`
+   as the package entry point. Import-path fixes only.
 2. Split `graph_attention_v2.py` → `structural_mask.py` + `dispatch.py`; add the
    `gtlm_eager/sdpa/flex` attention functions and register them (Strategy B).
 3. Extract `GraphConfigMixin`, `GraphCausalLMMixin`, `GraphAttentionMixin`,
    `GraphContext` from `modeling_gtlm_llama_v2.py`.
-4. Write `backbones/llama.py` as the thin adapter; confirm it reproduces v2.
+4. Write `modeling_gtlm_llama.py` as the thin adapter; confirm it reproduces v2.
 5. **Clean break (D4):** update every consumer (~6 src files + tests + user-manual
    README) to the new import paths. No compat shim left behind.
 6. Run the existing v2 test-suite (parity vs v1, sdpa==eager, k-hop, flex,
@@ -246,7 +297,7 @@ reference in `legacy/`).
 - Dead code: the `require_*` properties in `graph_bias.py` are unused by v2
   (only v1 used them); drop. **In scope.**
 - Replace `model_utils.py` substring save/load with type-based selection in
-  `gtlm/io.py` (see §3a-bis). **In scope.**
+  `io.py` (see §3a-bis). **In scope.**
 - `graph_attention_dispatch`'s `impl="flex"` branch only raises; it disappears
   with the dispatch split. **In scope.**
 

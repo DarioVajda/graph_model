@@ -28,7 +28,7 @@ import torch
 
 from src.utils.text_graph_collator_v2 import GraphCollatorV2
 from src.utils.text_graph_dataset import TextGraphDataset
-from src.models.modeling_gtlm_llama_v2 import GTLMLlamaConfig, GTLMLlamaForCausalLM
+from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(),
                                 reason="FlexAttention needs CUDA")
@@ -115,7 +115,8 @@ def test_flex_matches_eager_forward(bias_name, k_hop):
         of = flex(**batch)
     # guard against a silent fallback making this a trivial eager-vs-eager check
     ctx = flex.model.layers[0].self_attn._graph_ctx
-    assert ctx["impl"] == "flex" and ctx["block_mask"] is not None, "flex path did not run"
+    assert flex.config._attn_implementation == "gtlm_flex" and ctx.block_mask is not None, \
+        "flex path did not run"
 
     mask = batch["attention_mask"].bool()
     diff = (oe.logits[mask] - of.logits[mask]).abs().max().item()
@@ -277,4 +278,4 @@ def test_flex_generation_dense_fallback():
     assert (out >= 0).all() and (out < _BASE["vocab_size"]).all()
     # the last forward was an incremental decode step (q_len<kv_len) -> it must
     # have taken the dense fallback, not flex
-    assert flex.model.layers[0].self_attn._graph_ctx["impl"] == "sdpa"
+    assert flex.config._attn_implementation == "gtlm_sdpa"
