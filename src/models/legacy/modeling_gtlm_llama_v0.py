@@ -324,7 +324,17 @@ class LlamaAttentionWithBias(LlamaAttention):
 
         dtype = query_states.dtype
         device = query_states.device
-        
+
+        # Align float graph features with the (possibly bf16) weights so the bias
+        # matmuls/einsums below don't hit a dtype mismatch; SPD stays integer.
+        def _cast(t):
+            return t.to(dtype) if (t is not None and torch.is_floating_point(t)) else t
+        magnetic_V = _cast(magnetic_V)
+        magnetic_lambdas = _cast(magnetic_lambdas)
+        laplacian_coordinates = _cast(laplacian_coordinates)
+        rwse_emb = _cast(rwse_emb)
+        rrwp_emb = _cast(rrwp_emb)
+
         cache_key = f'cached_node_bias_{self.layer_idx}'
         
         # Bypass O(N^2) node calculations during generation if already cached

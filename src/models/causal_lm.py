@@ -54,6 +54,13 @@ _SDPA_WARNING = (
 )
 
 
+def _to_dtype(t, dtype):
+    """Cast a float feature tensor to ``dtype`` (no-op for None / non-float)."""
+    if t is not None and torch.is_floating_point(t):
+        return t.to(dtype)
+    return t
+
+
 def _normalize_graph_attn_impl(impl):
     """Map the accepted ``'sdpa'`` alias to ``'eager'`` (warning once). ``'sdpa'``
     is not a real GTLM backend — see :data:`_SDPA_WARNING`. Returns ``impl``
@@ -147,6 +154,15 @@ class GraphCausalLMMixin:
 
         embed_dtype = self._embed_dtype()
         device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+        # Align float graph features with the (possibly bf16) model weights so the
+        # bias-module matmuls/einsums don't hit a dtype mismatch. Integer features
+        # (SPD indices, k_hop mask) are left as-is — they're used as indices/masks.
+        laplacian_coordinates = _to_dtype(laplacian_coordinates, embed_dtype)
+        rwse = _to_dtype(rwse, embed_dtype)
+        rrwp = _to_dtype(rrwp, embed_dtype)
+        magnetic_V = _to_dtype(magnetic_V, embed_dtype)
+        magnetic_lambdas = _to_dtype(magnetic_lambdas, embed_dtype)
 
         q_len = input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
         past_seen = past_key_values.get_seq_length() if past_key_values is not None else 0

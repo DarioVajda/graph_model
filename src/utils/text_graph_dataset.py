@@ -583,6 +583,23 @@ class TextGraphDataset(Dataset):
             desc=f"GPU Magnetic Spectral Decomposition (q={q})"
         )
 
+    def cast_float_features_to_fp32(self):
+        """Downcast stored float64 feature columns to float32, halving their
+        on-disk size. The model loads all of these as fp32 anyway (and the
+        eigenvectors/coordinates never need double precision), so this is lossless
+        with respect to what training sees. No-op for absent columns."""
+        from datasets import Sequence, Value
+        f32 = Value("float32")
+        specs = {
+            "magnetic_V": Sequence(f32),                 # flat (n*m*2,)
+            "magnetic_lambdas": Sequence(f32),           # (m,)
+            "laplacian_coordinates": Sequence(Sequence(f32)),  # (n, dim)
+            "rwse": Sequence(Sequence(f32)),             # (n, steps)
+        }
+        for col, feat in specs.items():
+            if col in self._hf_dataset.column_names:
+                self._hf_dataset = self._hf_dataset.cast_column(col, feat)
+
     def compute_labels(self, get_graph_labels, num_proc=None):
         """
         Parallelized label computation using multi-processing.

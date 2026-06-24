@@ -193,7 +193,9 @@ def get_prompt_node_labels(example):
     return labels
 
 
-def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16, easy=True, magnetic_q=0.25):
+def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16, easy=True, magnetic_q=0.25, ordering="rcm", magnetic_m=0):
+    if ordering not in ("rcm", "original"):
+        raise ValueError(f"ordering must be 'rcm' or 'original', got {ordering!r}.")
     dataset = generate_graph_dataset(num_examples, min_size=min_size, max_size=max_size, easy=easy)
 
     # FOR EACH EXAMPLE:
@@ -222,12 +224,29 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
         G.graph['prompt_node'] = prompt_node_id
         graphs.append(G)
 
-    ds = TextGraphDataset(graphs)
+    # RCM relabels nodes (before features are computed) so each node's K-hop
+    # neighbourhood lands in contiguous token blocks — the packing order the flex
+    # block-sparse kernel needs. `_pack_one` packs in node-index order, so an
+    # RCM-relabeled dataset is automatically packed in RCM order (no collator
+    # change). `ordering='original'` keeps construction order (the unordered
+    # baseline). Either way the choice is recorded in the dataset's metadata.
+    ds = TextGraphDataset(graphs, rcm_ordering=(ordering == "rcm"))
     ds.compute_laplacian_coordinates(embedding_dim=spectral_dims)
     ds.compute_shortest_path_distances()
     ds.compute_rwse(max_rwse_steps=max_rwse_steps)
-    ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)
-    ds.compute_magnetic_lap(q=magnetic_q)
+    # rrwp is the dominant O(N^2 * steps) on-disk feature; skip it entirely when
+    # max_rrwp_steps is falsy (rrwp excluded from the experiment).
+    if max_rrwp_steps:
+        ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)
+    # magnetic_m=0 keeps all N eigenpairs (M=N): the bias einsums are then O(N^3)
+    # per layer and dominate the step at large N. A positive m truncates to the m
+    # lowest eigenpairs -> O(N^2 * m); a speed lever at scale, but it drops spectral
+    # information so its accuracy effect needs a separate ablation.
+    ds.compute_magnetic_lap(q=magnetic_q, m=magnetic_m)
+    # Store the float features as fp32 (not the fp64 that Python-list -> Arrow
+    # yields); the model loads them as fp32, so this halves their on-disk size
+    # losslessly. magnetic_V is the dominant feature once rrwp is excluded.
+    ds.cast_float_features_to_fp32()
 
     if tokenizer_name is None:
         raise ValueError("Tokenizer must be provided to prepare_dataset function.")
@@ -247,30 +266,34 @@ def round_size_str(size):
     else:
         return str(size), size, 1
 
-def dataset_path_and_size(dataset_size, easy=True, min_nodes=None, max_nodes=None):
-    # Encode the node range in the filename: difficulty + example count alone do
-    # not pin a dataset (two runs can share both yet differ in graph size / the
-    # label scheme), so a bare name silently reuses a stale artifact. The node tag
-    # keeps fresh artifacts distinct and self-describing; omitting the range keeps
-    # the legacy name for back-compat.
+def dataset_path_and_size(dataset_size, easy=True, min_nodes=None, max_nodes=None, ordering="rcm"):
+    # Encode the node range + node ordering in the filename: difficulty + example
+    # count alone do not pin a dataset (two runs can share both yet differ in graph
+    # size / label scheme / packing order), so a bare name silently reuses a stale
+    # artifact. The node tag keeps fresh artifacts distinct and self-describing; the
+    # ordering tag keeps RCM and original-order artifacts from colliding. The
+    # 'original' ordering stays untagged so existing baseline artifacts keep their
+    # legacy names.
     size_str, rounded_size, scale = round_size_str(dataset_size)
     node_tag = f"_n{min_nodes}-{max_nodes}" if (min_nodes is not None and max_nodes is not None) else ""
-    dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}{node_tag}_dataset.gtds"
+    ordering_tag = "" if ordering == "original" else f"_{ordering}"
+    dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}{node_tag}{ordering_tag}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
-def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, max_rwse_steps=16, easy=True, magnetic_q=0.25):
-    dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy, min_nodes=min_nodes, max_nodes=max_nodes)
+def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, max_rwse_steps=16, easy=True, magnetic_q=0.25, ordering="rcm"):
+    dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy, min_nodes=min_nodes, max_nodes=max_nodes, ordering=ordering)
 
     dataset = prepare_dataset(
-        final_dataset_size, 
-        min_size=min_nodes, 
-        max_size=max_nodes, 
-        spectral_dims=spectral_dims, 
-        tokenizer_name=model_name, 
-        max_rrwp_steps=max_rrwp_steps, 
+        final_dataset_size,
+        min_size=min_nodes,
+        max_size=max_nodes,
+        spectral_dims=spectral_dims,
+        tokenizer_name=model_name,
+        max_rrwp_steps=max_rrwp_steps,
         max_rwse_steps=max_rwse_steps,
         magnetic_q=magnetic_q,
-        easy=easy
+        easy=easy,
+        ordering=ordering,
     )
 
     # Save the dataset to disk
