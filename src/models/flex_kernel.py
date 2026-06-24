@@ -50,15 +50,26 @@ _FLEX_CACHE: dict = {}
 DEFAULT_COMPILE_MODE: Optional[str] = "max-autotune-no-cudagraphs"
 
 
-def flex_block_size(k_hop: int) -> int:
+def flex_block_size(k_hop: int, compile_mode: Optional[str] = DEFAULT_COMPILE_MODE) -> int:
     """The recommended BlockMask block size for a K-hop setting (#6).
 
     64 when ``k_hop > 0`` (smaller blocks fit scattered K-hop neighbourhoods
     more tightly, raising block sparsity — 1.3-1.6x on fwd *and* bwd), 128 when
     ``k_hop == 0`` (dense mask, nothing to skip; 64-wide tiles are ~20% slower
     on dense work).
+
+    Compile-mode gate: a non-autotune inductor compile only emits 128-wide tiles
+    (``BLOCK_M=128``) and the mask block size must be a multiple of that tile, so
+    a 64-wide block fails to lower (``Q and KV block size must be divisible by
+    BLOCK_M``). Only the ``max-autotune`` modes carry 64-tile configs. So when the
+    compile mode is not autotune we round the recommendation up to 128 — the
+    block size only affects sparsity, not correctness, so this stays valid (just
+    less tightly blocked) instead of erroring at the first forward.
     """
-    return 64 if k_hop > 0 else 128
+    bs = 64 if k_hop > 0 else 128
+    if bs < 128 and not (compile_mode or "").startswith("max-autotune"):
+        bs = 128
+    return bs
 
 
 def get_flex_attention(dynamic: bool = False,

@@ -113,10 +113,11 @@ def graph_attention_dispatch(
 # (``build_flex_block_mask``) and per layer (``make_soft_score_mod`` +
 # ``flex_attention_forward``).
 
-def flex_block_size(k_hop: int) -> int:
+def flex_block_size(k_hop: int, compile_mode=DEFAULT_COMPILE_MODE) -> int:
     """Recommended BlockMask block size for a K-hop setting: 64 when k>0 (#6),
-    else 128. Re-exported from :mod:`flex_kernel`."""
-    return _flex_block_size(k_hop)
+    else 128 — rounded up to 128 for non-autotune compile modes (which can't
+    lower sub-128 blocks). Re-exported from :mod:`flex_kernel`."""
+    return _flex_block_size(k_hop, compile_mode)
 
 
 def build_flex_block_mask(

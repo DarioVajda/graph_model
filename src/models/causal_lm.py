@@ -182,7 +182,8 @@ class GraphCausalLMMixin:
         block_mask = None
         node_ids_flex = None
         if use_flex:
-            block_size = self.config.flex_block_size or flex_block_size(self.config.k_hop)
+            block_size = self.config.flex_block_size or flex_block_size(
+                self.config.k_hop, self.config.flex_compile_mode)
             if kv_len % block_size != 0:
                 raise ValueError(
                     f"flex requires the sequence length to be a multiple of the "

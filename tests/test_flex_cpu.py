@@ -31,9 +31,19 @@ _BASE = dict(
 
 
 def test_flex_block_size_gate():
+    # default compile mode is autotune → the tight 64-wide K-hop blocks are kept
     assert flex_block_size(0) == 128         # dense mask: nothing to skip
     assert flex_block_size(2) == 64          # K-hop sparsity: tighter blocks
     assert flex_block_size(4) == 64
+
+    # Non-autotune inductor can only lower 128-wide tiles, so a sub-128 block
+    # would fail to compile; the recommendation rounds up to 128 (correctness is
+    # unaffected — only sparsity). k_hop=0 is already 128 regardless.
+    for mode in ("default", None):
+        assert flex_block_size(2, mode) == 128
+        assert flex_block_size(0, mode) == 128
+    # autotune modes carry 64-tile configs → the tighter block survives
+    assert flex_block_size(2, "max-autotune-no-cudagraphs") == 64
 
 
 def test_dispatch_rejects_flex():
