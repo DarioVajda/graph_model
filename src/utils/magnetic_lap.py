@@ -59,8 +59,26 @@ def get_magnetic_laplacian_coords(graphs, q=0.25, use_gpu=True, m=0):
     L_N = eye.to(torch.complex64) - (normalized_As.to(torch.complex64) * rotation)
 
     # 5. Batched Eigen-decomposition (The GPU Heavy Lifter)
-    # torch.linalg.eigh is optimized for Hermitian matrices
-    eigvals, eigvecs = torch.linalg.eigh(L_N)
+    # torch.linalg.eigh is optimized for Hermitian matrices.
+    #
+    # The single-precision (complex64) GPU driver has two rare failure modes on a
+    # magnetic Laplacian, both pure solver-stability artifacts (the matrix is
+    # genuinely Hermitian and correctly built):
+    #   (a) cuSOLVER raises a non-convergence error (LAPACK code 17) on a
+    #       near-degenerate spectrum; and
+    #   (b) it returns NaN eigenvectors — silently, no exception — for the
+    #       decoupled trivial block produced by an isolated (degree-0) node.
+    # In both cases CPU LAPACK in double precision (complex128) is robust, so we
+    # retry that decomposition there. This only runs on the rare failing graph;
+    # the normal path pays nothing.
+    try:
+        eigvals, eigvecs = torch.linalg.eigh(L_N)
+        if not (torch.isfinite(eigvals).all() and torch.isfinite(eigvecs).all()):
+            raise RuntimeError("non-finite eigendecomposition")  # mode (b)
+    except RuntimeError:
+        ev, vec = torch.linalg.eigh(L_N.cpu().to(torch.complex128))
+        eigvals = ev.to(torch.float32).to(device)
+        eigvecs = vec.to(torch.complex64).to(device)
 
     # 6. Optional truncation to the lowest m eigenpairs
     if m > 0:

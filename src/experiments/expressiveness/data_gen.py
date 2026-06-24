@@ -6,13 +6,38 @@ from transformers import AutoTokenizer
 
 from ...utils.text_graph_dataset import TextGraphDataset
 
-LETTERS = [
-    ' ' + letter for letter in
-    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
-]
-
 import networkx as nx
 import itertools
+
+
+def _spreadsheet_label(index):
+    """
+    Map a 0-based index to a unique spreadsheet-style label string:
+    0 -> 'A', 25 -> 'Z', 26 -> 'AA', 27 -> 'AB', ..., 701 -> 'ZZ', 702 -> 'AAA', ...
+
+    This generalises the old 26-letter pool to an unbounded number of unique node
+    labels, so graphs of arbitrary size can be labelled. For index in [0, 25] the
+    result is exactly 'A'..'Z', so small graphs are labelled identically to before.
+    """
+    label = ""
+    index += 1  # shift to 1-based for bijective base-26
+    while index > 0:
+        index, rem = divmod(index - 1, 26)
+        label = chr(ord('A') + rem) + label
+    return label
+
+
+def make_node_labels(num_nodes):
+    """
+    Return ``num_nodes`` distinct node-text labels (each a leading-space token,
+    e.g. ' A', ' AB'). Sampled from a pool of ``max(26, num_nodes)`` spreadsheet
+    labels so that, for small graphs, the behaviour matches the original
+    ``random.sample(LETTERS, num_nodes)`` (a random subset of ' A'..' Z'), while
+    larger graphs simply draw from a correspondingly larger pool.
+    """
+    pool_size = max(26, num_nodes)
+    pool = [' ' + _spreadsheet_label(i) for i in range(pool_size)]
+    return random.sample(pool, num_nodes)
 
 def generate_easy_graph(size=None, min_size=5, max_size=15, balanced=True):
     """
@@ -182,8 +207,8 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
         if not easy:
             G = G.to_directed()
 
-        # 1. compute a random subset of the LETTERS and use them as the "text" fields of the nodes
-        node_texts = random.sample(LETTERS, len(G.nodes))
+        # 1. assign each node a unique spreadsheet-style label as its "text" field
+        node_texts = make_node_labels(len(G.nodes))
         for node, text in zip(G.nodes, node_texts):
             G.nodes[node]['text'] = text
 
@@ -222,13 +247,19 @@ def round_size_str(size):
     else:
         return str(size), size, 1
 
-def dataset_path_and_size(dataset_size, easy=True):
+def dataset_path_and_size(dataset_size, easy=True, min_nodes=None, max_nodes=None):
+    # Encode the node range in the filename: difficulty + example count alone do
+    # not pin a dataset (two runs can share both yet differ in graph size / the
+    # label scheme), so a bare name silently reuses a stale artifact. The node tag
+    # keeps fresh artifacts distinct and self-describing; omitting the range keeps
+    # the legacy name for back-compat.
     size_str, rounded_size, scale = round_size_str(dataset_size)
-    dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}_dataset.gtds"
+    node_tag = f"_n{min_nodes}-{max_nodes}" if (min_nodes is not None and max_nodes is not None) else ""
+    dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}{node_tag}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
 def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, max_rwse_steps=16, easy=True, magnetic_q=0.25):
-    dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy)
+    dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy, min_nodes=min_nodes, max_nodes=max_nodes)
 
     dataset = prepare_dataset(
         final_dataset_size, 
