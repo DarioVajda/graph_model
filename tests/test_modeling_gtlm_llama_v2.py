@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest
 import torch
+from transformers import DynamicCache
 
 from src.models.legacy.modeling_gtlm_llama_v0 import GraphAttnBiasConfig
 from src.models.legacy.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, KHopLlamaConfig
@@ -201,3 +202,156 @@ def test_k_hop_directed_config_roundtrip():
         rt = GTLMLlamaConfig.from_pretrained(d)
     assert rt.k_hop_directed is True
     assert rt.k_hop == 2
+
+
+# ── KV-cache decode correctness ──────────────────────────────────────────────
+#
+# Generation runs through the dense path (flex falls back at q_len < kv_len) and
+# leans on a single invariant: feeding the prompt span one token at a time *with a
+# KV cache* must produce the same logits as one full forward over the whole
+# sequence. This only holds on the prompt-node span — prefix tokens attend
+# bidirectionally, so they must all live in the prefill — which is exactly how
+# generation works (the prompt node is packed last and decoded causally).
+#
+# GTLM resets position ids per node (e.g. [0,1,2, 0,1, 0,1,2,3, 0,1]) for prefix
+# order-invariance, so both paths must be fed the collator's `position_ids`; HF's
+# default sequential positions would give a different RoPE and silently diverge.
+
+_GEN_FEATS = ("shortest_path_dists", "laplacian_coordinates", "rwse", "rrwp",
+              "magnetic_V", "magnetic_lambdas", "k_hop_mask")
+
+
+@pytest.mark.parametrize("bias_name", ["none", "all"])
+@pytest.mark.parametrize("k_hop", [0, 2])
+def test_kv_cache_decode_matches_full_forward(bias_name, k_hop):
+    """Incremental KV-cached decode of the prompt span == one full forward.
+
+    A single-graph batch (B=1, so no inter-sequence padding) is processed two
+    ways: (A) a full forward with ``use_cache=False`` and (B) a prefill of every
+    prefix token followed by one-token-at-a-time decode across the prompt span,
+    carrying a ``DynamicCache``. The per-step decode logits must match the full
+    forward at the same positions — this is the invariant generation relies on,
+    and it exercises the ``q_len < kv_len`` branch of the structural mask and the
+    cached node→token bias slice."""
+    item = _make_items()[:1]
+    _, model = _build_pair(bias_name, k_hop, impl="sdpa")
+    model.eval()
+
+    batch = GraphCollatorV2(pad_token_id=0, k_hop=k_hop)([dict(it) for it in item])
+    assert batch["attention_mask"].all(), "B=1 batch should have no padding"
+
+    feats = {k: batch.get(k) for k in _GEN_FEATS}
+    common = dict(prompt_node=batch["prompt_node"], num_nodes=batch["num_nodes"], **feats)
+
+    L = batch["input_ids"].shape[1]
+    node_ids = batch["node_ids"]
+    position_ids = batch["position_ids"]            # per-node resets — must be threaded
+    # The prompt node is packed last; its tokens are the final d positions — the
+    # only span generation ever decodes.
+    d = len(item[0]["input_ids"][item[0]["prompt_node"]])
+    p = L - d                                       # prefill all prefix tokens
+    assert p >= 1 and d >= 1
+
+    with torch.no_grad():
+        ref = model(**batch, use_cache=False)
+
+        model._graph_bias_cache = {}                # mimic generate()'s reset
+        cache = DynamicCache()
+        out = model(                                # prefill: positions [0, p)
+            input_ids=batch["input_ids"][:, :p],
+            attention_mask=torch.ones(1, p, dtype=torch.long),
+            position_ids=position_ids[:, :p],
+            node_ids=node_ids[:, :p],
+            past_key_values=cache, use_cache=True, **common,
+        )
+        step_logits = [out.logits]                  # (1, p, V)
+        cache = out.past_key_values
+        for t in range(p, L):                       # decode one prompt token at a time
+            out = model(
+                input_ids=batch["input_ids"][:, t:t + 1],
+                attention_mask=torch.ones(1, t + 1, dtype=torch.long),
+                position_ids=position_ids[:, t:t + 1],
+                node_ids=node_ids[:, :t + 1],       # full KV length, sliced inside forward
+                past_key_values=cache, use_cache=True, **common,
+            )
+            step_logits.append(out.logits)          # (1, 1, V)
+            cache = out.past_key_values
+
+    decoded = torch.cat(step_logits, dim=1)         # (1, L, V)
+    diff = (decoded - ref.logits).abs().max().item()
+    assert diff < 1e-4, f"[{bias_name}, k={k_hop}] cached-decode vs full-forward diff {diff}"
+
+
+def test_generation_extends_per_node_positions():
+    """``prepare_inputs_for_generation`` must continue the prompt node's per-node
+    position counter for decoded tokens. Regression guard: it previously reused the
+    last prompt position for every generated token (positions stuck), breaking RoPE
+    during generation."""
+    item = _make_items()[:1]
+    _, model = _build_pair("all", 2, impl="sdpa")
+    model.eval()
+    batch = GraphCollatorV2(pad_token_id=0, k_hop=2)([dict(it) for it in item])
+
+    L = batch["input_ids"].shape[1]
+    last = batch["position_ids"][0, -1].item()       # prompt node's last local position
+
+    with torch.no_grad():                            # prefill → a real cache of length L
+        cache = DynamicCache()
+        model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"],
+              position_ids=batch["position_ids"], node_ids=batch["node_ids"],
+              prompt_node=batch["prompt_node"], num_nodes=batch["num_nodes"],
+              past_key_values=cache, use_cache=True,
+              **{k: batch.get(k) for k in _GEN_FEATS})
+
+    # Simulate generate having appended two tokens, then prepare the next inputs.
+    appended = torch.cat([batch["input_ids"], batch["input_ids"][:, -2:]], dim=1)
+    mi = model.prepare_inputs_for_generation(
+        appended, past_key_values=cache, attention_mask=torch.ones_like(appended),
+        position_ids=batch["position_ids"], node_ids=batch["node_ids"],
+        prompt_node=batch["prompt_node"], num_nodes=batch["num_nodes"],
+    )
+    # The two decoded tokens get the next two per-node positions: last+1, last+2.
+    assert mi["position_ids"][0].tolist() == [last + 1, last + 2]
+    # node_ids is carried full length; the appended slots belong to the prompt node.
+    assert mi["node_ids"].shape[1] == L + 2
+    assert (mi["node_ids"][0, L:] == batch["prompt_node"].item()).all()
+
+
+def test_generate_matches_full_forward_with_continued_positions():
+    """End-to-end: the per-step logits from cached ``generate`` equal a full
+    no-cache forward over the produced sequence whose ``node_ids``/``position_ids``
+    are extended the same way. Comparing logits (not just the argmax token) makes
+    this sensitive to wrong positions for generated tokens — the bug this guards."""
+    item = _make_items()[:1]
+    _, model = _build_pair("all", 2, impl="sdpa")
+    model.eval()
+    batch = GraphCollatorV2(pad_token_id=0, k_hop=2)([dict(it) for it in item])
+
+    gk = {k: batch[k] for k in
+          ("input_ids", "attention_mask", "node_ids", "position_ids", "prompt_node", "num_nodes")
+          + _GEN_FEATS if k in batch}
+    L = batch["input_ids"].shape[1]
+    K = 4
+    with torch.no_grad():
+        gen = model.generate(max_new_tokens=K, do_sample=False,
+                              return_dict_in_generate=True, output_scores=True, **gk)
+    seq = gen.sequences
+    assert seq.shape[1] == L + K
+    # greedy + no logits processors → scores[i] is the raw next-token logit row.
+    gen_scores = torch.stack(gen.scores, dim=1)[0]          # (K, V)
+
+    last = batch["position_ids"][0, -1].item()
+    node_ids = torch.cat([batch["node_ids"], batch["prompt_node"].view(1, 1).expand(1, K)], dim=1)
+    position_ids = torch.cat([batch["position_ids"],
+                              (last + torch.arange(1, K + 1)).view(1, K)], dim=1)
+    with torch.no_grad():
+        full = model(
+            input_ids=seq, attention_mask=torch.ones_like(seq),
+            node_ids=node_ids, position_ids=position_ids,
+            prompt_node=batch["prompt_node"], num_nodes=batch["num_nodes"],
+            use_cache=False, **{k: batch.get(k) for k in _GEN_FEATS},
+        )
+    # logits that produced token L+i sit at position L-1+i of the full forward.
+    full_scores = full.logits[0, L - 1:L - 1 + K, :]        # (K, V)
+    diff = (gen_scores - full_scores).abs().max().item()
+    assert diff < 1e-4, f"cached-generate vs full-forward logit diff {diff}"

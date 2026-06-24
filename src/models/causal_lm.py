@@ -262,12 +262,22 @@ class GraphCausalLMMixin:
         prompt_node = kwargs.get("prompt_node", None)
         position_ids = kwargs.get("position_ids", None)
 
-        # Extend node_ids for newly generated tokens (they belong to the prompt node).
+        # Newly generated tokens belong to the prompt node, so extend both columns
+        # for them: node_ids gets the prompt node, and position_ids *continues the
+        # prompt node's per-node local counter* (positions reset per node, and the
+        # prompt node is packed last → its last local position is position_ids[:, -1];
+        # token i after it is that + i). Without this, every decoded token would
+        # reuse the last prompt position, breaking RoPE during generation.
         if node_ids is not None and prompt_node is not None:
             cur_len = input_ids.shape[1]
-            if cur_len > node_ids.shape[1]:
-                pad = prompt_node.view(-1, 1).to(node_ids.device).expand(-1, cur_len - node_ids.shape[1])
+            n_new = cur_len - node_ids.shape[1]
+            if n_new > 0:
+                pad = prompt_node.view(-1, 1).to(node_ids.device).expand(-1, n_new)
                 node_ids = torch.cat([node_ids, pad], dim=1)
+                if position_ids is not None:
+                    steps = torch.arange(1, n_new + 1, device=position_ids.device).view(1, -1)
+                    new_pos = position_ids[:, -1:] + steps           # (B, n_new)
+                    position_ids = torch.cat([position_ids, new_pos], dim=1)
 
         if past_key_values is not None:
             past_length = past_key_values.get_seq_length()
