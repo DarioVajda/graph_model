@@ -4,7 +4,7 @@ GTLM — graph-biased causal LMs, backbone-agnostic.
 This package's public surface is the Llama adapter's classes. Importing the
 package wires everything together as an import side-effect:
 
-  * the ``gtlm_eager`` / ``gtlm_sdpa`` / ``gtlm_flex`` attention functions are
+  * the ``gtlm_eager`` / ``gtlm_flex`` attention functions are
     registered into HF's ``ALL_ATTENTION_FUNCTIONS`` (via :mod:`dispatch`), and
   * ``GTLMLlamaConfig`` / ``GTLMLlamaForCausalLM`` are registered with
     ``AutoConfig`` / ``AutoModelForCausalLM`` (via the backbone adapter).

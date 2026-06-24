@@ -50,7 +50,7 @@ def dense_reference(
     """Eager dense attention matching the model's ``eager`` path, for parity.
 
     Builds the same dense structural mask + token-expanded soft bias the
-    sdpa/eager backend uses, then does a plain softmax attention. Reuses the
+    eager backend uses, then does a plain softmax attention. Reuses the
     real model functions so the reference can't silently diverge.
     """
     from src.models.structural_mask import (

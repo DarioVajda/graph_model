@@ -37,7 +37,7 @@ def test_flex_block_size_gate():
 
 
 def test_dispatch_rejects_flex():
-    # graph_attention_dispatch handles only the dense (eager/sdpa) backends; the
+    # graph_attention_dispatch handles only the dense (eager) backend; the
     # flex path is owned by gtlm_flex / flex_attention_forward. Passing "flex"
     # here is a programming error and is rejected.
     with pytest.raises(ValueError, match="flex"):

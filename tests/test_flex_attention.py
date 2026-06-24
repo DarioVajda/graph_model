@@ -277,5 +277,5 @@ def test_flex_generation_dense_fallback():
     assert out.shape[1] == L + 4                       # decode produced tokens
     assert (out >= 0).all() and (out < _BASE["vocab_size"]).all()
     # the last forward was an incremental decode step (q_len<kv_len) -> it must
-    # have taken the dense fallback, not flex
-    assert flex.config._attn_implementation == "gtlm_sdpa"
+    # have taken the dense (eager) fallback, not flex
+    assert flex.config._attn_implementation == "gtlm_eager"

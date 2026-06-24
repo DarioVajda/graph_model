@@ -5,7 +5,8 @@ These assert that the clean v2 rewrite preserves the exact behaviour of v1:
 
   * ``test_v2_eager_matches_v1`` — v2 (eager) logits equal v1 logits on the same
     graphs and weights, across bias combinations and K-hop values.
-  * ``test_v2_sdpa_matches_eager`` — the sdpa backend matches eager.
+  * ``test_v2_eager_matches_v0_backward`` — v2 (eager) backward gradients equal
+    the original v0 model's, so the refactor preserves training, not just logits.
   * ``test_v2_grad_checkpointing_parity`` — enabling gradient checkpointing does
     not change the loss (the context-on-module mechanism survives recompute).
 
@@ -15,16 +16,20 @@ a ``LlamaAttention`` subclass), so weights transfer via a plain ``load_state_dic
 
 import sys, os, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.dirname(__file__))   # sibling test modules (helpers)
 
 import pytest
 import torch
 from transformers import DynamicCache
 
-from src.models.legacy.modeling_gtlm_llama_v0 import GraphAttnBiasConfig
+from src.models.legacy.modeling_gtlm_llama_v0 import (
+    GraphAttnBiasConfig, GraphLlamaConfig, GraphLlamaForCausalLM,
+)
 from src.models.legacy.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, KHopLlamaConfig
 from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 from src.utils.text_graph_collator import GraphCollator
 from src.utils.text_graph_collator_v2 import GraphCollatorV2, _single_k_hop_mask
+from test_model_compatibility import iter_bias_param_pairs, _transfer_bias_weights
 
 DEVICE = torch.device("cpu")
 
@@ -121,23 +126,6 @@ def test_v2_eager_matches_v1(bias_name, k_hop):
         assert abs(out_v1.loss.item() - out_v2.loss.item()) < 1e-4
 
 
-@pytest.mark.parametrize("bias_name", ["none", "all"])
-@pytest.mark.parametrize("k_hop", [0, 2])
-def test_v2_sdpa_matches_eager(bias_name, k_hop):
-    items = _make_items()
-    _, v2_eager = _build_pair(bias_name, k_hop, impl="eager")
-    _, v2_sdpa = _build_pair(bias_name, k_hop, impl="sdpa")
-    v2_sdpa.load_state_dict(v2_eager.state_dict())
-
-    batch = GraphCollatorV2(pad_token_id=0, k_hop=k_hop)([dict(it) for it in items])
-    with torch.no_grad():
-        oe = v2_eager(**batch)
-        os_ = v2_sdpa(**batch)
-    mask = batch["attention_mask"].bool()
-    diff = (oe.logits[mask] - os_.logits[mask]).abs().max().item()
-    assert diff < 1e-4, f"[{bias_name}, k={k_hop}] eager-vs-sdpa diff {diff}"
-
-
 @pytest.mark.parametrize("bias_name", ["all"])
 @pytest.mark.parametrize("k_hop", [0, 2])
 def test_v2_grad_checkpointing_parity(bias_name, k_hop):
@@ -155,6 +143,81 @@ def test_v2_grad_checkpointing_parity(bias_name, k_hop):
     loss_a = v2a(**batch).loss
     loss_b = v2b(**batch).loss
     assert abs(loss_a.item() - loss_b.item()) < 1e-5, f"grad-ckpt loss diff {abs(loss_a.item()-loss_b.item())}"
+
+
+# ── v0 backward-gradient parity ─────────────────────────────────────────────────
+#
+# The "math still works" claim is about *training*, so it must hold for the
+# backward pass, not just forward logits. This pins v2's gradients to the original
+# v0 model (`GraphLlamaForCausalLM`): same loss, same graph-bias grads, and same
+# shared base-weight grads after one `loss.backward()`.
+#
+# v0 is dense (no K-hop), so the comparison is k_hop=0 only — exactly the v0-eager
+# accuracy anchor the experiment validates against. Eager is GTLM's only dense
+# backend (flex is its own GPU test), so this CPU test covers the dense path fully.
+
+# Shared (identically-named) base weights — checked in every case, including
+# bias="none" where there are no graph-bias params to compare.
+_SHARED_GRAD_KEYS = (
+    "model.layers.0.self_attn.q_proj.weight",
+    "model.layers.0.self_attn.o_proj.weight",
+    "model.layers.1.mlp.down_proj.weight",
+)
+
+
+def _build_v0_v2(bias_name, dtype=torch.float32):
+    """A (v0, v2-eager, bias_cfg) triple with identical weights, on CPU."""
+    bias = _bias_kwargs(bias_name)
+    bias_cfg = GraphAttnBiasConfig(**bias)
+
+    v0 = GraphLlamaForCausalLM(
+        GraphLlamaConfig(graph_attn_bias=bias_cfg.to_dict(), **_BASE)
+    ).to(DEVICE, dtype).eval()
+    v2 = GTLMLlamaForCausalLM(
+        GTLMLlamaConfig(k_hop=0, graph_attn_impl="eager", **bias, **_BASE)
+    ).to(DEVICE, dtype).eval()
+
+    # Base llama weights share names (both subclass LlamaForCausalLM); the bias
+    # params do not, so transfer them through the explicit name mapping.
+    missing, _ = v2.load_state_dict(v0.state_dict(), strict=False)
+    assert not [k for k in missing if "inv_freq" not in k and "graph_bias" not in k], missing
+    _transfer_bias_weights(v0, v2, bias_cfg)
+    return v0, v2, bias_cfg
+
+
+@pytest.mark.parametrize("bias_name", list(_BIAS_CONFIGS.keys()))
+def test_v2_eager_matches_v0_backward(bias_name):
+    """v2 (eager) backward == original v0 backward: loss + every graph-bias grad +
+    shared base-weight grads, after one optimizer step's worth of autograd."""
+    items = _make_items()
+    v0, v2, bias_cfg = _build_v0_v2(bias_name)
+    v0.train(); v2.train()
+
+    old_batch = GraphCollator()([dict(it) for it in items])
+    new_batch = GraphCollatorV2(pad_token_id=0, k_hop=0)([dict(it) for it in items])
+    labels = [it["labels"] for it in items]
+
+    out0 = v0(input_graph_batch=old_batch, labels=labels)
+    out2 = v2(**new_batch)
+    assert abs(out0.loss.item() - out2.loss.item()) < 1e-4, \
+        f"[{bias_name}] loss diff {abs(out0.loss.item()-out2.loss.item()):.2e}"
+
+    out0.loss.backward()
+    out2.loss.backward()
+
+    def _close(g0, g2, name):
+        assert g0 is not None and g2 is not None, f"[{bias_name}] missing grad {name}"
+        assert torch.allclose(g0, g2, rtol=1e-3, atol=1e-5), \
+            f"[{bias_name}] grad mismatch {name} (max {(g0-g2).abs().max().item():.2e})"
+
+    # graph-bias params (the ones the experiment actually trains)
+    for name, p0, p2 in iter_bias_param_pairs(v0, v2, bias_cfg):
+        _close(p0.grad, p2.grad, name)
+
+    # whole-network signal via shared base weights (also covers bias="none")
+    g0, g2 = dict(v0.named_parameters()), dict(v2.named_parameters())
+    for name in _SHARED_GRAD_KEYS:
+        _close(g0[name].grad, g2[name].grad, name)
 
 
 # ── Directed K-hop gate ─────────────────────────────────────────────────────────
@@ -234,7 +297,7 @@ def test_kv_cache_decode_matches_full_forward(bias_name, k_hop):
     and it exercises the ``q_len < kv_len`` branch of the structural mask and the
     cached node→token bias slice."""
     item = _make_items()[:1]
-    _, model = _build_pair(bias_name, k_hop, impl="sdpa")
+    _, model = _build_pair(bias_name, k_hop, impl="eager")
     model.eval()
 
     batch = GraphCollatorV2(pad_token_id=0, k_hop=k_hop)([dict(it) for it in item])
@@ -288,7 +351,7 @@ def test_generation_extends_per_node_positions():
     last prompt position for every generated token (positions stuck), breaking RoPE
     during generation."""
     item = _make_items()[:1]
-    _, model = _build_pair("all", 2, impl="sdpa")
+    _, model = _build_pair("all", 2, impl="eager")
     model.eval()
     batch = GraphCollatorV2(pad_token_id=0, k_hop=2)([dict(it) for it in item])
 
@@ -323,7 +386,7 @@ def test_generate_matches_full_forward_with_continued_positions():
     are extended the same way. Comparing logits (not just the argmax token) makes
     this sensitive to wrong positions for generated tokens — the bug this guards."""
     item = _make_items()[:1]
-    _, model = _build_pair("all", 2, impl="sdpa")
+    _, model = _build_pair("all", 2, impl="eager")
     model.eval()
     batch = GraphCollatorV2(pad_token_id=0, k_hop=2)([dict(it) for it in item])
 

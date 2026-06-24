@@ -23,7 +23,7 @@ The moving parts:
 |---|---|---|
 | Backbone adapter | `modeling_gtlm_llama.py` | wires Llama base classes to the graph mixins (`GTLMLlamaForCausalLM` / `GTLMLlamaConfig`); HF auto-class registration + bundling manifest |
 | Orchestration mixins | `causal_lm.py` / `config.py` / `attention.py` | backbone-neutral forward / generate / loader, config fields, per-layer bias owner |
-| Attention functions | `dispatch.py` | the registered `gtlm_eager`/`gtlm_sdpa`/`gtlm_flex` functions + backend dispatch |
+| Attention functions | `dispatch.py` | the registered `gtlm_eager`/`gtlm_flex` functions + backend dispatch |
 | Structural mask | `structural_mask.py` | shared causal + bidirectional-prefix + K-hop + padding mask, node→token bias |
 | Bias modules | `bias.py` | the per-layer `GraphAttentionBias` (SPD/Laplacian/RWSE/RRWP/Magnetic) |
 | Flex kernel | `flex_kernel.py` | the FlexAttention BlockMask builder, score-mod gather, compiled forward |
@@ -63,7 +63,7 @@ from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 cfg = GTLMLlamaConfig(
     **AutoConfig.from_pretrained("meta-llama/Llama-3.2-1B").to_dict(),
     spd=True, max_spd=32, magnetic=True, magnetic_dim=32, magnetic_q=0.25,
-    k_hop=2, graph_attn_impl="flex",          # "eager" / "sdpa" / "flex"
+    k_hop=2, graph_attn_impl="flex",          # "eager" / "flex"
 )
 model = GTLMLlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B", config=cfg)
 
@@ -83,13 +83,13 @@ mask matches what the model expects.
 ### 3. Load and generate
 
 ```python
-model = GTLMLlamaForCausalLM.from_pretrained("my_model", graph_attn_impl="sdpa")
+model = GTLMLlamaForCausalLM.from_pretrained("my_model", graph_attn_impl="eager")
 batch = collator([dataset_item])                  # one graph
 out = model.generate(**batch, max_new_tokens=64)
 ```
 
 Generation runs the dense backend automatically for the incremental decode steps
-(see *FlexAttention → Decoding*), so `"flex"` and `"sdpa"`/`"eager"` all generate
+(see *FlexAttention → Decoding*), so both `"flex"` and `"eager"` generate
 correctly.
 
 A checkpoint published to the HuggingFace Hub loads with no local install —
@@ -127,7 +127,7 @@ through `save_pretrained`/`from_pretrained` with no custom code.
 |---|---|---|
 | `k_hop` | `0` | hard K-hop attention gate (0 = off; tokens whose nodes are >K hops apart can't attend) |
 | `k_hop_directed` | `False` | follow edge direction for the K-hop gate |
-| `graph_attn_impl` | `"eager"` | attention backend: `"eager"`, `"sdpa"`, or `"flex"` |
+| `graph_attn_impl` | `"eager"` | attention backend: `"eager"` or `"flex"` |
 | `checkpoint_graph_bias` | `True` | recompute the per-layer bias in backward (training-only; large memory saving at high node counts) |
 
 ### FlexAttention knobs (only used when `graph_attn_impl="flex"`)
@@ -144,11 +144,12 @@ through `save_pretrained`/`from_pretrained` with no custom code.
 
 Select with `graph_attn_impl`:
 
-- **`eager`** — dense reference. Adds the soft bias onto a dense `(B,1,L,L)`
-  structural mask and delegates to HF's `eager_attention_forward`. Works on CPU.
-  Most memory-hungry; fine for small inputs and tests.
-- **`sdpa`** — same dense math through PyTorch SDPA. The recommended dense
-  backend for generation/eval.
+- **`eager`** — dense reference, and the only dense backend. Adds the soft bias
+  onto a dense `(B,1,L,L)` structural mask and delegates to HF's
+  `eager_attention_forward`. Works on CPU; used for training, generation, and
+  eval. (The fused SDPA kernels are intentionally not offered: a custom dense
+  bias makes flash ineligible and the mem-efficient kernel both buggy in backward
+  and pointless once the bias is materialized, so SDPA would only reduce to this.)
 - **`flex`** — `torch.compile` FlexAttention. The bias stays at node level
   `(B,H,N,N)` and is gathered inside the kernel; the structural mask becomes a
   sparse `BlockMask` so fully-masked blocks are skipped. **Much faster and far
@@ -256,9 +257,9 @@ skip it.
 ### Decoding
 
 Flex serves the **full-sequence** case (training + prefill, `q_len == kv_len`).
-Incremental decode steps (`q_len < kv_len`) automatically use the dense `sdpa`
+Incremental decode steps (`q_len < kv_len`) automatically use the dense `eager`
 path — flex gives no benefit at `q_len=1` and this keeps generation identical to
-the dense backends. No action needed; `generate()` just works.
+the dense backend. No action needed; `generate()` just works.
 
 ### Memory knobs
 
@@ -293,8 +294,9 @@ compile mode, int32 node ids, checkpointing, roofline), see
 .venv/bin/python -m pytest tests/ -q
 ```
 
-- `tests/test_modeling_gtlm_llama_v2.py` — v2-vs-v1 parity, sdpa==eager, K-hop.
-- `tests/test_gtlm_attn_functions.py` — the Strategy-B `gtlm_eager`/`gtlm_sdpa`
+- `tests/test_modeling_gtlm_llama_v2.py` — v2-vs-v1 parity, v0 backward-grad
+  parity, K-hop.
+- `tests/test_gtlm_attn_functions.py` — the Strategy-B `gtlm_eager`/`gtlm_flex`
   functions in isolation: registered in `ALL_ATTENTION_FUNCTIONS` and bit-identical
   to the reference dispatch when driven through `module._graph_ctx`.
 - `tests/test_graph_bias.py` — `GraphAttentionBias`, the K-hop collator mask, and

@@ -1,7 +1,7 @@
 """
 Isolation tests for the Strategy-B registered attention functions.
 
-The backbone-agnostic refactor registers `gtlm_eager` / `gtlm_sdpa` / `gtlm_flex`
+The backbone-agnostic refactor registers `gtlm_eager` / `gtlm_flex`
 into HF's `ALL_ATTENTION_FUNCTIONS`; the live model dispatches to them via
 `config._attn_implementation` (Strategy B). The full v1↔v2 parity suite exercises
 them end-to-end; these tests pin them down *in isolation* — the §3a spike turned
@@ -57,7 +57,7 @@ def _spd_feature():
 
 
 def _make_module(with_bias):
-    cfg = _config(spd=with_bias, max_spd=8, k_hop=0, graph_attn_impl="sdpa")
+    cfg = _config(spd=with_bias, max_spd=8, k_hop=0, graph_attn_impl="eager")
     attn = GTLMLlamaAttention(cfg, layer_idx=0).to(DTYPE).eval()
     if with_bias:
         # deterministic, clearly non-zero bias weights
@@ -101,7 +101,7 @@ def _make_ctx(module, with_bias, cache):
     )
 
 
-@pytest.mark.parametrize("impl", ["eager", "sdpa"])
+@pytest.mark.parametrize("impl", ["eager"])
 @pytest.mark.parametrize("with_bias", [True, False])
 def test_gtlm_fn_matches_strategy_a_dispatch(impl, with_bias):
     module = _make_module(with_bias)
@@ -126,7 +126,7 @@ def test_gtlm_fn_matches_strategy_a_dispatch(impl, with_bias):
     )
 
     # Strategy B: install ctx on the module and dispatch through the HF registry.
-    fn_name = {"eager": "gtlm_eager", "sdpa": "gtlm_sdpa"}[impl]
+    fn_name = {"eager": "gtlm_eager"}[impl]
     assert fn_name in ALL_ATTENTION_FUNCTIONS, f"{fn_name} not registered"
     module._graph_ctx = _make_ctx(module, with_bias, cache={})
     out, _ = ALL_ATTENTION_FUNCTIONS[fn_name](
@@ -141,4 +141,4 @@ def test_gtlm_fn_requires_graph_ctx():
     module._graph_ctx = None
     q, k, v = _qkv(module)
     with pytest.raises(RuntimeError, match="graph context"):
-        ALL_ATTENTION_FUNCTIONS["gtlm_sdpa"](module, q, k, v, None, scaling=module.scaling)
+        ALL_ATTENTION_FUNCTIONS["gtlm_eager"](module, q, k, v, None, scaling=module.scaling)

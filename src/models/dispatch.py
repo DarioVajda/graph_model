@@ -12,26 +12,32 @@ Two ways the same logic is reached:
     ``forward`` that received the structural mask / bias as arguments. This is
     what the v2 ``GTLMLlamaAttention.forward`` still uses.
 
-  * **Strategy B (registered attention functions):** :func:`gtlm_eager`,
-    :func:`gtlm_sdpa`, :func:`gtlm_flex` match HuggingFace's attention-interface
-    signature and are registered into ``ALL_ATTENTION_FUNCTIONS``. The backbone's
+  * **Strategy B (registered attention functions):** :func:`gtlm_eager` and
+    :func:`gtlm_flex` match HuggingFace's attention-interface signature and are
+    registered into ``ALL_ATTENTION_FUNCTIONS``. The backbone's
     *stock* attention ``forward`` does q/k/v projection + RoPE + cache, then calls
     the one named by ``config._attn_implementation``; our function reads the
     per-layer ``module.graph_bias`` and the per-batch ``module._graph_ctx`` and
     applies the structural mask + soft bias. This is what new backbone adapters
     use (no ``forward`` override).
 
-Both paths share the same numerical core: the ``gtlm_*`` dense functions compute
-the token-expanded bias and then delegate to :func:`graph_attention_dispatch`, so
-there is a single source of truth for the eager/sdpa math.
+Both paths share the same numerical core: the ``gtlm_eager`` dense function
+computes the token-expanded bias and then delegates to
+:func:`graph_attention_dispatch`, so there is a single source of truth for the
+dense (eager) math.
 
 Backends:
-  * ``eager`` / ``sdpa`` — add the soft bias onto the dense structural mask and
-    delegate to HuggingFace's own ``eager_attention_forward`` /
-    ``sdpa_attention_forward`` (no softmax/SDPA reimplementation).
+  * ``eager`` — add the soft bias onto the dense structural mask and delegate to
+    HuggingFace's own ``eager_attention_forward`` (no softmax reimplementation).
+    The fused SDPA kernels are intentionally not offered: a custom dense bias
+    makes flash ineligible and the mem-efficient kernel both buggy in backward
+    (GQA + per-head bias) and pointless (the dense bias is already materialized),
+    so it would only ever reduce to eager. The decode (q_len < kv_len) fallback
+    of ``flex`` therefore routes here too.
   * ``flex`` — implemented over :mod:`src.models.flex_kernel`; keeps the soft
     bias at node level ``(B,H,N,N)`` and gathers it inside the kernel (no
-    token-level expansion).
+    token-level expansion). This is the only path that actually accelerates over
+    eager (sparse block masks), at the cost of compiling a kernel per shape.
 """
 
 import torch
@@ -41,7 +47,6 @@ from transformers.models.llama.modeling_llama import (
     eager_attention_forward,
     repeat_kv,  # noqa: F401  (re-exported for the flex path / external reference impls)
 )
-from transformers.integrations.sdpa_attention import sdpa_attention_forward
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 # NB: explicit ``from .flex_kernel import ...`` (not ``from . import flex_kernel``)
@@ -57,13 +62,12 @@ from .flex_kernel import (
 from .structural_mask import expand_node_to_token_bias
 
 
-GRAPH_ATTN_IMPLS = ("eager", "sdpa", "flex")
+GRAPH_ATTN_IMPLS = ("eager", "flex")
 
 # Registered attention-function names (Strategy B). One per backend; the matching
 # `gtlm_*` name is what a backbone adapter pins on `config._attn_implementation`.
 GTLM_ATTN_FN_NAMES = {
     "eager": "gtlm_eager",
-    "sdpa":  "gtlm_sdpa",
     "flex":  "gtlm_flex",
 }
 
@@ -82,28 +86,23 @@ def graph_attention_dispatch(
     dropout:        float,
 ):
     """
-    Run dense (eager/sdpa) attention for one layer, applying the shared
-    structural mask plus this layer's (already token-expanded) soft bias.
+    Run dense (eager) attention for one layer, applying the shared structural
+    mask plus this layer's (already token-expanded) soft bias.
 
     Returns ``(attn_output, attn_weights)`` exactly like the HF backends, with
     ``attn_output`` shaped ``(B, q, H, d)``.
     """
-    if impl in ("eager", "sdpa"):
+    if impl == "eager":
         attn_mask = structural_mask
         if token_soft_bias is not None:
             attn_mask = attn_mask + token_soft_bias              # (B, H, q, kv)
-        if impl == "eager":
-            return eager_attention_forward(
-                module, query, key, value, attn_mask, scaling=scaling, dropout=dropout
-            )
-        return sdpa_attention_forward(
-            module, query, key, value, attn_mask,
-            dropout=dropout, scaling=scaling, is_causal=False,
+        return eager_attention_forward(
+            module, query, key, value, attn_mask, scaling=scaling, dropout=dropout
         )
 
     raise ValueError(
-        f"graph_attention_dispatch got impl='{impl}'. Only 'eager'/'sdpa' route "
-        f"here; 'flex' is handled by gtlm_flex / flex_attention_forward. "
+        f"graph_attention_dispatch got impl='{impl}'. Only 'eager' routes here; "
+        f"'flex' is handled by gtlm_flex / flex_attention_forward. "
         f"Expected one of {GRAPH_ATTN_IMPLS}."
     )
 
@@ -246,8 +245,8 @@ def _gtlm_dense(
     scaling: float,
     dropout: float,
 ):
-    """Shared body for gtlm_eager / gtlm_sdpa: compute the bias, expand to token
-    level, and delegate to :func:`graph_attention_dispatch`."""
+    """Shared body for the dense path (gtlm_eager): compute the bias, expand to
+    token level, and delegate to :func:`graph_attention_dispatch`."""
     ctx = _require_ctx(module)
     q_len = query.shape[2]
     kv_len = key.shape[2]
@@ -264,10 +263,6 @@ def _gtlm_dense(
 
 def gtlm_eager(module, query, key, value, attention_mask=None, *, scaling, dropout=0.0, **kwargs):
     return _gtlm_dense("eager", module, query, key, value, scaling, dropout)
-
-
-def gtlm_sdpa(module, query, key, value, attention_mask=None, *, scaling, dropout=0.0, **kwargs):
-    return _gtlm_dense("sdpa", module, query, key, value, scaling, dropout)
 
 
 def gtlm_flex(module, query, key, value, attention_mask=None, *, scaling, dropout=0.0, **kwargs):
@@ -293,7 +288,6 @@ def register_gtlm_attention_functions() -> None:
     ``attn_implementation=`` kwarg, which validates against the built-in set.
     """
     ALL_ATTENTION_FUNCTIONS["gtlm_eager"] = gtlm_eager
-    ALL_ATTENTION_FUNCTIONS["gtlm_sdpa"] = gtlm_sdpa
     ALL_ATTENTION_FUNCTIONS["gtlm_flex"] = gtlm_flex
 
 

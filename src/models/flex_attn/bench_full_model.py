@@ -3,8 +3,8 @@ Full-model benchmark: Llama-3.2-1B, three configurations.
 
 Methods
 -------
-  * ``eager`` — ``GTLMLlamaForCausalLM`` (spd + magnetic, K-hop) on the stock
-    ``sdpa`` backend: dense ``(B,1,L,L)`` structural mask + per-layer
+  * ``eager`` — ``GTLMLlamaForCausalLM`` (spd + magnetic, K-hop) on the dense
+    ``eager`` backend: dense ``(B,1,L,L)`` structural mask + per-layer
     ``(B,H,L,L)`` token-expanded soft bias.
   * ``flex``    — the same model and weights, but each attention layer is routed
     through ``flex_core`` at *runtime* (monkeypatch): the ``(B,1,L,L)`` mask
@@ -156,7 +156,7 @@ def _build_gtlm(spec: GraphSpec, dtype, checkpoint_bias: bool = True):
     cfg = GTLMLlamaConfig(
         **base.to_dict(),
         spd=True, max_spd=32, magnetic=True, magnetic_dim=32, magnetic_q=0.25,
-        k_hop=spec.k_hop, k_hop_directed=spec.k_hop_directed, graph_attn_impl="sdpa",
+        k_hop=spec.k_hop, k_hop_directed=spec.k_hop_directed, graph_attn_impl="eager",
         checkpoint_graph_bias=checkpoint_bias,
     )
     model = GTLMLlamaForCausalLM.from_pretrained(

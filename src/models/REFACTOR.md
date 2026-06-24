@@ -122,9 +122,11 @@ cache code and splices the graph dispatch into the middle.
 HF dispatches attention through `ALL_ATTENTION_FUNCTIONS[config._attn_implementation]`
 with the generic signature `(module, query, key, value, attention_mask, scaling,
 dropout, **kwargs)`, called *after* the backbone's own q/k/v projection + RoPE +
-QK-norm + cache update. We register `gtlm_eager` / `gtlm_sdpa` / `gtlm_flex`
+QK-norm + cache update. We register `gtlm_eager` / `gtlm_flex`
 functions (written **once**, agnostic) that read the per-layer `graph_bias`
 and the per-batch `ctx` off `module`, and apply the structural mask + soft bias.
+(A third `gtlm_sdpa` backend existed in the original refactor but was later
+removed — see the §7 note — so the surviving dense backend is `gtlm_eager`.)
 The backbone's *stock* attention `forward` is left untouched.
 - Per-backbone code collapses to: an attention subclass whose `__init__` adds
   `self.graph_bias` (**no `forward` override**), the decoder/model swaps, and the
@@ -146,7 +148,7 @@ a hypothetical backbone whose attention forward does not route through
 > once per layer with post-RoPE q/k/v `(B,H,T,head_dim)`, with `module._graph_ctx`
 > readable inside. Two implementation notes:
 > - `ALL_ATTENTION_FUNCTIONS` is a plain `dict` in 4.50.3 → register via
->   `ALL_ATTENTION_FUNCTIONS["gtlm_sdpa"] = fn` at import time. (The
+>   `ALL_ATTENTION_FUNCTIONS["gtlm_eager"] = fn` at import time. (The
 >   `AttentionInterface.register` class API does not exist in this version.)
 > - Set `config._attn_implementation` **directly** (as v2 already does to pin
 >   `"eager"`); do *not* route a custom name through the public
@@ -199,7 +201,7 @@ src/models/
   bias.py                    # ← graph_bias.py (verbatim)
   flex_kernel.py             # ← flex_kernel.py (verbatim, stays in place)
   structural_mask.py         # ← build_dense_structural_mask + expand_node_to_token_bias
-  dispatch.py                # backend dispatch + the gtlm_eager/sdpa/flex attn functions
+  dispatch.py                # backend dispatch + the gtlm_eager/flex attn functions
   context.py                 # the per-batch GraphContext (typed) + install/reset helpers
   config.py                  # GraphConfigMixin (the flat graph fields + validation)
   causal_lm.py               # GraphCausalLMMixin (forward/generate/prepare/from_pretrained)
@@ -305,9 +307,16 @@ reference in `legacy/`).
 
 ## 7. Decisions (locked 2026-06-18)
 
-- **D1 — Attention strategy: B.** Register `gtlm_eager/sdpa/flex` functions into
+- **D1 — Attention strategy: B.** Register `gtlm_eager/flex` functions into
   HF's `ALL_ATTENTION_FUNCTIONS`; backbones keep their own attention forward. See
   §3a / §3a-bis.
+  > **Update (post-refactor): `gtlm_sdpa` removed.** The original design shipped a
+  > third `gtlm_sdpa` backend, but a custom *dense* attention bias makes the fused
+  > SDPA kernels either ineligible (flash) or both buggy in backward (mem-efficient,
+  > GQA + per-head bias → `LSE is not correctly aligned`) and pointless (the dense
+  > bias is already materialized). SDPA therefore only ever reduced to eager, so it
+  > was dropped: the two backends are now **eager** (dense) and **flex** (sparse,
+  > the actual speedup). The flex incremental-decode fallback uses eager.
 - **D2 — Checkpoint back-compat: none.** Use the cleanest implementation; old
   checkpoints are served by `legacy/` if ever needed. This frees the save format
   (type-based bias-only save) and `model_type`.
@@ -338,7 +347,8 @@ test-suite checks all of them):
 - **Padding is loss-neutral** (masked from attention and loss; verified to fp64).
 - **Prompt node is packed last** and generated causally; all other nodes attend
   bidirectionally.
-- **`graph_attn_impl` backends agree** (eager == sdpa; flex == dense to tolerance).
+- **`graph_attn_impl` backends agree** (flex == eager/dense to tolerance; eager
+  matches the original v0 model forward *and* backward).
 
 Three independent channels, none touched by the attention-function swap:
 `position_ids` (per-node reset → PE only); `node_ids` (token→node → bias gather +

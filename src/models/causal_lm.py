@@ -41,9 +41,27 @@ _FA2_WARNING = (
     "\n" + "=" * 78 + "\n"
     "  GTLM is INCOMPATIBLE with FlashAttention (it cannot express the\n"
     "  graph attention bias / K-hop / bidirectional-prefix mask). Falling back\n"
-    "  to eager attention. Pass graph_attn_impl='sdpa' (or 'flex') instead.\n"
+    "  to eager attention. Pass graph_attn_impl='flex' for the fast path.\n"
     + "=" * 78
 )
+
+_SDPA_WARNING = (
+    "graph_attn_impl='sdpa' is not a separate GTLM backend; running 'eager' "
+    "instead. A custom dense attention bias makes the fused SDPA kernels either "
+    "unusable (flash) or unhelpful (mem-efficient), so SDPA only reduces to eager. "
+    "For the fast path use graph_attn_impl='flex' (sparse block-masked kernel; it "
+    "compiles a kernel per (sequence-length, node-count) shape at start-up)."
+)
+
+
+def _normalize_graph_attn_impl(impl):
+    """Map the accepted ``'sdpa'`` alias to ``'eager'`` (warning once). ``'sdpa'``
+    is not a real GTLM backend — see :data:`_SDPA_WARNING`. Returns ``impl``
+    unchanged otherwise (including ``None``)."""
+    if impl == "sdpa":
+        logger.warning_once(_SDPA_WARNING)
+        return "eager"
+    return impl
 
 
 class GraphCausalLMMixin:
@@ -81,10 +99,11 @@ class GraphCausalLMMixin:
             logger.warning(_FA2_WARNING)
             config._attn_implementation = "eager"
 
-        impl = getattr(config, "graph_attn_impl", None) or "eager"
+        impl = _normalize_graph_attn_impl(getattr(config, "graph_attn_impl", None) or "eager")
         if impl not in GRAPH_ATTN_IMPLS:
             raise ValueError(
-                f"config.graph_attn_impl='{impl}' is invalid; expected one of {GRAPH_ATTN_IMPLS}."
+                f"config.graph_attn_impl='{impl}' is invalid; expected one of "
+                f"{GRAPH_ATTN_IMPLS} (or 'sdpa', an accepted alias for 'eager')."
             )
         config.graph_attn_impl = impl
         # Init on a builtin impl so HF's construction-time validation is happy; the
@@ -146,7 +165,7 @@ class GraphCausalLMMixin:
         # Backend selection. Flex serves the full-sequence case (training /
         # prefill, q_len == kv_len): we build a sparse BlockMask once per batch
         # instead of the dense (B,1,L,L) mask. Incremental decode (q_len < kv_len,
-        # typically q_len == 1) falls back to the dense sdpa path — flex gives no
+        # typically q_len == 1) falls back to the dense eager path — flex gives no
         # benefit at q_len == 1 and this keeps generation untouched.
         impl = self.config.graph_attn_impl
         use_flex = (impl == "flex" and q_len == kv_len)
@@ -179,7 +198,7 @@ class GraphCausalLMMixin:
             )
             eff_impl = "flex"
         else:
-            eff_impl = "sdpa" if impl == "flex" else impl
+            eff_impl = "eager" if impl == "flex" else impl
             structural_mask = build_dense_structural_mask(
                 node_ids=node_ids,
                 prompt_node=prompt_node,
@@ -308,10 +327,11 @@ class GraphCausalLMMixin:
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         """Three loading scenarios: LoRA+bias, bias-only, standard.
 
-        ``graph_attn_impl`` may be passed to select the backend; a
+        ``graph_attn_impl`` may be passed to select the backend ('eager' or
+        'flex'; 'sdpa' is accepted as an alias for 'eager', warning once). A
         ``flash_attention_2`` request is downgraded to eager with a loud warning.
         """
-        graph_attn_impl = kwargs.pop("graph_attn_impl", None)
+        graph_attn_impl = _normalize_graph_attn_impl(kwargs.pop("graph_attn_impl", None))
 
         if kwargs.get("attn_implementation") == "flash_attention_2":
             warnings.warn(_FA2_WARNING, stacklevel=2)
