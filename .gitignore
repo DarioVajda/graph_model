@@ -10,6 +10,8 @@ src/graph_attn_tests/
 
 *.gtds/
 job_logs/
+.inductor_cache/
+**/_inductor_cache/
 
 wandb_login.sh
 hf_login.sh

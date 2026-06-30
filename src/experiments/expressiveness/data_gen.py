@@ -81,39 +81,35 @@ def generate_easy_graph(size=None, min_size=5, max_size=15, balanced=True):
 
 
 def _generate_random_connected_component(nodes):
-    """Helper function to generate a connected subgraph for a given set of nodes."""
+    """Generate a connected subgraph on ``nodes`` in O(N + E).
+
+    Builds a random recursive tree — each node links to a uniformly random earlier
+    node, which guarantees connectivity and gives ~logarithmic diameter (keeps
+    finite shortest paths well under the SPD bucket cap) — then adds a modest
+    random number of extra edges for cycles, sampled directly.
+
+    Replaces the previous O(N^2) construction (a full ``complete_graph`` + MST +
+    ``itertools.combinations`` edge enumeration), which was negligible for the old
+    ~3-node components but became the dominant cost once the component cap made
+    components large (hundreds–thousands of nodes)."""
     N = len(nodes)
     G = nx.Graph()
     G.add_nodes_from(nodes)
-    
     if N < 2:
         return G
-        
-    # 1. Randomly choose number of edges E
-    min_edges = N - 1
-    max_edges = N * (N - 1) // 2
-    E = random.randint(min_edges, max_edges)
-    
-    # 2. Create a random tree to ensure connectivity
-    complete = nx.complete_graph(N)
-    for (u, v) in complete.edges():
-        complete.edges[u, v]['weight'] = random.random()
-    tree = nx.minimum_spanning_tree(complete)
-    # Map the tree's default nodes (0 to N-1) to our actual node labels
-    mapping = {i: nodes[i] for i in range(N)}
-    tree = nx.relabel_nodes(tree, mapping)
-    G.add_edges_from(tree.edges())
-    
-    # 3. Add the remaining E - (N - 1) edges randomly
-    if E > min_edges:
-        all_possible_edges = set(itertools.combinations(nodes, 2))
-        existing_edges = set((min(u, v), max(u, v)) for u, v in G.edges())
-        all_possible_edges = set((min(u, v), max(u, v)) for u, v in all_possible_edges)
-        
-        available_edges = list(all_possible_edges - existing_edges)
-        new_edges = random.sample(available_edges, E - min_edges)
-        G.add_edges_from(new_edges)
-        
+
+    # Random recursive tree -> connected, ~log-diameter spanning structure.
+    perm = list(nodes)
+    random.shuffle(perm)
+    for i in range(1, N):
+        G.add_edge(perm[i], perm[random.randint(0, i - 1)])
+
+    # Extra edges add cycles / shrink the diameter. ~U(0, N) keeps generation O(N)
+    # and the graph small-world; duplicate draws are harmless no-ops.
+    for _ in range(random.randint(0, N)):
+        u, v = random.sample(nodes, 2)
+        G.add_edge(u, v)
+
     return G
 
 def generate_hard_graph(size=None, min_size=5, max_size=15, balanced=True):
@@ -125,8 +121,13 @@ def generate_hard_graph(size=None, min_size=5, max_size=15, balanced=True):
         
     labels = list(range(size))
     
-    # Determine number of components K (between 2 and size // 5)
-    max_components = max(2, size // 3)
+    # Determine number of components K. Cap the upper bound at 10 so large graphs
+    # form a few sizeable components instead of shattering into hundreds of tiny
+    # ones. This (a) gives more natural class balance, and (b) keeps the component
+    # count below the magnetic eigenvector budget (magnetic_m) so the spectral
+    # features can actually resolve which component a node is in. Small graphs are
+    # unaffected (size // 3 < 10 for size < 30).
+    max_components = min(10, max(2, size // 3))
     K = random.randint(2, max_components)
     
     # Distribute nodes to components (guarantee at least 2 nodes per component)
@@ -193,7 +194,7 @@ def get_prompt_node_labels(example):
     return labels
 
 
-def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, tokenizer_name=None, max_rwse_steps=16, max_rrwp_steps=16, easy=True, magnetic_q=0.25, ordering="rcm", magnetic_m=0):
+def prepare_dataset(num_examples, min_size=5, max_size=15, tokenizer_name=None, easy=True, magnetic_q=0.25, ordering="rcm", magnetic_m=0):
     if ordering not in ("rcm", "original"):
         raise ValueError(f"ordering must be 'rcm' or 'original', got {ordering!r}.")
     dataset = generate_graph_dataset(num_examples, min_size=min_size, max_size=max_size, easy=easy)
@@ -230,14 +231,24 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
     # RCM-relabeled dataset is automatically packed in RCM order (no collator
     # change). `ordering='original'` keeps construction order (the unordered
     # baseline). Either way the choice is recorded in the dataset's metadata.
+    # Only the two features this experiment uses are computed: shortest-path
+    # distance and the magnetic Laplacian. (laplacian coordinates / rwse / rrwp
+    # were dropped — they bloated the on-disk dataset and are unused by the bias.)
+    if tokenizer_name is None:
+        raise ValueError("Tokenizer must be provided to prepare_dataset function.")
+
     ds = TextGraphDataset(graphs, rcm_ordering=(ordering == "rcm"))
-    ds.compute_laplacian_coordinates(embedding_dim=spectral_dims)
+
+    # Tokenize + compute labels FIRST, while the table is still light. compute_labels
+    # maps over the rows, and HF `datasets.map` materializes *every* column per row;
+    # doing it before the big (N,N) SPD / (N,m,2) magnetic features are attached keeps
+    # that map ~free instead of round-tripping multi-MB tensors per row (which is
+    # catastrophic at large N — hours just to copy the prompt node's token ids).
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    ds.tokenize(tokenizer)
+    ds.compute_labels(get_prompt_node_labels)
+
     ds.compute_shortest_path_distances()
-    ds.compute_rwse(max_rwse_steps=max_rwse_steps)
-    # rrwp is the dominant O(N^2 * steps) on-disk feature; skip it entirely when
-    # max_rrwp_steps is falsy (rrwp excluded from the experiment).
-    if max_rrwp_steps:
-        ds.compute_rrwp(max_rrwp_steps=max_rrwp_steps)
     # magnetic_m=0 keeps all N eigenpairs (M=N): the bias einsums are then O(N^3)
     # per layer and dominate the step at large N. A positive m truncates to the m
     # lowest eigenpairs -> O(N^2 * m); a speed lever at scale, but it drops spectral
@@ -247,14 +258,6 @@ def prepare_dataset(num_examples, min_size=5, max_size=15, spectral_dims=8, toke
     # yields); the model loads them as fp32, so this halves their on-disk size
     # losslessly. magnetic_V is the dominant feature once rrwp is excluded.
     ds.cast_float_features_to_fp32()
-
-    if tokenizer_name is None:
-        raise ValueError("Tokenizer must be provided to prepare_dataset function.")
-
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    ds.tokenize(tokenizer)
-
-    ds.compute_labels(get_prompt_node_labels)
 
     return ds
 
@@ -277,21 +280,19 @@ def dataset_path_and_size(dataset_size, easy=True, min_nodes=None, max_nodes=Non
     size_str, rounded_size, scale = round_size_str(dataset_size)
     node_tag = f"_n{min_nodes}-{max_nodes}" if (min_nodes is not None and max_nodes is not None) else ""
     ordering_tag = "" if ordering == "original" else f"_{ordering}"
-    dataset_path = f"./src/experiments/expressiveness/{size_str}_{'easy' if easy else 'hard'}{node_tag}{ordering_tag}_dataset.gtds"
+    dataset_path = f"./src/experiments/expressiveness/datasets/{size_str}_{'easy' if easy else 'hard'}{node_tag}{ordering_tag}_dataset.gtds"
     return dataset_path, rounded_size * scale
 
-def create_and_save_dataset(dataset_size, min_nodes, max_nodes, spectral_dims, model_name, max_rrwp_steps=16, max_rwse_steps=16, easy=True, magnetic_q=0.25, ordering="rcm"):
+def create_and_save_dataset(dataset_size, min_nodes, max_nodes, model_name, easy=True, magnetic_q=0.25, ordering="rcm", magnetic_m=0):
     dataset_path, final_dataset_size = dataset_path_and_size(dataset_size, easy=easy, min_nodes=min_nodes, max_nodes=max_nodes, ordering=ordering)
 
     dataset = prepare_dataset(
         final_dataset_size,
         min_size=min_nodes,
         max_size=max_nodes,
-        spectral_dims=spectral_dims,
         tokenizer_name=model_name,
-        max_rrwp_steps=max_rrwp_steps,
-        max_rwse_steps=max_rwse_steps,
         magnetic_q=magnetic_q,
+        magnetic_m=magnetic_m,
         easy=easy,
         ordering=ordering,
     )
@@ -305,25 +306,21 @@ if __name__ == "__main__":
     DATASET_SIZE = 500
     MIN_NODES = 10
     MAX_NODES = 25
-    SPECTRAL_DIMS = 16
     model_name = "meta-llama/Llama-3.2-1B"
     EASY = False
-    max_rwse_steps = 8
-    max_rrwp_steps = 16
     magnetic_q = 0.25
+    magnetic_m = 0
 
-    print(f"Creating dataset with {DATASET_SIZE // 1000}k examples, node sizes between {MIN_NODES} and {MAX_NODES}, spectral dimensions {SPECTRAL_DIMS}, and tokenizer {model_name}...")
+    print(f"Creating dataset with {DATASET_SIZE} examples, node sizes between {MIN_NODES} and {MAX_NODES}, and tokenizer {model_name}...")
 
     _, dataset_path = create_and_save_dataset(
-        dataset_size=DATASET_SIZE, 
-        min_nodes=MIN_NODES, 
-        max_nodes=MAX_NODES, 
-        spectral_dims=SPECTRAL_DIMS,
+        dataset_size=DATASET_SIZE,
+        min_nodes=MIN_NODES,
+        max_nodes=MAX_NODES,
         model_name=model_name,
         easy=EASY,
-        max_rwse_steps=max_rwse_steps,
-        max_rrwp_steps=max_rrwp_steps,
-        magnetic_q=magnetic_q
+        magnetic_q=magnetic_q,
+        magnetic_m=magnetic_m,
     )
     print(f"Dataset created and saved at {dataset_path}")
 

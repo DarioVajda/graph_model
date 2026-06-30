@@ -177,7 +177,7 @@ if __name__ == "__main__":
     test_dataset_path, _ = dataset_path_and_size(TEST_DATASET_SIZE)
     if not os.path.exists(test_dataset_path):
         print(f"Test dataset not found at {test_dataset_path}. Creating new dataset...")
-        create_and_save_dataset(dataset_size=TEST_DATASET_SIZE, min_nodes=10, max_nodes=20, spectral_dims=16, model_name="meta-llama/Llama-3.2-1B")
+        create_and_save_dataset(dataset_size=TEST_DATASET_SIZE, min_nodes=10, max_nodes=20, model_name="meta-llama/Llama-3.2-1B")
     test_dataset = TextGraphDataset.load(test_dataset_path)
 
     # 2. Setup Model & Tokenizer

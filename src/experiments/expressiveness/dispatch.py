@@ -82,12 +82,18 @@ def build_model(impl, model_name, bias_params, k_hop, k_hop_directed, device,
     return model, tokenizer
 
 
-def build_collator(impl, tokenizer, pad_token_id, bias_params, k_hop, k_hop_directed):
-    """Build the collator matching ``impl`` (v0 ragged batch vs v2 packed batch)."""
+def build_collator(impl, tokenizer, pad_token_id, k_hop, k_hop_directed,
+                   magnetic_m=0, len_buckets=None, node_buckets=None):
+    """Build the collator matching ``impl`` (v0 ragged batch vs v2 packed batch).
+
+    ``magnetic_m`` is the number of magnetic-Laplacian eigenvectors kept (0 -> all
+    N); it must match the value the dataset was generated with. ``len_buckets`` /
+    ``node_buckets`` (flex only) are the L / N padding ladders; ``None`` falls back
+    to GraphCollatorV2's coarse defaults.
+    """
     version, backend = parse_impl(impl)
     if version == "v0":
         return GraphCollator()
-    magnetic_m = bias_params["magnetic_dim"] if bias_params.get("magnetic") else 0
     return GraphCollatorV2(
         tokenizer=tokenizer,
         pad_token_id=pad_token_id,
@@ -95,6 +101,8 @@ def build_collator(impl, tokenizer, pad_token_id, bias_params, k_hop, k_hop_dire
         k_hop_directed=k_hop_directed,
         magnetic_m=magnetic_m,
         pad_to_block=(backend == "flex"),   # flex needs block-aligned L and bucketed N
+        len_buckets=list(len_buckets) if len_buckets is not None else None,
+        node_buckets=list(node_buckets) if node_buckets is not None else None,
     )
 
 

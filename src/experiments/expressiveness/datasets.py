@@ -5,6 +5,7 @@ Dataset loading + label-balance reporting for the expressiveness experiment.
 import os
 
 from ...utils import TextGraphDataset
+from .config import MAGNETIC_Q
 from .data_gen import create_and_save_dataset, dataset_path_and_size
 
 
@@ -23,7 +24,8 @@ def calculate_label_distribution(dataset, tokenized_labels):
     return yes_percentage, no_percentage
 
 
-def load_or_create_dataset(dataset_size, easy, bias_params, model_name, min_nodes, max_nodes, spectral_dims, ordering="rcm"):
+def load_or_create_dataset(dataset_size, easy, model_name, min_nodes, max_nodes,
+                           ordering="rcm", magnetic_q=MAGNETIC_Q, magnetic_m=0):
     """Load a `.gtds` dataset, generating it (with the scalable label scheme + node
     ordering) if absent. The ordering is part of the artifact name, so an RCM
     request never silently reuses an original-order artifact."""
@@ -32,9 +34,8 @@ def load_or_create_dataset(dataset_size, easy, bias_params, model_name, min_node
         print(f"Dataset not found at {path}. Creating new dataset...")
         create_and_save_dataset(
             dataset_size=dataset_size, min_nodes=min_nodes, max_nodes=max_nodes,
-            spectral_dims=spectral_dims, model_name=model_name,
-            max_rrwp_steps=bias_params["max_rw_steps"], max_rwse_steps=bias_params["max_rw_steps"],
-            easy=easy, magnetic_q=bias_params["magnetic_q"], ordering=ordering,
+            model_name=model_name, easy=easy, magnetic_q=magnetic_q,
+            magnetic_m=magnetic_m, ordering=ordering,
         )
     ds = TextGraphDataset.load(path)
     if ds.node_ordering != ordering:

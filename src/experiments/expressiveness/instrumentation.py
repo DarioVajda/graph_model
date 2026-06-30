@@ -90,7 +90,7 @@ def _density_of_batch(out, k_hop, block_size, device):
                            block_size=block_size)
 
 
-def measure_density(dataset, tokenizer, pad_token_id, bias_params, k_hop, k_hop_directed,
+def measure_density(dataset, tokenizer, pad_token_id, magnetic_m, k_hop, k_hop_directed,
                     batch_size, num_sample_graphs=16, num_sample_batches=8,
                     block_size=128, seed=0, device=None):
     """Token + block sparsity for ``k_hop`` on a random subset of ``dataset``.
@@ -104,7 +104,6 @@ def measure_density(dataset, tokenizer, pad_token_id, bias_params, k_hop, k_hop_
       is dense and does not skip blocks.
     """
     device = device or _cuda_device()
-    magnetic_m = bias_params["magnetic_dim"] if bias_params.get("magnetic") else 0
 
     element_collator = GraphCollatorV2(
         tokenizer=tokenizer, pad_token_id=pad_token_id, k_hop=k_hop,

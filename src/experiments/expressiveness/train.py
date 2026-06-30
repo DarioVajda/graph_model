@@ -14,7 +14,7 @@ import torch
 from transformers import TrainingArguments, set_seed
 
 from ...utils import GraphTrainer, GraphTrainerV2, make_compute_metrics, shift_logits_for_metrics
-from .config import ACCURACY_METRIC, run_suffix, tokenized_label_options
+from .config import ACCURACY_METRIC, run_suffix, tokenized_label_options, model_bias_config
 from .dispatch import (
     parse_impl, build_model, build_collator, active_params_for,
     select_active_params, print_trainable_parameters,
@@ -22,6 +22,7 @@ from .dispatch import (
 from .evaluation import smuggle_prediction_step, PreprocessLogits, ComputeMetrics
 from .datasets import calculate_label_distribution, load_or_create_dataset
 from .instrumentation import StepMemCallback, measure_density, format_results_table
+from .results import append_jsonl, TRAIN_RESULTS_PATH
 
 
 def make_trainer(impl, model, training_args, train_dataset, eval_dataset, collator,
@@ -109,6 +110,11 @@ def training_run(
         data_seed=seed,
         logging_steps=1,
         per_device_train_batch_size=batch_size,
+        # Match eval batch to train batch so flex compiles a single batch-size
+        # family. HF defaults per_device_eval_batch_size to 8; with static-shape
+        # max-autotune that 8 != train's 4 spawns a whole separate set of
+        # (L x N x fwd) eval kernels (and post-eval recompile spikes).
+        per_device_eval_batch_size=batch_size,
         gradient_accumulation_steps=accumulation_steps,
         gradient_checkpointing=False,
 
@@ -136,18 +142,67 @@ def training_run(
     return accuracy, step_mem.summary()
 
 
+def _finish_wandb():
+    """End the active wandb run so the next (impl, k_hop, seed) starts a fresh one.
+
+    Multiple configs train in one process (the k_hop / impl loops). HF's
+    WandbCallback only ``wandb.init()``s when ``wandb.run is None``, so without an
+    explicit finish between runs every config after the first silently logs into
+    the first run. Calling ``wandb.finish()`` resets that.
+    """
+    try:
+        import wandb
+        if wandb.run is not None:
+            wandb.finish()
+    except ImportError:
+        pass
+
+
+def _save_train_record(cfg, impl, k_hop, seed, run_name, accuracy, step_mem, dens):
+    """Append one training run's hyperparameters + results to the train JSONL."""
+    record = {
+        "mode": "train",
+        "run_name": run_name,
+        # ── hyperparameters ──
+        "impl": impl, "k_hop": k_hop, "seed": seed,
+        "model_name": cfg.model_name, "difficulty": cfg.difficulty,
+        "num_nodes": cfg.num_nodes, "min_nodes": cfg.min_nodes, "max_nodes": cfg.max_nodes,
+        "train_dataset_size": cfg.train_dataset_size, "eval_dataset_size": cfg.eval_dataset_size,
+        "ordering": cfg.ordering, "magnetic_m": cfg.magnetic_m,
+        "k_hop_directed": cfg.k_hop_directed, "flex_compile_mode": cfg.flex_compile_mode,
+        "lr": cfg.lr, "bias_lr": cfg.bias_lr, "num_epochs": cfg.num_epochs,
+        "batch_size": cfg.batch_size, "accumulation_steps": cfg.accumulation_steps,
+        "max_steps": cfg.max_steps,
+        "lora": cfg.lora, "lora_r": cfg.lora_r, "lora_alpha": cfg.lora_alpha,
+        "lora_dropout": cfg.lora_dropout,
+        "len_buckets": list(cfg.len_buckets) if cfg.len_buckets else None,
+        "node_buckets": list(cfg.node_buckets) if cfg.node_buckets else None,
+        # ── results ──
+        "eval_accuracy": accuracy,
+        "step_ms_mean": step_mem.get("step_ms_mean"),
+        "step_ms_median": step_mem.get("step_ms_median"),
+        "peak_gb": step_mem.get("peak_gb"),
+        "n_steps": step_mem.get("n_steps"),
+        "token_sparsity": dens.get("token_sparsity_mean") if dens else None,
+        "block_sparsity": dens.get("block_sparsity_mean") if dens else None,
+    }
+    append_jsonl(TRAIN_RESULTS_PATH, record)
+    print(f"[results] appended training run to {TRAIN_RESULTS_PATH}")
+
+
 def run_train_mode(cfg, tokenizer, pad_token_id):
     """Small-graph sweep: train every (impl, k_hop, seed) and report the combined table."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenized_labels = tokenized_label_options(tokenizer)
-    suffix = run_suffix(cfg.bias_params)
+    suffix = run_suffix(cfg.magnetic_m)
+    report_to = "wandb" if cfg.wandb_project else "none"
 
     train_dataset = load_or_create_dataset(
-        cfg.train_dataset_size, cfg.is_easy, cfg.bias_params, cfg.model_name,
-        cfg.min_nodes, cfg.max_nodes, cfg.spectral_dims, ordering=cfg.ordering)
+        cfg.train_dataset_size, cfg.is_easy, cfg.model_name,
+        cfg.min_nodes, cfg.max_nodes, ordering=cfg.ordering, magnetic_m=cfg.magnetic_m)
     eval_dataset = load_or_create_dataset(
-        cfg.eval_dataset_size, cfg.is_easy, cfg.bias_params, cfg.model_name,
-        cfg.min_nodes, cfg.max_nodes, cfg.spectral_dims, ordering=cfg.ordering)
+        cfg.eval_dataset_size, cfg.is_easy, cfg.model_name,
+        cfg.min_nodes, cfg.max_nodes, ordering=cfg.ordering, magnetic_m=cfg.magnetic_m)
 
     train_yes, train_no = calculate_label_distribution(train_dataset, tokenized_labels)
     eval_yes, eval_no = calculate_label_distribution(eval_dataset, tokenized_labels)
@@ -155,6 +210,19 @@ def run_train_mode(cfg, tokenizer, pad_token_id):
     print(f"Training dataset label distribution: {train_yes:.2f}% Yes, {train_no:.2f}% No")
     print(f"Evaluation dataset label distribution: {eval_yes:.2f}% Yes, {eval_no:.2f}% No")
     print("!" * 100)
+
+    # Token/block sparsity is a property of k_hop + the data, so measure it once
+    # per k_hop on a random subset of the eval set (backend-independent). Measured
+    # up front so each saved run record can carry its sparsity.
+    density = {}
+    if cfg.measure_density:
+        for k_hop in cfg.k_hops:
+            print(f"\n[density] measuring token/block sparsity at k_hop={k_hop} ...")
+            density[k_hop] = measure_density(
+                eval_dataset, tokenizer, pad_token_id, cfg.magnetic_m, k_hop,
+                cfg.k_hop_directed, batch_size=cfg.batch_size,
+                num_sample_graphs=cfg.density_sample_graphs,
+                num_sample_batches=cfg.density_sample_batches, device=device)
 
     acc = {}      # (impl, k_hop, seed) -> accuracy
     perf = {}     # (impl, k_hop, seed) -> step_mem summary
@@ -171,15 +239,18 @@ def run_train_mode(cfg, tokenizer, pad_token_id):
                 # seed, isolating the k_hop effect from initialization noise.
                 set_seed(seed)
 
-                run_name = f"{cfg.difficulty}_{impl}_k{k_hop}_s{seed}_{suffix}"
+                lora_tag = f"_lora{cfg.lora_r}" if cfg.lora else ""
+                # Lead with the graph size and no backend/difficulty prefix, so this
+                # batch is easy to tell apart from earlier runs on wandb.
+                run_name = f"n{cfg.num_nodes}_k{k_hop}_s{seed}{lora_tag}_{suffix}"
                 print("\n" + "#" * 100)
                 print(f"# Training {impl} (k_hop={k_hop}, seed={seed}) — run '{run_name}'")
                 print("#" * 100)
 
-                model, _ = build_model(impl, cfg.model_name, cfg.bias_params, k_hop,
+                model, _ = build_model(impl, cfg.model_name, model_bias_config(), k_hop,
                                        cfg.k_hop_directed, device, cfg.flex_compile_mode)
                 active_params = active_params_for(impl)
-                model = select_active_params(model, active_params=active_params, lora=None)
+                model = select_active_params(model, active_params=active_params, lora=cfg.lora_config())
                 print_trainable_parameters(model)
 
                 accuracy, step_mem = training_run(
@@ -187,8 +258,9 @@ def run_train_mode(cfg, tokenizer, pad_token_id):
                     model=model,
                     train_dataset=train_dataset,
                     eval_dataset=eval_dataset,
-                    collator=build_collator(impl, tokenizer, pad_token_id, cfg.bias_params,
-                                            k_hop, cfg.k_hop_directed),
+                    collator=build_collator(impl, tokenizer, pad_token_id,
+                                            k_hop, cfg.k_hop_directed, magnetic_m=cfg.magnetic_m,
+                                            len_buckets=cfg.len_buckets, node_buckets=cfg.node_buckets),
                     run_name=run_name,
                     num_epochs=cfg.num_epochs,
                     batch_size=cfg.batch_size,
@@ -198,28 +270,20 @@ def run_train_mode(cfg, tokenizer, pad_token_id):
                     label_options=tokenized_labels,
                     pad_token_id=pad_token_id,
                     active_params=active_params,
-                    report_to=cfg.report_to,
+                    report_to=report_to,
                     eval_steps=cfg.eval_steps,
                     seed=seed,
                     max_steps=cfg.max_steps,
                 )
                 acc[(impl, k_hop, seed)] = accuracy
                 perf[(impl, k_hop, seed)] = step_mem
+                _save_train_record(cfg, impl, k_hop, seed, run_name, accuracy,
+                                   step_mem, density.get(k_hop))
+                if report_to == "wandb":
+                    _finish_wandb()
                 del model
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
-
-    # Token/block sparsity is a property of k_hop + the data, so measure it once
-    # per k_hop on a random subset of the eval set (backend-independent).
-    density = {}
-    if cfg.measure_density:
-        for k_hop in cfg.k_hops:
-            print(f"\n[density] measuring token/block sparsity at k_hop={k_hop} ...")
-            density[k_hop] = measure_density(
-                eval_dataset, tokenizer, pad_token_id, cfg.bias_params, k_hop,
-                cfg.k_hop_directed, batch_size=cfg.batch_size,
-                num_sample_graphs=cfg.density_sample_graphs,
-                num_sample_batches=cfg.density_sample_batches, device=device)
 
     _report(cfg, acc, perf, density)
 

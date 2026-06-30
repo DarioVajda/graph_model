@@ -589,16 +589,32 @@ class TextGraphDataset(Dataset):
         eigenvectors/coordinates never need double precision), so this is lossless
         with respect to what training sees. No-op for absent columns."""
         from datasets import Sequence, Value
+        from datasets.features import LargeList
+
+        # Arrow caps a single written array at 2^31-1 elements. The flattened N×N SPD
+        # (int16) is ~5.8M elems/row at N=2400, so the default 1000-row write batch
+        # (5.8e9 elems) overflows — at every cast AND at save_to_disk. Fixes:
+        #   (1) store SPD as large_list (64-bit offsets), and
+        #   (2) do all dtype casts in ONE pass with a small writer_batch_size so no
+        #       written array exceeds 2^31 (128 rows -> <0.75e9 elems even at N=2400).
+        # save() additionally lowers datasets.config.DEFAULT_MAX_BATCH_SIZE (which
+        # save_to_disk reads) for the same reason. Small-N datasets are unaffected.
         f32 = Value("float32")
-        specs = {
-            "magnetic_V": Sequence(f32),                 # flat (n*m*2,)
-            "magnetic_lambdas": Sequence(f32),           # (m,)
+        targets = {
+            "shortest_path_dists": LargeList(Value("int16")),  # flat (n*n,) int16
+            "magnetic_V": Sequence(f32),                       # flat (n*m*2,)
+            "magnetic_lambdas": Sequence(f32),                 # (m,)
             "laplacian_coordinates": Sequence(Sequence(f32)),  # (n, dim)
-            "rwse": Sequence(Sequence(f32)),             # (n, steps)
+            "rwse": Sequence(Sequence(f32)),                   # (n, steps)
         }
-        for col, feat in specs.items():
-            if col in self._hf_dataset.column_names:
-                self._hf_dataset = self._hf_dataset.cast_column(col, feat)
+        feats = self._hf_dataset.features.copy()
+        changed = False
+        for col, ftype in targets.items():
+            if col in feats:
+                feats[col] = ftype
+                changed = True
+        if changed:
+            self._hf_dataset = self._hf_dataset.cast(feats, batch_size=128, writer_batch_size=128)
 
     def compute_labels(self, get_graph_labels, num_proc=None):
         """
@@ -660,7 +676,13 @@ class TextGraphDataset(Dataset):
             graphs.pkl      <-- List of NetworkX graphs (raw topology in RAM)
         """
         temp_path = self.gtds_path(path + "_temp")
-        path = self.gtds_path(path)        
+        path = self.gtds_path(path)
+
+        # save_to_disk writes RecordBatches of config.DEFAULT_MAX_BATCH_SIZE (1000) rows;
+        # at large N the flat N×N SPD column overflows Arrow's 2^31 per-array write limit
+        # (1000 × 2400² ≈ 5.8e9). Cap the write batch so each array stays under 2^31.
+        import datasets as _ds
+        _ds.config.DEFAULT_MAX_BATCH_SIZE = min(_ds.config.DEFAULT_MAX_BATCH_SIZE, 128)
 
         # 1. Save to a temporary directory first to avoid memory-mapping conflicts
         os.makedirs(temp_path, exist_ok=True)
