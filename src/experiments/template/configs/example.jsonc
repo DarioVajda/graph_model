@@ -1,0 +1,56 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Template sweep config (JSONC: // comments + trailing commas allowed).
+  // Run with:  python3 -m sweep src.experiments.template <this file>
+  //
+  // Expansion rules (how a value becomes runs):
+  //   scalar            -> fixed in every run
+  //   [a, b, c]         -> a sweep AXIS (one run per value; cartesian with others)
+  //   [ {..}, {..} ]    -> a BUNDLE: params that vary TOGETHER; each object's keys
+  //                        flatten into the run, and the bundle's label disappears.
+  // A key may be defined in exactly one place (top-level OR one bundle).
+  // Keys map 1:1 to this experiment's CLI flags (some_key -> --some-key).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "my_sweep",                 // results land in <results_dir>/<name>/
+  "results_dir": "src/experiments/template/results",
+
+  "execution": {
+    "mode": "local",                  // "local" (sequential, this process) | "sbatch"
+    "sbatch": {                       // only used when mode == "sbatch"
+      "granularity": "per_config",    // "single" (one job, in sequence) | "per_config"
+      "max_concurrent": 4,            // cap concurrent per_config jobs (Slurm array %N); omit for no cap
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",               // --gres=gpu:<gpus>
+      "cpus": 16,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      // "nodelist": "ixb3",          // optional -w
+      // "dry_run": true,             // write sbatch_commands.sh but don't submit
+    }
+  },
+
+  // ── sweep axes (lists => swept) ───────────────────────────────────────────
+  "k_hop": [0, 2],
+  "seed":  [0, 1, 2],
+
+  // ── fixed scalars ─────────────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "num_samples": 80,
+  "num_epochs": 5,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 3e-4,
+  "bias_lr": 5e-3,
+  "eval_steps": 20,
+  "lora": true,
+  "lora_r": 16,
+  "wandb_project": null,              // e.g. "GraphLLM"; null = no tracking
+
+  // ── graph-bias features (laplacian/rwse are rejected by this experiment) ──
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true
+}

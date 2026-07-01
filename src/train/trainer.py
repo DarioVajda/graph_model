@@ -71,6 +71,8 @@ def training_run(
     include_f1=False,
     wandb_project=None,
     seed=42,
+    max_steps=-1,
+    num_workers=0,
 ):
     """
     Run a full training loop with evaluation.
@@ -79,6 +81,8 @@ def training_run(
         experiment_name: Used to construct checkpoint path: ./checkpoints/{experiment_name}/{run_name}
         experiment_dir:  Directory for run_metadata.json and results.json (the experiment's source folder).
         wandb_project:   WandB project name. Pass None to disable WandB logging.
+        max_steps:       >0 caps the number of optimizer steps (overrides num_epochs); -1 = train full epochs.
+        num_workers:     DataLoader worker processes; 0 builds batches synchronously on the main process.
     """
     print(f"Gradient checkpointing {'ENABLED' if gradient_checkpointing else 'DISABLED'}.")
 
@@ -90,9 +94,12 @@ def training_run(
 
     training_args = TrainingArguments(
         num_train_epochs=num_epochs,
+        max_steps=max_steps,
         output_dir=f"./checkpoints/{experiment_name}/{run_name}",
         logging_steps=1,
         per_device_train_batch_size=batch_size,
+        dataloader_num_workers=num_workers,
+        dataloader_persistent_workers=(num_workers > 0),
         gradient_accumulation_steps=accumulation_steps,
         gradient_checkpointing=gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False} if gradient_checkpointing else None,
