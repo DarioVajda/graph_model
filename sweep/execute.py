@@ -27,10 +27,20 @@ Local mode runs the resolved configs sequentially in this process. sbatch mode
 submits Slurm jobs whose container `srun` step runs ``slurm_launch.sh`` on a
 generated job script, either as one sequential job (``granularity: single``) or
 one job per config (``granularity: per_config``).
+
+For ``granularity: per_config`` an optional ``execution.sbatch.max_concurrent``
+caps how many configs run at once: instead of one independent job per config, the
+configs are submitted as a single Slurm job array (``--array=0-(K-1)%N``) so Slurm
+keeps at most N tasks running and backfills each freed slot with the next pending
+config until all are done. The index->config assignment is shuffled (seeded on the
+sweep name) so a demand-sorted config list can't cluster all the heavy runs into
+one wave; the mapping is recorded in ``array_map.tsv``. Leave it unset for the
+default behavior (one independent job per config, all queued at once).
 """
 
 import json
 import os
+import random
 import shlex
 import shutil
 import subprocess
@@ -206,7 +216,27 @@ def _srun_wrap(label, job_script, sb):
     return " ".join(shlex.quote(a) for a in srun)
 
 
-def _sbatch_argv(jobname, logpath, wrap, sb):
+def _array_wrap(labels, scripts, sb):
+    """``--wrap`` body for a job array: each task runs its own job script.
+
+    The task's index into ``labels``/``scripts`` is ``$SLURM_ARRAY_TASK_ID``. The
+    two indexed args are emitted raw (not shlex-quoted) so the shell expands them;
+    everything else is quoted normally.
+    """
+    home = os.environ.get("HOME", "")
+    srun = ["srun"]
+    if sb.get("container"):
+        srun += [f"--container-image={sb['container']}",
+                 f"--container-mounts={sb.get('mounts', _SBATCH_DEFAULTS['mounts'])}"]
+    srun += ["env", f"HOME={home}", "PYTHONUNBUFFERED=1", "bash", LAUNCHER]
+    srun_str = " ".join(shlex.quote(a) for a in srun)
+    labels_arr = " ".join(shlex.quote(x) for x in labels)
+    scripts_arr = " ".join(shlex.quote(x) for x in scripts)
+    return (f'LABELS=({labels_arr}); SCRIPTS=({scripts_arr}); i="$SLURM_ARRAY_TASK_ID"; '
+            f'{srun_str} "${{LABELS[$i]}}" "${{SCRIPTS[$i]}}"')
+
+
+def _sbatch_argv(jobname, logpath, wrap, sb, array=None):
     """Assemble the ``sbatch`` argv from the resource block (missing -> defaults)."""
     if not sb.get("partition"):
         raise expand_mod.SweepError("execution.sbatch.partition is required for sbatch mode.")
@@ -217,6 +247,8 @@ def _sbatch_argv(jobname, logpath, wrap, sb):
             "--mem", str(sb.get("mem", _SBATCH_DEFAULTS["mem"])),
             "-t", str(sb.get("time", _SBATCH_DEFAULTS["time"])),
             "-J", jobname, "-o", logpath]
+    if array:
+        argv += ["--array", array]
     if sb.get("account"):
         argv += ["-A", str(sb["account"])]
     if sb.get("nodelist"):
@@ -243,12 +275,37 @@ def _dispatch_sbatch(experiment_module, runs, paths, sb):
         logpath = os.path.join(paths["logs_dir"], f"{sweep_name}.slurm.out")
         jobs.append((sweep_name, _sbatch_argv(sweep_name, logpath, wrap, sb)))
     elif granularity == "per_config":
+        # One job script per config either way; how they're submitted depends on
+        # whether a concurrency cap is set.
+        entries = []   # (name, label, job_script)
         for run, name in zip(runs, paths["names"]):
             label = f"{sweep_name}_{name}"
             job_script = _write_job_script(jobs_dir, label, [argv_for(run, name)])
-            wrap = _srun_wrap(label, job_script, sb)
-            logpath = os.path.join(paths["logs_dir"], f"{name}.slurm.out")
-            jobs.append((name, _sbatch_argv(label, logpath, wrap, sb)))
+            entries.append((name, label, job_script))
+
+        max_concurrent = sb.get("max_concurrent")
+        if max_concurrent:
+            # Single throttled job array: Slurm keeps <=N tasks running and fills a
+            # freed slot with the next pending index until all K are done. Shuffle
+            # index->config (seeded on sweep name) so a demand-sorted config list
+            # can't cluster the heavy runs into one wave; record the mapping.
+            order = list(range(len(entries)))
+            random.Random(sweep_name).shuffle(order)
+            labels = [entries[j][1] for j in order]
+            scripts = [entries[j][2] for j in order]
+            with open(os.path.join(paths["sweep_dir"], "array_map.tsv"), "w") as f:
+                f.write("task\tname\n")
+                for task, j in enumerate(order):
+                    f.write(f"{task}\t{entries[j][0]}\n")
+            wrap = _array_wrap(labels, scripts, sb)
+            array_spec = f"0-{len(entries) - 1}%{int(max_concurrent)}"
+            logpath = os.path.join(paths["logs_dir"], f"{sweep_name}_%A_%a.slurm.out")
+            jobs.append((sweep_name, _sbatch_argv(sweep_name, logpath, wrap, sb, array=array_spec)))
+        else:
+            for name, label, job_script in entries:
+                wrap = _srun_wrap(label, job_script, sb)
+                logpath = os.path.join(paths["logs_dir"], f"{name}.slurm.out")
+                jobs.append((name, _sbatch_argv(label, logpath, wrap, sb)))
     else:
         raise expand_mod.SweepError(
             f"Unknown sbatch granularity {granularity!r} (expected 'single' or 'per_config').")
