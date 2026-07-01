@@ -19,3 +19,4 @@ checkpoints
 wandb
 
 rclone*
+CLAUDE_CONTEXT.md
