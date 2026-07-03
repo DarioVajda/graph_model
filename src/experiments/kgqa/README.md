@@ -1,10 +1,45 @@
-# KGQA experiment (WIP)
+# KGQA experiment
 
-Feeding GNN-RAG's retrieved KG subgraphs directly into a single GTLM model, replacing
+Feeding KG subgraphs directly into a single GTLM model, replacing
 GNN-RAG's GNN-reasoner + LLM-reader pipeline. Starting on **SR-WebQSP**.
 
 > **NOTE:** This README is a temporary stub holding the answer-coverage measurements
 > below. A full rewrite (task description, data-prep pipeline, usage) is pending.
+
+## Running (sweep workflow)
+
+The experiment is a standalone single-run program driven by the generic `sweep`
+runner. **Run everything from the repo root** — both the dataset paths and
+`results_dir` are repo-root-relative.
+
+```bash
+# 1. Scaffold a sweep config, then edit its axes / scalars.
+python3 -m src.experiments.kgqa --init my_sweep
+#    -> src/experiments/kgqa/configs/my_sweep.jsonc
+
+# 2. Build the .gtds datasets for every data config the sweep references
+python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/my_sweep.jsonc
+
+# 3. Train (flip "mode" back to "train").
+python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/my_sweep.jsonc
+
+# 4. Aggregate the runs once the (sbatch) jobs finish.
+python3 -m sweep.report src/experiments/kgqa/results/my_sweep
+```
+
+For a single config / quick iteration, invoke the experiment directly (bypassing
+the sweep runner):
+
+```bash
+python3 -m src.experiments.kgqa --mode data_prep                 # build this config's datasets
+python3 -m src.experiments.kgqa --lora-r 16 --k-hop 2            # train one config
+python3 -m src.experiments.kgqa --max-steps 4 --gen-max-samples 8   # smoke test
+```
+
+Standalone train runs (no `--runs-jsonl`) append their record to
+`src/experiments/kgqa/results/train_runs.jsonl`.
+
+See `configs/example.jsonc` for an annotated template.
 
 ## Answer-coverage ceilings (SR-WebQSP)
 
@@ -14,7 +49,14 @@ questions), so the macro rows are the operative ceilings; micro is diagnostic on
 
 Measured from `data/data/sr-webqsp/{train,dev,test}.json` (answer present ⟺ its `kb_id`
 is a node in `subgraph.tuples`). "Perfect precision" = model emits only correct, present
-golds; `N_max=20` = generation capped at 20 answers.
+golds; `N_max=20` = generation capped at 20 answers. 
+
+Reproduce with:
+```
+python3 -m src.experiments.kgqa --mode data_prep --analyse-dataset
+``` 
+(see `analyse_dataset.py`; prints this table and saves `coverage_analysis.json` next to
+the built splits).
 
 | Ceiling | **test** (n=1628) | train (n=2826) | dev (n=246) | Bounds |
 |---|---|---|---|---|

@@ -18,14 +18,16 @@ Node naming is v1 = entity_names.json ONLY. Harvesting answer `text` into node
 text would leak the answer at eval (gold nodes would be the only newly-named
 ones), so answer text feeds ONLY the target / eval matching.
 
-Run:
-    python -m src.experiments.kgqa.process_dataset [--max_nodes 512 --rel_mode last_1 ...]
+This is the ``data_prep`` mode of the experiment. It consumes a ``RunConfig``
+(not its own argparse) and is driven by ``run_data_prep_mode``; the entry point is
+
+    python -m src.experiments.kgqa --mode data_prep [--max-nodes 512 --rel-mode last_1 ...]
 """
 
 import os
 import re
 import json
-import argparse
+import fcntl
 import random
 from collections import defaultdict, deque
 
@@ -36,8 +38,8 @@ from transformers import AutoTokenizer
 from ...utils import TextGraphDataset
 
 EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SR_DIR = os.path.join(EXPERIMENT_DIR, "data", "data", "sr-webqsp")
-ENTITY_NAMES_PATH = os.path.join(EXPERIMENT_DIR, "data", "entity_names.json")
+SR_DIR = os.path.join(EXPERIMENT_DIR, "data", "sr-webqsp")
+ENTITY_NAMES_PATH = os.path.join(EXPERIMENT_DIR, "entities_names.json")
 OUTPUT_ROOT = os.path.join(EXPERIMENT_DIR, "processed_datasets")
 
 UNNAMED = "unnamed entity"
@@ -46,22 +48,6 @@ ANSWER_DELIM = "\nAnswer:"          # prompt = "{question}\nAnswer: a1, a2, ..."
 ANSWER_SEP = ", "
 
 SPLITS = {"train": "train.json", "dev": "dev.json", "test": "test.json"}
-
-# Defaults shared by the CLI (process_dataset) and the loader (load_data), so both
-# resolve the same config-keyed cache directory.
-DEFAULTS = {
-    "base_model": "meta-llama/Llama-3.2-1B",
-    "rel_mode": "last_1",
-    "max_nodes": 512,
-    "n_max": 20,
-    "k": 8,
-    "spd_cutoff": 64,
-    "magnetic_q": 0.25,
-    "magnetic_m": 128,
-    "max_length": 1024,
-    "rcm": True,
-    "seed": 42,
-}
 
 
 # --------------------------------------------------------------------------- #
@@ -265,7 +251,7 @@ def add_prompt_node(G, record, answer_str, gold_answers):
     return g
 
 
-def build_question_graphs(record, entity_names, cfg, rng):
+def build_question_graphs(record, entity_names, cfg, versions, rng):
     """Return a list of `versions` nx graphs for one question (empty if not trainable)."""
     base = build_base_levi(record, entity_names, cfg.rel_mode, cfg.max_nodes)
     present = present_answer_texts(base, record)
@@ -273,7 +259,7 @@ def build_question_graphs(record, entity_names, cfg, rng):
     if not present:
         return []                             # no groundable answer -> unusable for supervision
     graphs = []
-    for _ in range(cfg.versions):
+    for _ in range(versions):
         order = present[:]
         rng.shuffle(order)
         answer_str = ANSWER_SEP.join(order[: cfg.n_max])
@@ -309,30 +295,21 @@ class AnswerLabelMasker:
 
 
 # --------------------------------------------------------------------------- #
-# Driver
+# Driver — data_prep mode of the experiment (consumes a RunConfig)
 # --------------------------------------------------------------------------- #
-def config_key(cfg):
-    model = str(cfg.base_model).replace("/", "-")
-    return (f"sr-webqsp_{model}_v{cfg.rel_mode}_cap{cfg.max_nodes}_nmax{cfg.n_max}"
-            f"_k{cfg.k}_spd{cfg.spd_cutoff}_magq{cfg.magnetic_q}m{cfg.magnetic_m}"
-            f"_rcm{int(cfg.rcm)}_seed{cfg.seed}")
-
-
 def process_split(split, records, entity_names, tokenizer, question_end, cfg, out_dir):
-    versions = cfg.k if split == "train" else 1        # augmentation only for training
+    """Build + save one split's `.gtds` from raw SR records. Returns (kept, graphs)."""
+    versions = cfg.versions if split == "train" else 1        # augmentation only for training
+    # data_seed (not the training seed) drives the answer-order augmentation RNG;
+    # per-split offset so train/dev/test don't share a shuffle stream.
+    rng = random.Random(cfg.data_seed + hash(split) % 10_000)
 
-    class _C:  # lightweight per-split view of cfg with the right version count
-        rel_mode, max_nodes, n_max = cfg.rel_mode, cfg.max_nodes, cfg.n_max
-        seed = cfg.seed
-    _C.versions = versions
-
-    rng = random.Random(cfg.seed + hash(split) % 10_000)
     graphs, kept, skipped = [], 0, 0
     for rec in tqdm(records, desc=f"Building {split} graphs"):
         if not rec.get("answers"):
             skipped += 1
             continue
-        gs = build_question_graphs(rec, entity_names, _C, rng)
+        gs = build_question_graphs(rec, entity_names, cfg, versions, rng)
         if not gs:
             skipped += 1
             continue
@@ -344,51 +321,64 @@ def process_split(split, records, entity_names, tokenizer, question_end, cfg, ou
                           per_graph_versions=versions, rcm_ordering=cfg.rcm)
     ds.tokenize(tokenizer, max_length=cfg.max_length, add_eos=True)
     ds.compute_labels(AnswerLabelMasker(question_end))
-    ds.compute_shortest_path_distances(cutoff=cfg.spd_cutoff, use_gpu=cfg.use_gpu)
+    ds.compute_shortest_path_distances(cutoff=cfg.max_spd, use_gpu=cfg.use_gpu)
     ds.compute_magnetic_lap(q=cfg.magnetic_q, m=cfg.magnetic_m, use_gpu=cfg.use_gpu)
     ds.cast_float_features_to_fp32()
     ds.save(os.path.join(out_dir, split))
     return kept, len(graphs)
 
 
-def parse_args():
-    p = argparse.ArgumentParser(description="Prepare SR-WebQSP graphs for GTLM (KGQA).")
-    d = DEFAULTS
-    p.add_argument("--base_model", default=d["base_model"])
-    p.add_argument("--rel_mode", default=d["rel_mode"], choices=["last_1", "last_2", "full"])
-    p.add_argument("--max_nodes", type=int, default=d["max_nodes"])
-    p.add_argument("--n_max", type=int, default=d["n_max"], help="max answers in the training target")
-    p.add_argument("--k", type=int, default=d["k"], help="per_graph_versions (answer-order augmentation)")
-    p.add_argument("--spd_cutoff", type=int, default=d["spd_cutoff"])
-    p.add_argument("--magnetic_q", type=float, default=d["magnetic_q"])
-    p.add_argument("--magnetic_m", type=int, default=d["magnetic_m"])
-    p.add_argument("--max_length", type=int, default=d["max_length"], help="per-node token cap (kept non-binding)")
-    p.add_argument("--rcm", action="store_true", default=d["rcm"])
-    p.add_argument("--no_rcm", dest="rcm", action="store_false")
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--no_gpu", dest="use_gpu", action="store_false", default=True)
-    p.add_argument("--splits", nargs="+", default=list(SPLITS), choices=list(SPLITS))
-    return p.parse_args()
+def _build_split_if_missing(split, cfg, out_dir, entity_names, tokenizer, question_end):
+    """Build one split unless its `.gtds` already exists (idempotent).
 
-
-def main():
-    cfg = parse_args()
-    out_dir = os.path.join(OUTPUT_ROOT, config_key(cfg))
+    A flock around the build lets concurrent jobs (e.g. many ``per_config`` sbatch
+    tasks that share one data config) build each split exactly once: the first
+    builds it, the rest wait then find it present. Mirrors the flock in the
+    expressiveness ``load_or_create_dataset``.
+    """
+    split_dir = os.path.join(out_dir, split)
+    if os.path.isdir(split_dir):
+        print(f"[data_prep] {split}: already present at {split_dir} — skipping.")
+        return
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.json"), "w") as f:
-        json.dump(vars(cfg), f, indent=2)
-
-    print(f"Loading entity names from {ENTITY_NAMES_PATH} ...")
-    entity_names = json.load(open(ENTITY_NAMES_PATH))
-    tokenizer = AutoTokenizer.from_pretrained(cfg.base_model)
-    question_end = tokenizer("Answer:", add_special_tokens=False)["input_ids"]
-
-    for split in cfg.splits:
+    with open(split_dir + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.isdir(split_dir):
+            print(f"[data_prep] {split}: built by a concurrent job — skipping.")
+            return
         records = [json.loads(l) for l in open(os.path.join(SR_DIR, SPLITS[split]))]
         process_split(split, records, entity_names, tokenizer, question_end, cfg, out_dir)
 
-    print(f"\nDone. Cached dataset at {out_dir}")
 
+def run_data_prep_mode(cfg, splits=("train", "dev", "test")):
+    """Ensure this config's `.gtds` splits exist under ``OUTPUT_ROOT/data_config_key``.
 
-if __name__ == "__main__":
-    main()
+    Routed to from ``__main__`` when ``--mode data_prep``. For a multi-config
+    sweep, run it once in ``data_prep`` mode (each config builds its own splits;
+    the per-split flock makes parallel jobs build each artifact exactly once)
+    before running again in ``train`` mode.
+    """
+    out_dir = os.path.join(OUTPUT_ROOT, cfg.data_config_key())
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "config.json"), "w") as f:
+        json.dump({"data_config_key": cfg.data_config_key(),
+                   "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
+                   "versions": cfg.versions, "max_length": cfg.max_length, "rcm": cfg.rcm,
+                   "data_seed": cfg.data_seed, "model_name": cfg.model_name,
+                   "max_spd": cfg.max_spd, "magnetic_q": cfg.magnetic_q,
+                   "magnetic_m": cfg.magnetic_m}, f, indent=2)
+
+    print(f"[data_prep] out_dir={out_dir}")
+    print(f"Loading entity names from {ENTITY_NAMES_PATH} ...")
+    entity_names = json.load(open(ENTITY_NAMES_PATH))
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
+    question_end = tokenizer("Answer:", add_special_tokens=False)["input_ids"]
+
+    for split in splits:
+        _build_split_if_missing(split, cfg, out_dir, entity_names, tokenizer, question_end)
+
+    if cfg.analyse_dataset:
+        from .analyse_dataset import run_analysis
+        run_analysis(cfg, SR_DIR, {s: SPLITS[s] for s in splits}, out_dir)
+
+    print(f"\n[data_prep] done. Cached dataset at {out_dir}")

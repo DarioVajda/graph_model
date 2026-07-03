@@ -1,0 +1,88 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // KGQA (SR-WebQSP) sweep config (JSONC: // comments + trailing commas allowed).
+  // Run with:  python3 -m sweep src.experiments.kgqa <this file>
+  //
+  // Expansion rules (how a value becomes runs):
+  //   scalar            -> fixed in every run
+  //   [a, b, c]         -> a sweep AXIS (one run per value; cartesian with others)
+  //   [[..], [..]]      -> a list-valued axis
+  //   [ {..}, {..} ]    -> a BUNDLE: params that vary TOGETHER; each object's keys
+  //                        flatten into the run, and the bundle's label disappears.
+  // A key may be defined in exactly one place (top-level OR one bundle).
+  // Keys map 1:1 to the experiment's CLI flags (singular: lora_r / k_hop / seed).
+  //
+  // TWO-STEP WORKFLOW: run this file once with "mode": "data_prep" to build the
+  // .gtds cache for every data config it references, then again with "mode":
+  // "train". A data_prep sweep is cheap (no GPU training) and idempotent.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "my_sweep",                 // results land in <results_dir>/<name>/
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "local",                  // "local" | "sbatch"
+    "sbatch": {                       // only used when mode == "sbatch"
+      "granularity": "per_config",    // "single" (one job, in sequence) | "per_config"
+      // Cap how many configs run at once (submits one throttled Slurm job array,
+      // --array=0-(K-1)%N). KGQA runs are heavy (1B model + LoRA), so bound the
+      // concurrent load. Omit for one independent job per config (all queued).
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",               // --gres=gpu:<gpus>
+      "cpus": 8,                      // cf. old train.sbatch: 8 CPUs
+      "mem": "64G",                   // cf. old train.sbatch: 64G
+      "time": "12:00:00",             // cf. old train.sbatch: 12h
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      // "nodelist": "ixb3",          // optional -w
+      // "dry_run": true,             // write sbatch_commands.sh but don't submit
+      // HF + wandb creds are read from $HOME (~/.cache/huggingface/token, ~/.netrc);
+      // torch bundles its CUDA runtime, so no `module load` is needed.
+    }
+  },
+
+  // ── sweep axes (lists => swept) ───────────────────────────────────────────
+  "mode":   "train",                  // "train" | "data_prep" (run once in data_prep first)
+  "lora_r": [8, 16],                  // 0 disables LoRA
+  "k_hop":  [0, 2],                   // 0 disables the k-hop attention gate
+  "seed":   [0, 1, 2],
+
+  // ── a data-config bundle (fields that change the .gtds cache dir, coupled) ─
+  "data_profile": [
+    { "rel_mode": "last_1", "max_nodes": 512 },
+    { "rel_mode": "last_2", "max_nodes": 512 }
+  ],
+
+  // ── fixed scalars ─────────────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "graph_attn_impl": "flex",          // "flex" | "eager"
+  "dtype": "bf16",                    // "bf16" | "fp32"
+  "k_hop_directed": false,
+  "gradient_checkpointing": true,
+  "num_epochs": 5,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 3e-4,
+  "bias_lr": 5e-3,
+  "eval_steps": 100,
+  "max_steps": -1,                    // >0 caps optimizer steps (quick smoke tests)
+  "num_workers": 4,
+  "n_max": 20,
+  "versions": 8,                      // per-graph answer-order augmentations (train only)
+  "data_seed": 42,                    // augmentation seed (baked into the data cache key)
+
+  // ── graph-bias features (spd + magnetic; both used by data prep and model) ─
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,                // model bias-MLP width
+  "magnetic_m": 128,                  // # magnetic eigenvectors (data + collator; 0 = all N)
+  "magnetic_q": 0.25,
+
+  // ── generative eval ───────────────────────────────────────────────────────
+  "gen_max_new_tokens": 128,
+  "gen_max_samples": null,            // null = full dev set
+
+  "wandb_project": null               // e.g. "GraphLLM"; null = no tracking
+}

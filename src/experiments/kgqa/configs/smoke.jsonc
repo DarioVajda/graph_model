@@ -1,0 +1,36 @@
+{
+  // Smoke sweep: tiny knobs, one 2-value axis. Used to dry-run the sbatch path
+  // (writes sbatch_commands.sh + job scripts, submits nothing) and, with
+  // "mode": "local", to do a fast end-to-end check once a .gtds cache exists.
+  "name": "smoke",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,            // throttled job array (--array=0-(K-1)%2)
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "dry_run": true                 // inspect commands; do not submit
+    }
+  },
+
+  "mode": "train",
+  "k_hop": [0, 2],                    // the only axis -> 2 runs
+
+  // tiny everything else
+  "lora_r": 8,
+  "seed": 0,
+  "num_epochs": 1,
+  "max_steps": 4,
+  "eval_steps": 2,
+  "gen_max_samples": 8,
+  "num_workers": 0,
+  "wandb_project": null
+}

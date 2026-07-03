@@ -1,0 +1,40 @@
+{
+  // Build the .gtds cache for the default KGQA data config, once, on the cluster.
+  // One run (all data keys are fixed scalars) -> one sbatch job. Idempotent: a
+  // split whose directory already exists is skipped. Flip a train sweep's data
+  // keys to match these to reuse this cache.
+  "name": "data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",               // SPD + magnetic features build on GPU (use_gpu=true)
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  // data-config keys (these determine the cache directory)
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 20,
+  "versions": 8,
+  "max_length": 1024,
+  "rcm": true,
+  "data_seed": 42,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}
