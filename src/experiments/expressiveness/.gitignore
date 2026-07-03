@@ -1,0 +1,6 @@
+# Regenerable sweep artifacts — keep only config.jsonc + runs.jsonl
+results/*/logs/
+results/*/jobs/
+results/*/resolved/
+results/*/sbatch_commands.sh
+results/*/jobs.txt

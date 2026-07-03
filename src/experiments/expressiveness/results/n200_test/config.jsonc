@@ -1,0 +1,57 @@
+{
+  // Small-but-real n=200 test. Node range derives to 160-240 (0.8-1.2x).
+  // *Run with*:
+  //   python3 -m sweep src.experiments.expressiveness src/experiments/expressiveness/configs/n200_test.jsonc
+
+  "name": "n200_test",
+  "results_dir": "src/experiments/expressiveness/results",
+
+  "execution": {
+    "mode": "sbatch",                 // switch to "local" on a GPU box
+    "sbatch": {
+      "granularity": "per_config",    // use "single" for one sequential job
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",
+      "cpus": 16,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "dry_run": false              // write sbatch_commands.sh + jobs/ without submitting
+    }
+  },
+
+  // ── what to run ───────────────────────────────────────────────────────────
+  "mode": "train",                    // flip to "data_prep" only if datasets are missing
+  "impl":  ["v2-flex"],
+  "k_hop": [0, 2, 3],
+  "seed":  0,
+
+  // ── graph size ────────────────────────────────────────────────────────────
+  "num_nodes": 200,                   // -> n160-240
+
+  // Tight flex buckets for this size
+  "len_buckets":  [[384]],
+  "node_buckets": [[256]],
+
+  // ── fixed scalars ─────────────────────────────────────────────────────────
+  "difficulty": "HARD",
+  "ordering": "rcm",
+  "magnetic_m": 128,                  // matches the existing eval dataset (do NOT use 0 here)
+  "train_dataset_size": 2000,
+  "eval_dataset_size": 200,
+  "num_epochs": 25,
+  "batch_size": 8,
+  "accumulation_steps": 4,            // effective batch 32
+  "eval_steps": 100,
+  "bias_lr": 1e-3,
+  "lr": 1e-5,
+  "lora": [true, false],
+  "lora_r": 8,
+  "flex_compile_mode": "max-autotune-no-cudagraphs",   // real speed/efficiency path ("default" only for quick iteration)
+  "wandb_project": "GraphLLM",        // e.g. "GraphLLM" to track
+
+  // ── graph-bias features ───────────────────────────────────────────────────
+  "spd": true,
+  "magnetic": true
+}
