@@ -1,0 +1,62 @@
+{
+  // Experiment 2 — magnetic-Laplacian bias cost & value (n=500, k=0, full 25 epochs).
+  // Two runs, identical except the magnetic bias: spd+magnetic vs spd-only. With
+  // magnetic off no MagneticBias module is built, so the four O(N^2) einsums never
+  // run (bias.py only instantiates enabled types). Purpose:
+  //   (1) speed — how much do the magnetic einsums cost per step, and
+  //   (2) quality — does magnetic improve final eval accuracy over spd alone.
+  // num_workers fixed at 8 (the fix from Exp 1). granularity "single" runs both on
+  // the SAME GPU for a clean step-time comparison.
+  // Run: python3 -m sweep src.experiments.expressiveness src/experiments/expressiveness/configs/exp_bias_ablation.jsonc
+
+  "name": "exp_bias_ablation",
+  "results_dir": "src/experiments/expressiveness/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",    // one job per run, in parallel (identical idle B300s)
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 16,
+      "mem": "128G",
+      "time": "16:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "dry_run": false
+    }
+  },
+
+  "mode": "train",
+  "impl":  ["v2-flex"],
+  "k_hop": 0,
+  "seed":  0,
+
+  "num_workers": 8,
+
+  // the only axis: magnetic bias on/off (spd stays on in both)
+  "magnetic": [true, false],
+  "spd": true,
+
+  // ── graph size + its tight n=500 buckets ──────────────────────────────────
+  "num_nodes":    500,
+  "len_buckets":  [[640, 768]],
+  "node_buckets": [[512, 640]],
+
+  // ── fixed scalars ─────────────────────────────────────────────────────────
+  "difficulty": "HARD",
+  "ordering": "rcm",
+  "magnetic_m": 128,                  // dataset stores m=128; ignored by the spd-only run
+  "train_dataset_size": 2000,
+  "eval_dataset_size": 200,
+  "num_epochs": 25,
+  "batch_size": 4,
+  "accumulation_steps": 8,            // effective batch 32
+  "eval_steps": 100,
+  "bias_lr": 1e-3,
+  "lr": 1e-5,
+  "lora": true,
+  "lora_r": 8,
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "wandb_project": "GraphLLM"
+}

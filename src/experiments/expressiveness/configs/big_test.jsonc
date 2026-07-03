@@ -1,0 +1,59 @@
+{
+  // Large-graph sweep at n=1000 and n=2000 (ranges 800-1200 / 1600-2400, 0.8-1.2x).
+  // Full matrix: k_hop {0,3} x seed {0,1,2} x size {1000,2000} x magnetic {on,off}
+  //   = 2 x 3 x 2 x 2 = 24 runs, submitted one Slurm job each (per_config).
+  // *Run with*:
+  //   python3 -m sweep src.experiments.expressiveness src/experiments/expressiveness/configs/big_test.jsonc
+
+  "name": "big_test",
+  "results_dir": "src/experiments/expressiveness/results",
+
+  "execution": {
+    "mode": "sbatch",                 // switch to "local" on a GPU box
+    "sbatch": {
+      "granularity": "per_config",    // one job per run, all 24 in parallel
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",               // ixb[5-8]; --gres=gpu:B300:1
+      "cpus": 24,                     // headroom to feed 16 dataloader workers + main proc
+      "mem": "256G",
+      "time": "36:00:00",             // n=2000/25ep is ~20h+compile on B200; 36h is a safe cap
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "dry_run": false                // write sbatch_commands.sh + jobs/ without submitting
+    }
+  },
+
+  // ── what to run
+  "mode": "train",                    // flip to "data_prep" only if datasets are missing
+  "impl":  ["v2-flex"],
+  "k_hop": [0, 3],
+  "seed":  0,
+
+  // ── graph size + its buckets (a BUNDLE: these vary TOGETHER, one per size)
+  "size_profile": [
+    { "num_nodes": 1000, "len_buckets": [1408, 1664, 1792],       "node_buckets": [1024, 1280],
+      "batch_size": 4, "accumulation_steps": 8 },
+    { "num_nodes": 2000, "len_buckets": [3200, 3712, 4096, 4224], "node_buckets": [2048, 2432],
+      "batch_size": 2, "accumulation_steps": 16 }
+  ],
+
+  // ── graph-bias features ───────────────────────────────────────────────────
+  "spd": true,
+  "magnetic": [true, false],          // ablation axis: spd+magnetic vs spd-only
+
+  // ── fixed scalars
+  "difficulty": "HARD",
+  "ordering": "rcm",
+  "magnetic_m": 128,                  // all datasets store m=128 (do NOT use 0 here)
+  "train_dataset_size": 2000,
+  "eval_dataset_size": 200,
+  "num_epochs": 25,
+  "eval_steps": 100,
+  "num_workers": 16,
+  "bias_lr": 1e-3,
+  "lr": 1e-5,
+  "lora": true,
+  "lora_r": 8,
+  "flex_compile_mode": "max-autotune-no-cudagraphs",   // real speed/efficiency path
+  "wandb_project": "GraphLLM"
+}

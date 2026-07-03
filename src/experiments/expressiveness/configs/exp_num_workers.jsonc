@@ -1,0 +1,61 @@
+{
+  // Experiment 1 — DataLoader num_workers impact on step speed.
+  // The SAME n=1000, k=0 config run twice: num_workers 0 (synchronous — the old
+  // HF default that builds each batch's O(N^2) spd+magnetic features on the main
+  // process, stalling the GPU) vs 8 (overlaps that build with compute).
+  // granularity "single" runs both back-to-back on the SAME GPU, so the step-time
+  // delta is a clean measure of the dataloader stall (no cross-GPU noise).
+  // Run: python3 -m sweep src.experiments.expressiveness src/experiments/expressiveness/configs/exp_num_workers.jsonc
+
+  "name": "exp_num_workers",
+  "results_dir": "src/experiments/expressiveness/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",    // one job per run, in parallel (identical idle B300s)
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 16,                     // enough cores to feed 8 workers
+      "mem": "128G",
+      "time": "6:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "dry_run": false
+    }
+  },
+
+  "mode": "train",
+  "impl":  ["v2-flex"],
+  "k_hop": 0,
+  "seed":  0,
+
+  // the only axis: dataloader workers (before / after the fix)
+  "num_workers": [0, 8],
+
+  // ── graph size + its tight n=1000 buckets ─────────────────────────────────
+  "num_nodes":    1000,
+  "len_buckets":  [[1408, 1664, 1792]],
+  "node_buckets": [[1024, 1280]],
+
+  // ── fixed scalars ─────────────────────────────────────────────────────────
+  "difficulty": "HARD",
+  "ordering": "rcm",
+  "magnetic_m": 128,
+  "train_dataset_size": 2000,
+  "eval_dataset_size": 200,
+  "num_epochs": 3,
+  "batch_size": 4,
+  "accumulation_steps": 8,            // effective batch 32
+  "eval_steps": 25,
+  "bias_lr": 1e-3,
+  "lr": 1e-5,
+  "lora": true,
+  "lora_r": 8,
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "wandb_project": "GraphLLM",
+
+  // full bias (spd + magnetic) so the per-batch build is the heavy realistic one
+  "spd": true,
+  "magnetic": true
+}
