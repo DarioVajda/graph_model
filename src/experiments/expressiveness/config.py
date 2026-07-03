@@ -32,21 +32,13 @@ ACCURACY_METRIC = {"v0": "eval_em_accuracy", "v2": "eval_em_accuracy"}
 POSSIBLE_LABELS = [" Yes", " No"]
 
 
-def model_bias_config():
-    """The fixed graph-bias config passed to the model (spd + magnetic only).
-
-    These are the flag/architecture fields the model config reads; ``laplacian``,
-    ``rwse`` and ``rrwp`` are left at their ``False`` defaults so the model builds
-    no modules for them. ``magnetic_m`` (eigenvector truncation) is a data/collator
-    concept and is *not* part of this dict.
-    """
-    return {
-        "spd": True,
-        "max_spd": MAX_SPD,
-        "magnetic": True,
-        "magnetic_dim": MAGNETIC_DIM,
-        "magnetic_q": MAGNETIC_Q,
-    }
+# Graph-bias features. ``spd`` + ``magnetic`` are wired end-to-end (data_gen
+# computes them; the model builds their modules). ``laplacian`` / ``rwse`` /
+# ``rrwp`` are exposed in the config schema for completeness but are NOT wired in
+# this experiment — data_gen no longer produces them — so RunConfig.validate()
+# rejects them rather than letting a run silently break.
+WIRED_FEATURES = ("spd", "magnetic")
+UNWIRED_FEATURES = ("laplacian", "rwse", "rrwp")
 
 
 def tokenized_label_options(tokenizer, labels=POSSIBLE_LABELS):
@@ -80,6 +72,19 @@ class RunConfig:
     # generation and the collator, so they always agree.
     magnetic_m: int = 0
 
+    # ── graph-bias features ──────────────────────────────────────────────────
+    # spd + magnetic are wired end-to-end; laplacian/rwse/rrwp are exposed in the
+    # schema but rejected by validate() (data_gen no longer computes them). The
+    # numeric knobs default to the (formerly constant) architecture values.
+    spd: bool = True
+    magnetic: bool = True
+    laplacian: bool = False
+    rwse: bool = False
+    rrwp: bool = False
+    max_spd: int = MAX_SPD
+    magnetic_dim: int = MAGNETIC_DIM
+    magnetic_q: float = MAGNETIC_Q
+
     # ── graph size (shared by train graph range + bench fixed size) ──────────
     num_nodes: int = 500
     # Optional explicit overrides; when None they are derived from ``num_nodes``
@@ -103,6 +108,11 @@ class RunConfig:
     batch_size: int = 4
     accumulation_steps: int = 8
     eval_steps: int = 25
+    # DataLoader worker processes. 0 (HF default) builds each batch's O(N^2) spd +
+    # magnetic features synchronously on the main process, stalling the GPU between
+    # steps; >0 overlaps that construction with compute. With N in the thousands the
+    # per-item build is ~seconds, so this matters a lot at large graph sizes.
+    num_workers: int = 4
     seeds: tuple = (0,)
     max_steps: int = -1                                   # >0 caps steps (quick tests)
 
@@ -144,3 +154,34 @@ class RunConfig:
     @property
     def is_easy(self) -> bool:
         return self.difficulty == "EASY"
+
+    def validate(self):
+        """Reject settings this experiment does not support, with a clear message.
+
+        The runner is experiment-agnostic and will happily pass any key through;
+        this is where the experiment draws its own line. Only spd + magnetic are
+        wired (data + model); enabling laplacian/rwse/rrwp would build model
+        modules with no matching dataset features, so we fail fast instead.
+        """
+        enabled_unwired = [f for f in UNWIRED_FEATURES if getattr(self, f)]
+        if enabled_unwired:
+            raise ValueError(
+                f"Bias feature(s) {enabled_unwired} are exposed in the config but not "
+                f"wired in this experiment (data_gen computes only {WIRED_FEATURES}). "
+                f"Disable them or extend data_gen to produce their features.")
+        if not (self.spd or self.magnetic):
+            raise ValueError("At least one of spd / magnetic must be enabled.")
+        return self
+
+    def model_bias_config(self):
+        """The graph-bias flag/architecture dict passed to the model config.
+
+        Only enabled, wired features contribute keys, so the model builds modules
+        exactly for the features the dataset carries.
+        """
+        cfg = {}
+        if self.spd:
+            cfg.update(spd=True, max_spd=self.max_spd)
+        if self.magnetic:
+            cfg.update(magnetic=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+        return cfg

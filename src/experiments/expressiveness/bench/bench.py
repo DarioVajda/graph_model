@@ -8,19 +8,25 @@ mode exists to probe a large size quickly without full training. The graph size
 is a single fixed value (``cfg.num_nodes``); sweep multiple sizes by re-invoking.
 """
 
+import os
 import time
 
 import torch
 from transformers import AutoTokenizer
 
-from .config import MAGNETIC_Q, model_bias_config
-from .data_gen import prepare_dataset
-from .dispatch import (
+from ..config import MAGNETIC_Q
+from ..data.data_gen import prepare_dataset
+from ..training.dispatch import (
     build_model, build_collator, forward_loss, active_params_for, select_active_params,
 )
-from .instrumentation import measure_density
-from .results import append_jsonl, BENCH_RESULTS_PATH
-from ...models.flex_kernel import align_len
+from ..training.instrumentation import measure_density
+from .._io import append_jsonl
+from ....models.flex_kernel import align_len
+
+# Bench runs standalone (outside the sweep wrapper), so it logs to a fixed file
+# in the experiment's results/ dir rather than a per-sweep runs.jsonl.
+BENCH_RESULTS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results", "benchmarks.jsonl")
 
 
 def _tight_buckets(examples, block_size=128):
@@ -32,7 +38,7 @@ def _tight_buckets(examples, block_size=128):
     return [align_len(max_L, block_size)], [max_N]
 
 
-def bench_impl(impl, examples, model_name, k_hop, k_hop_directed,
+def bench_impl(impl, examples, model_name, bias_config, k_hop, k_hop_directed,
                batch_size, num_warmup, num_iters, device, flex_compile_mode,
                magnetic_m=0, len_buckets=None, node_buckets=None):
     """Time a few train steps for one impl on a fixed pool of large graphs.
@@ -40,7 +46,7 @@ def bench_impl(impl, examples, model_name, k_hop, k_hop_directed,
     Returns (ms_per_step, peak_mem_gb) or (None, None) on CUDA OOM.
     """
     model, tokenizer = build_model(
-        impl, model_name, model_bias_config(), k_hop, k_hop_directed, device, flex_compile_mode
+        impl, model_name, bias_config, k_hop, k_hop_directed, device, flex_compile_mode
     )
     model = select_active_params(model, active_params=active_params_for(impl))
     model.train()
@@ -94,7 +100,7 @@ def bench_impl(impl, examples, model_name, k_hop, k_hop_directed,
             torch.cuda.empty_cache()
 
 
-def run_bench(impls, size, model_name, k_hop, k_hop_directed,
+def run_bench(impls, size, model_name, bias_config, k_hop, k_hop_directed,
               batch_size, num_warmup, num_iters, num_examples,
               device, flex_compile_mode, magnetic_m=0,
               density_sample_graphs=16, density_sample_batches=8,
@@ -132,7 +138,7 @@ def run_bench(impls, size, model_name, k_hop, k_hop_directed,
     for impl in impls:
         print(f"[bench] size={size} impl={impl} k_hop={k_hop} ...")
         ms, peak = bench_impl(
-            impl, examples, model_name, k_hop, k_hop_directed,
+            impl, examples, model_name, bias_config, k_hop, k_hop_directed,
             batch_size, num_warmup, num_iters, device, flex_compile_mode,
             magnetic_m=magnetic_m, len_buckets=len_buckets, node_buckets=node_buckets,
         )
@@ -180,6 +186,7 @@ def run_bench_mode(cfg):
             impls=cfg.impls,
             size=cfg.num_nodes,
             model_name=cfg.model_name,
+            bias_config=cfg.model_bias_config(),
             k_hop=k_hop,
             k_hop_directed=cfg.k_hop_directed,
             batch_size=cfg.bench_batch_size,

@@ -8,21 +8,22 @@ combined table: accuracy + ms/step + peak GB + token/block sparsity, the last
 measured standalone via :func:`measure_density`.
 """
 
+import os
 import statistics
 
 import torch
 from transformers import TrainingArguments, set_seed
 
-from ...utils import GraphTrainer, GraphTrainerV2, make_compute_metrics, shift_logits_for_metrics
-from .config import ACCURACY_METRIC, run_suffix, tokenized_label_options, model_bias_config
+from ....utils import GraphTrainer, GraphTrainerV2, make_compute_metrics, shift_logits_for_metrics
+from ..config import ACCURACY_METRIC, run_suffix, tokenized_label_options
 from .dispatch import (
     parse_impl, build_model, build_collator, active_params_for,
     select_active_params, print_trainable_parameters,
 )
 from .evaluation import smuggle_prediction_step, PreprocessLogits, ComputeMetrics
-from .datasets import calculate_label_distribution, load_or_create_dataset
+from ..data.datasets import calculate_label_distribution, load_or_create_dataset
 from .instrumentation import StepMemCallback, measure_density, format_results_table
-from .results import append_jsonl, TRAIN_RESULTS_PATH
+from .._io import append_jsonl
 
 
 def make_trainer(impl, model, training_args, train_dataset, eval_dataset, collator,
@@ -84,6 +85,7 @@ def training_run(
     eval_steps=25,
     seed=42,
     max_steps=-1,
+    num_workers=0,
 ):
     """Train one config; return ``(accuracy, step_mem_summary)``.
 
@@ -117,6 +119,11 @@ def training_run(
         per_device_eval_batch_size=batch_size,
         gradient_accumulation_steps=accumulation_steps,
         gradient_checkpointing=False,
+
+        # Overlap the per-batch O(N^2) feature construction with GPU compute.
+        # persistent_workers avoids re-forking the pool every epoch / eval loop.
+        dataloader_num_workers=num_workers,
+        dataloader_persistent_workers=(num_workers > 0),
 
         report_to=report_to,
         run_name=run_name,
@@ -158,10 +165,12 @@ def _finish_wandb():
         pass
 
 
-def _save_train_record(cfg, impl, k_hop, seed, run_name, accuracy, step_mem, dens):
-    """Append one training run's hyperparameters + results to the train JSONL."""
+def _save_train_record(cfg, impl, k_hop, seed, run_name, accuracy, step_mem, dens,
+                       runs_jsonl, sweep_meta=None):
+    """Append one training run's hyperparameters + results to its sweep's JSONL."""
     record = {
         "mode": "train",
+        **(sweep_meta or {}),
         "run_name": run_name,
         # ── hyperparameters ──
         "impl": impl, "k_hop": k_hop, "seed": seed,
@@ -186,12 +195,29 @@ def _save_train_record(cfg, impl, k_hop, seed, run_name, accuracy, step_mem, den
         "token_sparsity": dens.get("token_sparsity_mean") if dens else None,
         "block_sparsity": dens.get("block_sparsity_mean") if dens else None,
     }
-    append_jsonl(TRAIN_RESULTS_PATH, record)
-    print(f"[results] appended training run to {TRAIN_RESULTS_PATH}")
+    append_jsonl(runs_jsonl, record)
+    print(f"[results] appended training run to {runs_jsonl}")
 
 
-def run_train_mode(cfg, tokenizer, pad_token_id):
-    """Small-graph sweep: train every (impl, k_hop, seed) and report the combined table."""
+# Fallback results path when run standalone (no --runs-jsonl passed by the sweep
+# runner). Anchored to the experiment package's results/ dir.
+_DEFAULT_RUNS_JSONL = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results", "train_runs.jsonl")
+
+
+def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None, sweep_id=None):
+    """Train this config (one (impl, k_hop, seed) — the train loop runs once).
+
+    ``runs_jsonl`` / ``run_name`` / ``sweep_id`` are the sweep runner's bookkeeping
+    (where to log + which sweep/run this is); when absent (a standalone run),
+    records fall back to the package's ``results/train_runs.jsonl``.
+    """
+    runs_jsonl = runs_jsonl or _DEFAULT_RUNS_JSONL
+    sweep_meta = {}
+    if sweep_id:
+        sweep_meta["sweep_id"] = sweep_id
+    if run_name:
+        sweep_meta["sweep_run"] = run_name
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenized_labels = tokenized_label_options(tokenizer)
     suffix = run_suffix(cfg.magnetic_m)
@@ -247,7 +273,7 @@ def run_train_mode(cfg, tokenizer, pad_token_id):
                 print(f"# Training {impl} (k_hop={k_hop}, seed={seed}) — run '{run_name}'")
                 print("#" * 100)
 
-                model, _ = build_model(impl, cfg.model_name, model_bias_config(), k_hop,
+                model, _ = build_model(impl, cfg.model_name, cfg.model_bias_config(), k_hop,
                                        cfg.k_hop_directed, device, cfg.flex_compile_mode)
                 active_params = active_params_for(impl)
                 model = select_active_params(model, active_params=active_params, lora=cfg.lora_config())
@@ -274,11 +300,13 @@ def run_train_mode(cfg, tokenizer, pad_token_id):
                     eval_steps=cfg.eval_steps,
                     seed=seed,
                     max_steps=cfg.max_steps,
+                    num_workers=cfg.num_workers,
                 )
                 acc[(impl, k_hop, seed)] = accuracy
                 perf[(impl, k_hop, seed)] = step_mem
                 _save_train_record(cfg, impl, k_hop, seed, run_name, accuracy,
-                                   step_mem, density.get(k_hop))
+                                   step_mem, density.get(k_hop),
+                                   runs_jsonl=runs_jsonl, sweep_meta=sweep_meta)
                 if report_to == "wandb":
                     _finish_wandb()
                 del model

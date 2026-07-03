@@ -13,9 +13,9 @@ from transformers import AutoTokenizer
 from peft import LoraConfig, get_peft_model
 from accelerate.utils import send_to_device
 
-from ...models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
-from ...models import GTLMLlamaForCausalLM, GTLMLlamaConfig
-from ...utils import GraphCollator, GraphCollatorV2
+from ....models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
+from ....models import GTLMLlamaForCausalLM, GTLMLlamaConfig
+from ....utils import GraphCollator, GraphCollatorV2
 
 
 def get_device():

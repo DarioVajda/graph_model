@@ -3,7 +3,7 @@
 **This experiment is used to generate the simulated message-passing visualisation
 in our paper, and it doubles as the end-to-end validation harness for the
 backbone-agnostic GTLM refactor (v0 → v2) and its flex-attention backend.** See
-[Reproduce the results](#reproduce-the-results) for commands.
+[Running experiments](#running-experiments) for commands.
 
 The model is asked to read a graph it is only given as an *unordered set of node
 labels* — no edges in the token stream — and answer a connectivity question. If
@@ -18,13 +18,13 @@ Laplacian) are expressive enough, the frozen LLM can "see" the graph.
 - **HARD** variant (used here): a variable number of components, not fully
   connected, directed edges.
 - Only the **shortest-path-distance** and **magnetic-Laplacian** biases are
-  enabled (`rrwp` and `rwse` are off — see [Engineering](#engineering-decisions)).
+  enabled (`rrwp` and `rwse` are off — see [Engineering](#engineering-decisions-and-why)).
 
 ### The three implementations
 
 The same task and the same `.gtds` dataset are run across all three
-implementations (`TextGraphDataset` is implementation-agnostic; only the collator
-/ forward contract / trainer differ):
+implementations (`TextGraphDataset` is implementation-agnostic; only the
+collator / forward contract / trainer differ):
 
 | Implementation | Model | Collator | Backend |
 |---|---|---|---|
@@ -32,33 +32,24 @@ implementations (`TextGraphDataset` is implementation-agnostic; only the collato
 | `v2-eager` | `GTLMLlamaForCausalLM` | `GraphCollatorV2` | eager — refactor parity |
 | `v2-flex` | `GTLMLlamaForCausalLM` | `GraphCollatorV2` (block-padded) | flex — sparse/efficient path |
 
-`sdpa` is not a distinct backend (a custom dense bias makes the fused kernels
-unusable) and is only an alias for `eager`. Forward *and* backward bit-parity of
-`v2-eager` vs `v0-eager` is checked by
-`tests/test_modeling_gtlm_llama_v2.py` (32 tests).
+`sdpa` is only an alias for `eager` (a custom dense bias makes the fused kernels
+unusable). Forward *and* backward bit-parity of `v2-eager` vs `v0-eager` is
+checked by `tests/test_modeling_gtlm_llama_v2.py` (32 tests).
 
-### What this validates — and the headline results
-
-Three objectives, all measured below (frozen Llama-3.2-1B, only the ~173 k
-graph-bias params trainable, **bf16**, **3 seeds**):
-
-1. **v2-eager generalises v0-eager** — at k=0 the new v2 reproduces the legacy v0
-   accuracy (within seed noise).
-2. **flex scales significantly better than eager** — 2–3.5× faster and ~½ the
-   memory where both run, and it keeps running at graph sizes where eager OOMs.
-3. **k-hop masking (k=1) is a modest accuracy cost for a real speed-up** — ~0.05
-   em on the small task, in exchange for up to 1.27× faster flex steps on large
-   graphs (where the block sparsity it creates can actually be skipped).
+All results below: frozen Llama-3.2-1B, only the ~173 k graph-bias params (+
+LoRA adapters where noted) trainable, bf16. Eval metric: prompt-span exact
+match (`em_accuracy`, same metric for v0 and v2). Headlines: **v2 reproduces
+v0** (within seed noise), **flex is 2–3.5× faster at half the memory and runs
+where eager OOMs**, and **k-hop masking trades a real speed-up for an
+accuracy cost that grows with graph size**.
 
 ---
 
-### Result 1 & 3a — small-graph accuracy (parity + k-hop cost)
+### Small-graph accuracy — v0/v2 parity and the k-hop cost
 
 HARD task, 2 000 train / 500 eval graphs of 10–25 nodes
-(`2k_hard_n10-25_rcm_dataset.gtds`, `500_hard_n10-25_rcm_dataset.gtds`), 3 epochs,
-3 seeds. **Both v0 and v2 now report the same metric — prompt-span exact match
-(`em_accuracy`)** — so they are directly comparable (`evaluation.py` computes v0's
-em via full-vocab argmax at the answer site; v2 uses `GraphTrainerV2`'s).
+(`2k_hard_n10-25_rcm_dataset.gtds`, `500_hard_n10-25_rcm_dataset.gtds`),
+3 epochs, 3 seeds:
 
 | Config | em accuracy (mean ± std) | per-seed |
 |---|---|---|
@@ -68,26 +59,20 @@ em via full-vocab argmax at the answer site; v2 uses `GraphTrainerV2`'s).
 | `v2-eager` k=1 | **0.689 ± 0.002** | 0.692, 0.688, 0.688 |
 | `v2-flex`  k=1 | **0.716 ± 0.005** | 0.714, 0.712, 0.722 |
 
-- **Objective 1 — v0 ≈ v2-eager at k=0: supported (within noise).** All three
-  k=0 configs (0.73–0.79) overlap inside ~1 std; v0 and v2-flex are nearly
-  identical. The forward numerics are *exactly* equivalent (the 32 parity tests,
-  plus matched eval-loss to 1e-3 at init); the ~0.05 spread is end-to-end
-  training stochasticity (different collators/packing + bf16 non-determinism over
-  ~190 steps), not a forward discrepancy. n=3 variance is high at this scale.
-- **Objective 3 (accuracy) — k=1 costs ~0.05 em.** Both backends drop k=0→k=1
-  (eager 0.731→0.689, flex 0.787→0.716) with tiny k=1 stds, so the penalty is
-  consistent: 1-hop masking removes some multi-hop reachability signal. "Not too
-  much," but real.
-- The small graphs are **token-tiny** (packed L ≤ 34: ~1.4 tokens/node, 9-token
-  prompt, ≤26 nodes), so they fit in a *single* flex block — flex cannot show a
-  speed benefit here (it is in fact ~1.5× slower and uses more memory: 1057 vs
-  682 ms, 3.9 vs 2.9 GB). The speed story needs large graphs ↓.
+- **v0 ≈ v2 at k=0 (within noise).** The forward numerics are *exactly*
+  equivalent (32 parity tests + matched eval-loss at init); the ~0.05 spread is
+  end-to-end training stochasticity (collator/packing + bf16 non-determinism),
+  and n=3 variance is high at this scale.
+- **k=1 costs ~0.05 em**, consistently on both backends (tiny k=1 stds):
+  1-hop masking removes some multi-hop reachability signal.
+- These graphs are token-tiny (packed L ≤ 34), fitting a *single* flex block —
+  flex is actually ~1.5× slower here. The speed story needs large graphs ↓.
 
-### Result 2 & 3b — scaling (where flex earns its keep)
+### Throughput scaling — where flex earns its keep
 
 Few-step fwd+bwd+opt throughput + peak CUDA memory on synthetic HARD graphs,
-bf16, **`max-autotune-no-cudagraphs`**, RCM ordering, tight per-size flex buckets,
-batch 2. `v2-eager` vs `v2-flex`; OOM caught and reported.
+bf16, `max-autotune-no-cudagraphs`, RCM ordering, tight per-size flex buckets,
+batch 2:
 
 | N | k | eager ms / GB | flex ms / GB | flex vs eager | block sp |
 |---|---|---|---|---|---|
@@ -100,24 +85,88 @@ batch 2. `v2-eager` vs `v2-flex`; OOM caught and reported.
 | 4000 | 0 | **OOM** | 13237 / 75.73 | eager OOM | 0.11 |
 | 4000 | 1 | **OOM** | 13166 / 75.76 | eager OOM | 0.93 |
 
-- **Objective 2 — flex scales significantly better: confirmed.** 2.1–3.5× faster
-  and ~½ the memory where both run (N=1000: 13 vs 24 GB), and **eager OOMs at
-  N≥2000 while flex runs to N=4000** — flex pushes the OOM wall from N≈1500 out to
-  N≈5000 (~3× larger graphs, ~10× more attention work). With `rrwp` removed the
-  crossover moved *below* N=500, so flex now wins across the whole sweep.
-- **Objective 3 (speed) — k=1 helps flex in the N=1000–2000 band:** 1.19× (1000)
-  and 1.27× (2000). It is a slight *slowdown* at N=500 (k-hop mask overhead >
-  tiny-attention savings) and *flat* at N=4000 (the dense O(N²) graph-bias compute
-  dominates the step there, diluting any attention-side win). k=1 lifts realised
-  block sparsity to 0.78–0.93 with RCM, but that only converts to wall-clock where
-  attention is a meaningful share of the step.
+- **flex: 2.1–3.5× faster, ~½ the memory, and pushes the OOM wall from N≈1500
+  to N≈5000** (eager dies at N≥2000; flex runs to N=4000).
+- **k=1 helps flex in the N=1000–2000 band** (1.19–1.27×); it's a slight
+  slowdown at N=500 (mask overhead > tiny-attention savings) and flat at
+  N=4000. RCM lifts realised block sparsity to 0.78–0.93, but that only
+  converts to wall-clock where attention is a meaningful share of the step.
+- The win is ~3×, not the ~8× of the isolated-attention benchmark
+  (`src/models/flex_attn/`), because these graphs are token-poor (≈1.4
+  tokens/node, L≈N): the dense per-layer O(N²) graph-bias — paid identically by
+  both backends — is co-dominant with attention, and Amdahl caps the speed-up.
 
-**Why the win is "only" ~3×, not the ~8× of the isolated-attention benchmark
-(`src/models/flex_attn/`):** these graphs are token-poor (≈1.4 tokens/node, so
-L≈N), which makes the per-layer dense graph-bias — O(N²), paid identically by
-both backends — co-dominant with attention. flex sparsifies attention but not the
-bias, so Amdahl caps the speed-up. The benchmark's larger multiples are at L≫N
-(many tokens/node), where attention dominates the step.
+---
+
+### Large-graph results (N=500–2000)
+
+Multi-seed scaling, the magnetic/k-hop ablation at scale, and step-time
+profiling. Per-run records: `results/train_runs.jsonl` (standalone runs) and
+`results/<sweep>/runs.jsonl` (sweeps).
+
+#### Scaling: the plateau escape holds at scale; k=1 collapses (3 seeds, 20 epochs)
+
+Earlier large-graph runs that looked stuck at the ~0.5 marginal were
+**under-training**, not a capability wall: the loss sits on a plateau (longer
+for bigger graphs) before a delayed-generalization escape. Trained long enough
+(20 epochs, `magnetic_m=128`, 2 000 train / 200 eval, RCM):
+
+| N | k | eval em (mean ± std) |
+|---|---|---|
+| 500  | 0 | **0.838 ± 0.098** |
+| 500  | 1 | 0.530 ± 0.026 |
+| 1000 | 0 | **0.757 ± 0.018** |
+| 1000 | 1 | 0.555 ± 0.005 |
+
+k=1 sits at the marginal at N≥500 — that's **over-masking, not scale**: a
+single-seed k=3 probe at N=500 recovered to 0.825.
+
+#### `big_test`: N=1000/2000 × k ∈ {0,3} × magnetic on/off (Jul 2026, seed 0)
+
+```bash
+python3 -m sweep src.experiments.expressiveness src/experiments/expressiveness/configs/big_test.jsonc
+```
+
+25 epochs (1 550 steps), spd always on, B300. s/it is wall-clock (total run ÷
+steps), not `step_ms_mean`:
+
+| N | k | magnetic | eval em | s/it | train time |
+|---|---|---|---|---|---|
+| 1000 | 0 | ✔ | **0.750** | 10.4 | 4h 29m |
+| 1000 | 0 | ✘ | 0.730 | 5.9 | 2h 32m |
+| 1000 | 3 | ✔ | 0.690 | 9.1 | 3h 55m |
+| 1000 | 3 | ✘ | 0.730 | 4.5 | 1h 57m |
+| 2000 | 0 | ✔ | **0.780** | 36.6 | 15h 47m |
+| 2000 | 0 | ✘ | 0.765 | 18.8 | 8h 06m |
+| 2000 | 3 | ✔ | 0.715 | 31.0 | 13h 22m |
+| 2000 | 3 | ✘ | 0.650 | 13.2 | 5h 42m |
+
+- **N=2000 now trains to convergence**; best config 0.780 (k=0 + magnetic).
+- **Magnetic costs ~2× training and ~1.7–2× eval time** for ≤2 pp at k=0
+  (within the ±3 pp single-seed / 200-eval noise). Its one clear win (+6.5 pp
+  at N=2000 k=3) only recovers part of what masking lost.
+- **k=3 is 15–30 % faster** (block sparsity ~0.75) **but costs accuracy at
+  scale**: −11.5 pp at N=2000 spd-only, neutral at N=1000.
+- Caveat: this task is direction-blind (`to_directed()` symmetrizes every
+  edge), so the magnetic Laplacian's directional phase is identically zero
+  here **and** spd alone nearly encodes the connectivity answer — don't read
+  this as a general keep/drop verdict on magnetic.
+
+#### Step-time profiling (single-axis ablations, 1 seed)
+
+Configs: `exp_num_workers.jsonc`, `exp_bias_ablation.jsonc`. Two clocks
+disagree on purpose: **wall-clock s/it** (tqdm, whole iteration — what gates
+throughput, includes the between-step dataloader wait) vs **`step_ms_mean`**
+(GPU compute inside the step only). Judge loader effects by wall-clock.
+
+- **Dataloader workers: 2.4× wall-clock at N=1000** (26.7 → 11.0 s/it,
+  `num_workers` 0 → 8; GPU ms/step identical). The synchronous O(N²)
+  spd+magnetic feature build in `__getitem__` stalls the main thread; workers
+  prefetch it behind the GPU step.
+- **Magnetic bias: 1.66× step compute at N=500** (1.81 → 2.93 s/it, nw=8 on
+  both): the per-layer O(N²·m) magnetic einsums are the dominant *added*
+  compute; peak memory unchanged. (Single-seed accuracy columns are not
+  evidence either way on magnetic — see `big_test` caveat.)
 
 ---
 
@@ -160,71 +209,61 @@ These were tuned during this study; several are now defaults.
 
 ## Running experiments
 
-The experiment is driven entirely by command-line flags (argparse) — every knob
-has a `--flag`; run `--help` for the full list. There are two modes, `--mode
-train` (default) and `--mode bench`. Datasets regenerate automatically if missing
-(`data_gen.create_and_save_dataset`).
+The experiment is a **standalone argparse program** that runs **one**
+configuration (`python3 -m src.experiments.expressiveness --impl v2-flex
+--k-hop 0 --seed 0 --num-nodes 500 …`; `--help` lists every flag). Sweeps are
+driven by the generic top-level [`sweep`](../../../sweep) runner — see
+[`sweep/README.md`](../../../sweep/README.md) for the config-expansion
+semantics, output layout, and Slurm/sbatch execution. Run everything from the
+**repo root** (dataset paths and the config's `results_dir` are
+repo-root-relative).
 
 ```bash
-python3 -m src.experiments.expressiveness --help        # full flag reference
-python3 -m src.experiments.expressiveness               # train, defaults below
+python3 -m src.experiments.expressiveness --init my_sweep    # template -> src/experiments/expressiveness/configs/my_sweep.jsonc
+# ...edit src/experiments/expressiveness/configs/my_sweep.jsonc...
+python3 -m sweep src.experiments.expressiveness src/experiments/expressiveness/configs/my_sweep.jsonc
+python3 -m sweep.report src/experiments/expressiveness/results/my_sweep      # aggregate runs.jsonl
 ```
 
-### Key flags
+**Dataset preparation** is the experiment's `--mode data_prep` (builds that
+config's `.gtds` and exits): run the sweep once with `"mode": "data_prep"` to
+build every dataset it needs, then again with `"mode": "train"` (datasets also
+build on demand, under an flock, if missing). Generation is host-RAM heavy at
+large N — the 2400×2400 SPD feature needs ~80–100 GB, so prep the N=2000
+datasets with `--mem=224G` before submitting training.
 
-| Flag | Default | Meaning |
+### Key parameters
+
+| Key | Example | Meaning |
 |---|---|---|
-| `--mode {train,bench}` | `train` | accuracy/parity vs large-graph throughput |
-| `--impls a,b,c` | `v0-eager,v2-eager` | any of `v0-eager`, `v2-eager`, `v2-flex` |
-| `--k-hops 0,1` | `0` | k-hop radii to sweep (v2 only; v0 is dense, run once) |
-| `--seeds 0,1,2` | `0` | seeds to sweep |
-| `--num-nodes N` | `500` | graph size. **train**: sets the node range `0.8N–1.2N`; **bench**: the single fixed size |
-| `--min-nodes` / `--max-nodes` | derived | pin the node range explicitly (overrides `--num-nodes`) |
-| `--magnetic-m M` | `0` | magnetic-Laplacian eigenvectors kept (`0` = all `N`) |
-| `--report-to PROJECT` | off | wandb project name; omit for no tracking |
-| `--flex-compile-mode` | `max-autotune-no-cudagraphs` | use `default` for quick iteration |
-| `--len-buckets` / `--node-buckets` | auto | flex L/N padding ladders (CSV); each L bucket a multiple of the block size |
-| `--max-steps K` | `-1` | cap optimizer steps for a quick smoke test |
+| `impl` | `["v2-flex"]` | `v0-eager`, `v2-eager`, `v2-flex` |
+| `k_hop` | `[0, 1]` | k-hop radii (v2 only; v0 is dense) |
+| `seed` | `[0, 1, 2]` | seeds |
+| `num_nodes` | `500` | graph size; node range is `0.8N–1.2N` unless `min_nodes`/`max_nodes` pin it |
+| `len_buckets` / `node_buckets` | `[640,768]` / `[512,640]` | flex L/N padding ladders (each L bucket a multiple of the block size) |
+| `batch_size` / `accumulation_steps` | `4` / `8` | micro-batch + accumulation (set explicitly per size — usually in a bundle with `num_nodes`) |
+| `magnetic_m` | `128` | magnetic-Laplacian eigenvectors kept (`0` = all `N`) |
+| `bias_lr` / `lr` | `1e-3` / `1e-4` | graph-bias LR / LoRA(+base) LR |
+| `num_epochs`, `eval_steps`, `lora`, `lora_r` | | training schedule + LoRA |
+| `wandb_project` | `"GraphLLM"` | wandb project (`null` = no tracking) |
+| `flex_compile_mode` | `"max-autotune-no-cudagraphs"` | `"default"` for quick iteration |
 
-The graph-aware bias is fixed to **shortest-path distance + magnetic Laplacian**
-(every other feature was dropped); `magnetic_dim=32` and `magnetic_q=0.25` are
-model constants. Only `--magnetic-m` tunes the spectral side.
+**Graph-bias features.** `spd` + `magnetic` are wired end-to-end. The schema also
+accepts `laplacian` / `rwse` / `rrwp` (plus `max_spd` / `magnetic_dim` /
+`magnetic_q`), but this experiment **rejects** the three unwired features with a
+clear error — `data_gen` no longer produces their dataset features.
 
-### Reproduce the headline results
+### Benchmarking (throughput/memory, separate entry)
 
-Small-graph accuracy sweep (objectives 1 & 3-accuracy), 3 seeds, n=10–25:
-```bash
-python3 -m src.experiments.expressiveness \
-    --impls v0-eager,v2-eager,v2-flex --k-hops 0,1 --seeds 0,1,2 \
-    --min-nodes 10 --max-nodes 25 \
-    --train-dataset-size 2000 --eval-dataset-size 500
-```
-Large-graph scaling (objectives 2 & 3-speed) — one fixed size per invocation:
+Bench is a probe, not a sweep, so it keeps an argparse interface and runs one
+fixed graph size per invocation:
+
 ```bash
 for N in 500 1000 2000 4000; do
-    python3 -m src.experiments.expressiveness --mode bench \
+    python3 -m src.experiments.expressiveness.bench \
         --impls v2-eager,v2-flex --k-hops 0,1 --num-nodes "$N"
-done
-```
-Quick smoke test (fast compile, a few steps):
-```bash
-python3 -m src.experiments.expressiveness \
-    --impls v2-flex --min-nodes 10 --max-nodes 25 \
-    --flex-compile-mode default --max-steps 5 --no-measure-density
-```
-Attention-map visualisation:
-```bash
-python3 -m src.utils.plot_attention   # set the checkpoint path inside
+done   # appends to results/benchmarks.jsonl
 ```
 
-## Open items
-- [ ] **Phase 3b — big-graph *training*.** Scaling above is a throughput/memory
-      probe; we have not trained to convergence on large graphs. Open question:
-      does the k=1 accuracy cost (measured at N≤25) hold at N≈1000–2000, where its
-      speed-up lives? Needs large train/eval `.gtds` (decide `magnetic_m`
-      truncation + disk budget) and a 3-seed sweep at N∈{1000, 2000}.
-- [ ] **Firm up parity / k-hop with more seeds** — n=3 leaves the small-graph
-      means noisy (std ≈ 0.05 at k=0).
-- [ ] **`evaluate.py`** — still v0-only; add the v2 flat-column forward API.
-- [ ] Regenerate the `original`-ordering `.gtds` (still carry rrwp/fp64) if the
-      ordering baseline is needed again.
+Attention-map visualisation: `python3 -m src.utils.plot_attention` (set the
+checkpoint path inside).

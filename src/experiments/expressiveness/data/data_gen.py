@@ -4,7 +4,7 @@ import torch
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from ...utils.text_graph_dataset import TextGraphDataset
+from ....utils.text_graph_dataset import TextGraphDataset
 
 import networkx as nx
 import itertools

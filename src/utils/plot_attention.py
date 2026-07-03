@@ -163,7 +163,7 @@ def plot_graph_attention(
 if __name__ == "__main__":
     from . import TextGraphDataset, GraphCollator
     from ..models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM
-    from ..experiments.expressiveness.data_gen import create_and_save_dataset, dataset_path_and_size
+    from ..experiments.expressiveness.data.data_gen import create_and_save_dataset, dataset_path_and_size
     from transformers import AutoTokenizer
 
     def get_device():

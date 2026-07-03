@@ -23,8 +23,8 @@ import random
 import torch
 from transformers import TrainerCallback
 
-from ...utils import GraphCollatorV2
-from ...models.flex_attn.density import compute_density
+from ....utils import GraphCollatorV2
+from ....models.flex_attn.density import compute_density
 
 
 def _cuda_device():

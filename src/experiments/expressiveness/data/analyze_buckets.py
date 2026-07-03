@@ -20,9 +20,9 @@ import statistics
 
 from transformers import AutoTokenizer
 
-from .config import MODEL_NAME
+from ..config import MODEL_NAME
 from .data_gen import _spreadsheet_label
-from ...models.flex_kernel import default_len_buckets, default_node_buckets, bucketize
+from ....models.flex_kernel import default_len_buckets, default_node_buckets, bucketize
 
 TARGETS = [100, 200, 500, 1000, 2000]
 SAMPLES = 3000          # graphs sampled per size (cheap — pure tokenisation)
