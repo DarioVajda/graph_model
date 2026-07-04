@@ -28,6 +28,7 @@ class GraphContext:
     structural_mask: Optional[torch.Tensor] = None  # (B, 1, q, kv) dense path
     block_mask:      Optional[Any] = None            # flex BlockMask
     node_ids_flex:   Optional[torch.Tensor] = None   # (B, kv_len) int32, flex path
+    shared_node_bias: Optional[torch.Tensor] = None  # (B, H, N, N)
 
     def install_on(self, attn_modules) -> None:
         """Attach this context to each attention module so the registered

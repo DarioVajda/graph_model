@@ -233,8 +233,18 @@ def compute_node_bias(
 
     if (getattr(module.config, "checkpoint_graph_bias", False)
             and module.training and torch.is_grad_enabled()):
-        return torch.utils.checkpoint.checkpoint(_bias, use_reentrant=False)
-    return _bias()
+        node_bias = torch.utils.checkpoint.checkpoint(_bias, use_reentrant=False)
+    else:
+        node_bias = _bias()
+
+    # Shared bias (computed once per forward by the causal-LM mixin): added
+    # OUTSIDE the checkpointed closure, so backward recompute never re-runs it —
+    # each layer just reuses the one saved tensor.
+    shared = ctx.shared_node_bias
+    if shared is not None:
+        shared = shared.to(dtype)
+        node_bias = shared if node_bias is None else node_bias + shared
+    return node_bias
 
 
 def _gtlm_dense(

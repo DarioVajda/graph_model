@@ -26,6 +26,7 @@ from transformers.utils import logging
 
 from .structural_mask import build_dense_structural_mask
 from .dispatch import GRAPH_ATTN_IMPLS, GTLM_ATTN_FN_NAMES, build_flex_block_mask, flex_block_size
+from .bias import build_shared_bias_modules, compute_shared_node_bias
 from .context import GraphContext
 from .io import load_bias_parameters
 
@@ -84,6 +85,11 @@ class GraphCausalLMMixin:
         self._sanitize_attn_config(config)
         super().__init__(config)
         self.model = self.graph_model_cls(config)
+        # Shared (once-per-forward) bias modules, e.g. magnetic_shared: one
+        # instance for the whole model instead of one per layer. None when no
+        # shared type is enabled. The attribute name contains "graph_bias" so
+        # the standard active-params substring unfreezes it too.
+        self.shared_graph_bias = build_shared_bias_modules(config.num_attention_heads, config.head_dim, config)
         self.config.architectures = [type(self).__name__]
         self._graph_bias_cache: dict = {}
         self.post_init()
@@ -229,20 +235,38 @@ class GraphCausalLMMixin:
             )
 
         magnetic = (magnetic_V, magnetic_lambdas) if magnetic_V is not None else None
+        features = {
+            "spd": shortest_path_dists,
+            "laplacian": laplacian_coordinates,
+            "rwse": rwse,
+            "rrwp": rrwp,
+            "magnetic": magnetic,
+        }
+
+        # Shared bias: computed ONCE here — outside the (gradient-checkpointed)
+        # decoder layers, so training saves its activations a single time and
+        # every layer reuses the same (B, H, N, N) tensor. In eval/generation it
+        # is cached like the per-layer biases (reset at prefill above).
+        shared_node_bias = None
+        if self.shared_graph_bias is not None:
+            if not self.training and "shared_node_bias" in self._graph_bias_cache:
+                shared_node_bias = self._graph_bias_cache["shared_node_bias"]
+            else:
+                shared_node_bias = compute_shared_node_bias(
+                    self.shared_graph_bias, dtype=embed_dtype, device=device,
+                    num_nodes=num_nodes, features=features)
+                if shared_node_bias is not None and not self.training:
+                    self._graph_bias_cache["shared_node_bias"] = shared_node_bias
+
         ctx = GraphContext(
             node_ids=node_ids,
             num_nodes=num_nodes,
             cache=self._graph_bias_cache,
-            features={
-                "spd": shortest_path_dists,
-                "laplacian": laplacian_coordinates,
-                "rwse": rwse,
-                "rrwp": rrwp,
-                "magnetic": magnetic,
-            },
+            features=features,
             structural_mask=structural_mask,
             block_mask=block_mask,
             node_ids_flex=node_ids_flex,
+            shared_node_bias=shared_node_bias,
         )
         ctx.install_on(self._iter_attn_modules())
 

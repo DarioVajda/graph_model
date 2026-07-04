@@ -22,6 +22,7 @@ class GraphConfigMixin:
         rrwp: bool = False,
         max_rw_steps: int = 8,
         magnetic: bool = False,
+        magnetic_shared: bool = False,
         magnetic_dim: int = 32,
         magnetic_q: float = 0.25,
         k_hop: int = 0,
@@ -41,6 +42,7 @@ class GraphConfigMixin:
         self.rrwp = rrwp
         self.max_rw_steps = max_rw_steps
         self.magnetic = magnetic
+        self.magnetic_shared = magnetic_shared
         self.magnetic_dim = magnetic_dim
         self.magnetic_q = magnetic_q
         self.k_hop = k_hop

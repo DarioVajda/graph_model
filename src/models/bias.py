@@ -35,12 +35,18 @@ class BaseBias(nn.Module):
 
     Subclass protocol:
       config_key : str   — attribute on bias_config that enables this type.
+      shared     : bool  — False (default): one instance per transformer layer
+                           (inside each layer's GraphAttentionBias). True: ONE
+                           instance on the top-level model, computed once per
+                           forward and added to every layer's bias (see
+                           GraphCausalLMMixin / GraphContext.shared_node_bias).
       forward(**kwargs)  — consumes whatever it needs from the shared kwargs
                            dict and returns a (B, H, N, N) float tensor,
                            or None when its required input is absent.
     """
 
     config_key: str = ""
+    shared: bool = False
 
     @classmethod
     def is_enabled(cls, bias_config) -> bool:
@@ -201,6 +207,22 @@ class MagneticBias(BaseBias):
         return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
 
 
+class MagneticSharedBias(MagneticBias):
+    """MagneticBias computed ONCE per forward and shared by every layer.
+
+    Identical math and parameters to MagneticBias; the difference is placement:
+    ``shared = True`` keeps it out of the per-layer GraphAttentionBias modules,
+    and the causal-LM mixin instantiates a single copy on the top-level model,
+    runs it once per forward (outside the gradient-checkpointed decoder layers,
+    so the O(N²·M·m) einsums execute once instead of once per layer per
+    recompute), and threads the resulting (B, H, N, N) tensor to every layer via
+    ``GraphContext.shared_node_bias``.
+    """
+
+    config_key = 'magnetic_shared'
+    shared = True
+
+
 # ── Registration list ─────────────────────────────────────────────────────────
 
 BIAS_TYPES: list[type[BaseBias]] = [
@@ -209,6 +231,7 @@ BIAS_TYPES: list[type[BaseBias]] = [
     RWSEBias,
     RRWPBias,
     MagneticBias,
+    MagneticSharedBias,
 ]
 """Add new bias types here — GraphAttentionBias picks them up automatically."""
 
@@ -237,7 +260,10 @@ class GraphAttentionBias(nn.Module):
         self.num_heads = num_heads
         self.k_hop     = k_hop
 
-        active_types = [cls for cls in BIAS_TYPES if cls.is_enabled(bias_config)]
+        # Shared types are instantiated once on the top-level model (see
+        # build_shared_bias_modules), never per layer.
+        active_types = [cls for cls in BIAS_TYPES
+                        if cls.is_enabled(bias_config) and not cls.shared]
         self.bias_modules = nn.ModuleList(
             [cls(num_heads, head_dim, bias_config) for cls in active_types]
         )
@@ -332,3 +358,42 @@ class GraphAttentionBias(nn.Module):
             node_bias = torch.zeros(B, self.num_heads, N, N, dtype=dtype, device=device)
 
         return node_bias.masked_fill(~gate, torch.finfo(dtype).min)
+
+
+# ── Shared (once-per-forward) bias modules ────────────────────────────────────
+
+def build_shared_bias_modules(num_heads: int, head_dim: int, bias_config) -> Optional[nn.ModuleList]:
+    """Instantiate every enabled ``shared = True`` bias type (or None).
+
+    The causal-LM mixin owns the returned ModuleList (named so its parameters
+    match the ``graph_bias`` active-params substring), runs each module once per
+    forward, and shares the summed (B, H, N, N) tensor across all layers.
+    """
+    shared_types = [cls for cls in BIAS_TYPES if cls.is_enabled(bias_config) and cls.shared]
+    if not shared_types:
+        return None
+    return nn.ModuleList([cls(num_heads, head_dim, bias_config) for cls in shared_types])
+
+
+def compute_shared_node_bias(
+    modules: Optional[nn.ModuleList],
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+    num_nodes: Optional[torch.Tensor],
+    features: dict,
+) -> Optional[torch.Tensor]:
+    """Sum the shared bias modules' (B, H, N, N) outputs (or None)."""
+    if modules is None:
+        return None
+    node_bias = None
+    for module in modules:
+        b = module(
+            dtype=dtype, device=device, num_nodes=num_nodes,
+            spd=features.get("spd"), laplacian=features.get("laplacian"),
+            rwse=features.get("rwse"), rrwp=features.get("rrwp"),
+            magnetic=features.get("magnetic"),
+        )
+        if b is not None:
+            node_bias = b if node_bias is None else node_bias + b
+    return node_bias
