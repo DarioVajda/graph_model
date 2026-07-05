@@ -91,6 +91,12 @@ def render_flags(params):
     return argv
 
 
+def _experiment_tag(experiment_module):
+    """Short experiment name for Slurm job names (``src.experiments.kgqa`` -> ``kgqa``)."""
+    parts = [p for p in experiment_module.split(".") if p and p != "__main__"]
+    return parts[-1] if parts else experiment_module
+
+
 def _run_argv(experiment_module, params, runs_jsonl, run_name, sweep_id):
     """Full ``-m <module> <flags> <bookkeeping>`` argv (without the python exe)."""
     return ["-m", experiment_module, *render_flags(params),
@@ -261,6 +267,8 @@ def _dispatch_sbatch(experiment_module, runs, paths, sb):
     """Submit the sweep as Slurm jobs (one sequential job, or one job per config)."""
     granularity = sb.get("granularity", _SBATCH_DEFAULTS["granularity"])
     sweep_name = paths["sweep_name"]
+    # Slurm job names lead with the experiment so squeue groups them by experiment.
+    job_prefix = _experiment_tag(experiment_module)
     jobs_dir = os.path.join(paths["sweep_dir"], "jobs")
     os.makedirs(jobs_dir, exist_ok=True)
 
@@ -273,7 +281,7 @@ def _dispatch_sbatch(experiment_module, runs, paths, sb):
         job_script = _write_job_script(jobs_dir, sweep_name, lines)
         wrap = _srun_wrap(sweep_name, job_script, sb)
         logpath = os.path.join(paths["logs_dir"], f"{sweep_name}.slurm.out")
-        jobs.append((sweep_name, _sbatch_argv(sweep_name, logpath, wrap, sb)))
+        jobs.append((sweep_name, _sbatch_argv(f"{job_prefix}_{sweep_name}", logpath, wrap, sb)))
     elif granularity == "per_config":
         # One job script per config either way; how they're submitted depends on
         # whether a concurrency cap is set.
@@ -300,12 +308,13 @@ def _dispatch_sbatch(experiment_module, runs, paths, sb):
             wrap = _array_wrap(labels, scripts, sb)
             array_spec = f"0-{len(entries) - 1}%{int(max_concurrent)}"
             logpath = os.path.join(paths["logs_dir"], f"{sweep_name}_%A_%a.slurm.out")
-            jobs.append((sweep_name, _sbatch_argv(sweep_name, logpath, wrap, sb, array=array_spec)))
+            jobs.append((sweep_name, _sbatch_argv(f"{job_prefix}_{sweep_name}", logpath, wrap, sb,
+                                                  array=array_spec)))
         else:
             for name, label, job_script in entries:
                 wrap = _srun_wrap(label, job_script, sb)
                 logpath = os.path.join(paths["logs_dir"], f"{name}.slurm.out")
-                jobs.append((name, _sbatch_argv(label, logpath, wrap, sb)))
+                jobs.append((name, _sbatch_argv(f"{job_prefix}_{label}", logpath, wrap, sb)))
     else:
         raise expand_mod.SweepError(
             f"Unknown sbatch granularity {granularity!r} (expected 'single' or 'per_config').")
