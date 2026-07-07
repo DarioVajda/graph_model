@@ -29,7 +29,7 @@ REPRESENTATIVE = {
     "lora_r": 8, "k_hop": 0, "k_hop_directed": True,
     "graph_attn_impl": "eager", "dtype": "fp32", "gradient_checkpointing": False,
     "active_params": ["graph_bias", "embeddings"], "num_workers": 2,
-    "gen_max_new_tokens": 64, "gen_max_samples": None,
+    "gen_max_new_tokens": 64, "gen_max_samples": None, "gen_eval_samples": 32,
     "wandb_project": None,
 }
 

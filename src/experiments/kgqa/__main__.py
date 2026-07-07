@@ -111,7 +111,8 @@ TEMPLATE = """\
 
   // ── generative eval ───────────────────────────────────────────────────────
   "gen_max_new_tokens": 128,
-  "gen_max_samples": null,            // null = full dev set
+  "gen_max_samples": null,            // FINAL dev/test scoring cap; null = full split
+  "gen_eval_samples": 128,            // in-training eval cap; null = gen_max_samples
 
   "wandb_project": null               // e.g. "GraphLLM"; null = no tracking
 }
@@ -184,7 +185,10 @@ def build_parser():
     # ── generative eval ──────────────────────────────────────────────────────
     p.add_argument("--gen-max-new-tokens", type=int, default=d.gen_max_new_tokens)
     p.add_argument("--gen-max-samples", type=int, default=d.gen_max_samples,
-                   help="cap generative-eval questions (omit = full dev set).")
+                   help="cap FINAL dev/test generative scoring (omit = full split).")
+    p.add_argument("--gen-eval-samples", type=int, default=d.gen_eval_samples,
+                   help="cap the in-training generative eval (checkpoint selection) "
+                        "only; omit = fall back to --gen-max-samples.")
 
     # ── tracking ─────────────────────────────────────────────────────────────
     p.add_argument("--wandb-project", default=d.wandb_project,
@@ -215,6 +219,7 @@ def config_from_args(args):
         gradient_checkpointing=args.gradient_checkpointing,
         active_params=tuple(args.active_params), num_workers=args.num_workers,
         gen_max_new_tokens=args.gen_max_new_tokens, gen_max_samples=args.gen_max_samples,
+        gen_eval_samples=args.gen_eval_samples,
         wandb_project=args.wandb_project,
     ).validate()
 

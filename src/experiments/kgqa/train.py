@@ -67,13 +67,16 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         # data keys
         "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
         "versions": cfg.versions, "magnetic_m": cfg.magnetic_m, "data_seed": cfg.data_seed,
-        # ── results: best-checkpoint dev metrics ──
+        # ── results: best-checkpoint dev metrics (GNN-RAG-comparable) ──
         "eval_f1": dev.get("eval_f1"), "eval_hits1": dev.get("eval_hits1"),
         "eval_hit_star": dev.get("eval_hit_star"),
+        "eval_f1_strict": dev.get("eval_f1_strict"),
         "eval_em_accuracy": dev.get("eval_em_accuracy"),
         # ── results: test metrics ──
         "test_f1": test.get("test_f1"), "test_hits1": test.get("test_hits1"),
         "test_hit_star": test.get("test_hit_star"),
+        "test_f1_strict": test.get("test_f1_strict"),
+        "test_em_accuracy": test.get("test_em_accuracy"),
     }
     append_jsonl(runs_jsonl, record)
     print(f"[results] appended training run to {runs_jsonl}")
@@ -99,10 +102,20 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     device = get_device()
     dtype = cfg.torch_dtype
 
+    # Pin the intra-op thread count BEFORE anything compiles: the DataLoader's
+    # pin-memory thread calls torch.set_num_threads(1) (process-global) when the
+    # first loader starts, and dynamo guards compiled flex kernels on that global
+    # state — the flip silently doubles the recompile count for every shape.
+    torch.set_num_threads(1)
+
     # ── Model (frozen backbone + graph bias), new GTLM stack ──────────────────
     config = GTLMLlamaConfig.from_pretrained(
         cfg.model_name, **cfg.bias_params(),
         k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed, graph_attn_impl=cfg.graph_attn_impl,
+        # ~14 (L, N) buckets/batch-size family; leave generous headroom so a long
+        # run can never exhaust the dynamo cache mid-training (uncompiled flex has
+        # no working backward, so exhaustion is fatal, not slow).
+        flex_cache_size_limit=128,
     )
     model = GTLMLlamaForCausalLM.from_pretrained(
         cfg.model_name, config=config, graph_attn_impl=cfg.graph_attn_impl, torch_dtype=dtype)
@@ -143,6 +156,10 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         output_dir=output_dir,
         logging_steps=1,
         per_device_train_batch_size=cfg.batch_size,
+        # Same eval batch size, so the teacher-forced eval pass reuses the train
+        # forwards' compiled flex kernels instead of minting a whole second
+        # (B=8, L, N) shape family.
+        per_device_eval_batch_size=cfg.batch_size,
         gradient_accumulation_steps=cfg.accumulation_steps,
         gradient_checkpointing=gc,
         gradient_checkpointing_kwargs={"use_reentrant": False} if gc else None,
@@ -178,15 +195,19 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         compute_metrics=make_compute_metrics(include_f1=False),       # cheap teacher-forced EM (secondary)
         preprocess_logits_for_metrics=shift_logits_for_metrics,       # bound eval memory
         active_params=active_params, bias_lr=cfg.bias_lr,
-        # generative (primary) eval:
+        # generative (primary) eval — capped during training (checkpoint selection),
+        # switched to gen_max_samples (usually the full split) for final scoring below:
         gen_tokenizer=tokenizer, gen_collator=gen_collator, question_end=question_end,
-        gen_max_new_tokens=cfg.gen_max_new_tokens, gen_max_samples=cfg.gen_max_samples,
+        gen_max_new_tokens=cfg.gen_max_new_tokens,
+        gen_max_samples=(cfg.gen_eval_samples if cfg.gen_eval_samples is not None
+                         else cfg.gen_max_samples),
     )
 
     trainer.train()
 
     # Best model is loaded (load_best_model_at_end); score it on dev + test so the
     # run record carries both. Both evaluate() calls run the generative set eval.
+    trainer.set_gen_max_samples(cfg.gen_max_samples)
     print("\n" + "=" * 50 + "\nBest model — dev set (generative):\n" + "=" * 50)
     dev_metrics = trainer.evaluate(eval_dataset=eval_dataset, metric_key_prefix="eval")
     for k, v in dev_metrics.items():

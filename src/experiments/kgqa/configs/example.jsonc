@@ -82,7 +82,8 @@
 
   // ── generative eval ───────────────────────────────────────────────────────
   "gen_max_new_tokens": 128,
-  "gen_max_samples": null,            // null = full dev set
+  "gen_max_samples": null,            // FINAL dev/test scoring cap; null = full split
+  "gen_eval_samples": 128,            // in-training eval cap; null = gen_max_samples
 
   "wandb_project": null               // e.g. "GraphLLM"; null = no tracking
 }
