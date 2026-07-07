@@ -1,0 +1,68 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // First serious KGQA training sweep (post-refactor, data-format v2).
+  //
+  // 2x2: the scientific axis (k_hop gate on/off) x learning rate. Everything
+  // else at defaults; seeds/ablations (bias features, lora_r, rel_mode) come
+  // after this establishes the operating point.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/baseline.jsonc
+  //   python3 -m sweep.report src/experiments/kgqa/results/baseline
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "baseline",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "mode": "train",
+  "k_hop": [0, 2],                    // graph-gated attention vs none (the headline question)
+  "lr": [1e-4, 3e-4],                 // LoRA lr; bias_lr stays at its tuned default
+
+  // ── fixed ─────────────────────────────────────────────────────────────────
+  "seed": 0,
+  "lora_r": 16,
+  "bias_lr": 5e-3,
+  // An "epoch" is one pass over the 2573 questions (each access samples one of
+  // the 8 stored answer-order versions), i.e. ~322 optimizer steps at effective
+  // batch 8 — so 15 epochs ~= 4.8k steps ~= 2h steady-state on a B200.
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+
+  // data config = the built _dfv2 cache (all data keys at their defaults)
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 20,
+  "versions": 8,
+  "data_seed": 42,
+
+  // ── eval schedule ─────────────────────────────────────────────────────────
+  // eval_steps=200 -> ~24 checkpoint-selection points over the run; each costs
+  // 128 one-at-a-time generations (gen_eval_samples, ~3-4 min), while the FINAL
+  // best-model dev+test scoring runs the full splits (gen_max_samples=null ->
+  // benchmark denominators).
+  "eval_steps": 200,
+  "gen_eval_samples": 128,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 128,
+
+  "wandb_project": "GraphLLM"
+}

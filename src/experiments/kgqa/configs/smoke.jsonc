@@ -15,22 +15,24 @@
       "gpus": "B200:1",
       "cpus": 8,
       "mem": "64G",
-      "time": "12:00:00",
+      "time": "01:00:00",             // smoke: minutes of work, not the 12h train budget
       "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
-      "dry_run": true                 // inspect commands; do not submit
+      "dry_run": false
     }
   },
 
   "mode": "train",
   "k_hop": [0, 2],                    // the only axis -> 2 runs
 
-  // tiny everything else
+  // Enough optimizer steps (32 = 256 examples) to hit all common flex (L, N)
+  // buckets and reach post-compile steady-state step timing; num_workers matches
+  // the real runs so the timing extrapolates.
   "lora_r": 8,
   "seed": 0,
   "num_epochs": 1,
-  "max_steps": 4,
-  "eval_steps": 2,
+  "max_steps": 32,
+  "eval_steps": 16,
   "gen_max_samples": 8,
-  "num_workers": 0,
+  "num_workers": 4,
   "wandb_project": null
 }

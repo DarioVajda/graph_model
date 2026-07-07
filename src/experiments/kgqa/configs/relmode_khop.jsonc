@@ -1,0 +1,77 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Relation-verbalization x k-hop sweep, at the extended-training operating
+  // point (30 epochs ≈ 9600 steps — the baseline was still improving at 4800).
+  //
+  // 2x2:
+  //   * rel_mode last_1 vs last_2 — last_1 collides 44% of relation
+  //     occurrences into ambiguous texts (e.g. actor/director -> "film");
+  //     49% of questions carry a within-subgraph collision. last_2 removes
+  //     nearly all of it for ~+34% tokens (N, and thus the O(N^2) bias cost,
+  //     unchanged).
+  //   * k_hop 0 vs 5 — the k-only gate probe. 5 is the minimum k that lets the
+  //     prompt node reach a 2-KG-hop answer (5 Levi hops via prompt->topic);
+  //     the baseline's k=2 collapse was the prompt being blind to ALL answers.
+  //
+  // The last_2 arms need a fresh dataset build (rel_mode is in the cache key):
+  //   python3 -m src.experiments.kgqa --mode data_prep --rel-mode last_2
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/relmode_khop.jsonc
+  //   python3 -m sweep.report src/experiments/kgqa/results/relmode_khop
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "relmode_khop",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "mode": "train",
+  "k_hop": [0, 5],                    // no gate vs the minimal answer-reaching k
+  "rel_mode": ["last_1", "last_2"],   // property-only vs type+property relation texts
+
+  // ── fixed ─────────────────────────────────────────────────────────────────
+  "seed": 0,
+  "lora_r": 16,
+  "lr": 5e-5,                         // LoRA lr — GTLM adapters want 1e-5..1e-4
+  "bias_lr": 1e-2,                    // graph-bias group runs much hotter
+  "num_epochs": 30,                   // 2x the baseline horizon (fresh cosine schedule)
+  "batch_size": 2,
+  "accumulation_steps": 4,            // effective batch 8, same as baseline
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+
+  // data config: all keys at the _dfv2 defaults; only rel_mode varies.
+  // last_1 reuses the existing cache, last_2 must be built first (see header).
+  "max_nodes": 512,
+  "n_max": 20,
+  "versions": 8,
+  "data_seed": 42,
+
+  // ── eval schedule ─────────────────────────────────────────────────────────
+  // eval_steps=400 -> ~24 checkpoint-selection points over ~9600 steps (same
+  // granularity as the baseline). gen_eval_samples=null falls back to
+  // gen_max_samples=null -> FULL dev (246 graphs, ~7 min/eval) for selection,
+  // killing the ±2-3 F1 noise a 128-sample cap showed; final best-model
+  // dev+test scoring also runs the full splits (benchmark denominators).
+  "eval_steps": 400,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 128,
+
+  "wandb_project": "GraphLLM"
+}
