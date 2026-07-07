@@ -30,6 +30,12 @@ from dataclasses import dataclass
 
 MODEL_NAME = "meta-llama/Llama-3.2-1B"
 
+# Data-format version, appended to the cache key: bump when the pipeline's
+# SEMANTICS change without any config knob changing, so stale caches can't be
+# silently reused. v2 = literal-kb_id fallback for answer texts + unanswerable
+# dev/test questions kept as empty-target eval rows (benchmark denominators).
+DATA_FORMAT_VERSION = 2
+
 REL_MODES = ("last_1", "last_2", "full")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
@@ -86,7 +92,9 @@ class RunConfig:
 
     # ── generative-eval keys ─────────────────────────────────────────────────
     gen_max_new_tokens: int = 128
-    gen_max_samples: int = None               # None = full dev set
+    gen_max_samples: int = None               # final dev/test scoring cap; None = full split
+    gen_eval_samples: int = None              # in-training eval cap (checkpoint selection only);
+                                              # None = fall back to gen_max_samples
 
     # ── tracking ─────────────────────────────────────────────────────────────
     wandb_project: str = None                 # None = no tracking; a string = the wandb project
@@ -130,13 +138,14 @@ class RunConfig:
         Training-only knobs (seed, lr, k_hop, …) are deliberately excluded so two
         runs differing only in training config share one built dataset. Uses
         ``data_seed`` (not the training ``seed``) and includes ``max_length``
-        (which affects tokenization). A fresh naming scheme — there is no legacy
-        ``processed_datasets/`` cache to stay compatible with.
+        (which affects tokenization). Ends in the ``DATA_FORMAT_VERSION`` so
+        semantic pipeline changes invalidate old caches.
         """
         model = str(self.model_name).replace("/", "-")
         return (f"sr-webqsp_{model}_v{self.rel_mode}_cap{self.max_nodes}_nmax{self.n_max}"
                 f"_ver{self.versions}_spd{self.max_spd}_magq{self.magnetic_q}m{self.magnetic_m}"
-                f"_len{self.max_length}_rcm{int(self.rcm)}_seed{self.data_seed}")
+                f"_len{self.max_length}_rcm{int(self.rcm)}_seed{self.data_seed}"
+                f"_dfv{DATA_FORMAT_VERSION}")
 
     def validate(self):
         """Reject accepted-but-unsupported combinations with a clear message.

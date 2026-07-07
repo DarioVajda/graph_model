@@ -14,6 +14,11 @@ Pipeline per question:
                  ->  full gold set stashed in graph.graph['gold_answers'] for the evaluator
   then TextGraphDataset: tokenize -> labels (mask up to "Answer:") -> SPD -> magnetic -> save
 
+Answer texts prefer the record's `text` and fall back to literal kb_ids (dates,
+numbers — see ``answer_text``). Train keeps only supervisable questions; dev/test
+also keep unanswerable-but-scoreable ones as empty-target rows so eval
+denominators match the benchmark (GNN-RAG scores retrieval failures as 0 too).
+
 Node naming is v1 = entity_names.json ONLY. Harvesting answer `text` into node
 text would leak the answer at eval (gold nodes would be the only newly-named
 ones), so answer text feeds ONLY the target / eval matching.
@@ -100,7 +105,9 @@ def _instantiate_paths(record):
             if rel == END_OF_HOP:
                 break
             nxt = set()
-            for u in frontier:
+            # sorted(): set iteration order is hash-randomized per process; without
+            # it the triple order (and thus what survives the cap) is nondeterministic.
+            for u in sorted(frontier, key=str):
                 for tri in by_hr.get((u, rel), []):
                     tris.append(tri)
                     nxt.add(tri[2])
@@ -219,45 +226,86 @@ def _collapse_cvts(G, topics):
 # --------------------------------------------------------------------------- #
 # Prompt node + answer targets
 # --------------------------------------------------------------------------- #
+def answer_text(a):
+    """Scoreable text for one answer record: its `text`, else a literal kb_id.
+
+    Some gold answers (dates, years, numbers, currency codes — 53/16602 on test)
+    have an empty `text` but a *literal* kb_id that IS the answer string
+    ("1945-09-02", "AUD") — the same string the graph shows for that node
+    (`resolve_entity_text` falls through to `_decode_literal`). GNN-RAG scores
+    these as plain strings too (RoG `answer` lists), so dropping them would be
+    unfair to us. `m.`/`g.` mids without text stay unscoreable -> None.
+    """
+    if a.get("text"):
+        return a["text"]
+    kid = a.get("kb_id")
+    if isinstance(kid, str) and kid and not kid.startswith(("m.", "g.")):
+        return _decode_literal(kid)
+    return None
+
+
 def present_answer_texts(G, record):
     """Gold answer texts whose entity is a node in G (grounded), de-duplicated, order-stable."""
     out = []
     seen = set()
     for a in record["answers"]:
-        if a["kb_id"] in G and a.get("text") and a["text"] not in seen:
-            seen.add(a["text"])
-            out.append(a["text"])
+        text = answer_text(a)
+        if a["kb_id"] in G and text and text not in seen:
+            seen.add(text)
+            out.append(text)
     return out
 
 
 def full_gold_texts(record):
+    """The evaluator's gold list — mirrors RoG/GNN-RAG's `answer` lists exactly.
+
+    Scoreable texts via ``answer_text``; golds with no name at all (unnamed
+    `m.`/`g.` mids) are kept as their raw kb_id, exactly like RoG's lists
+    (verified identical by id on 1628/1628 test questions). These placeholders
+    never match a generation, deflating recall the same way it deflates
+    GNN-RAG's — dropping them instead would inflate our F1 on those questions.
+    """
     out, seen = [], set()
     for a in record["answers"]:
-        if a.get("text") and a["text"] not in seen:
-            seen.add(a["text"])
-            out.append(a["text"])
+        text = answer_text(a) or a.get("kb_id")
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
     return out
 
 
 def add_prompt_node(G, record, answer_str, gold_answers):
     g = G.copy()
-    g.add_node("PROMPT", text=f"{record['question']}{ANSWER_DELIM} {answer_str}")
+    # No trailing space when the target is empty (unanswerable eval row): the
+    # prompt then ends exactly at the "Answer:" delimiter and labels are EOS only.
+    suffix = f" {answer_str}" if answer_str else ""
+    g.add_node("PROMPT", text=f"{record['question']}{ANSWER_DELIM}{suffix}")
     g.graph["prompt_node"] = "PROMPT"
     g.graph["gold_answers"] = gold_answers
     g.graph["question"] = record["question"]
+    g.graph["unanswerable"] = not answer_str
     for tp in record["entities"]:
         if tp in g:
             g.add_edge("PROMPT", tp)
     return g
 
 
-def build_question_graphs(record, entity_names, cfg, versions, rng):
-    """Return a list of `versions` nx graphs for one question (empty if not trainable)."""
+def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswerable=False):
+    """Return a list of `versions` nx graphs for one question.
+
+    Empty when the question is unusable: no graph-present gold (nothing to
+    supervise) — unless ``keep_unanswerable`` (dev/test), where every answered
+    question is kept, with an EMPTY answer target when unanswerable, so eval
+    denominators equal RoG/GNN-RAG's (all answered questions; such rows score
+    ~0, like their retrieval failures).
+    """
     base = build_base_levi(record, entity_names, cfg.rel_mode, cfg.max_nodes)
     present = present_answer_texts(base, record)
     gold = full_gold_texts(record)
     if not present:
-        return []                             # no groundable answer -> unusable for supervision
+        if keep_unanswerable and gold:
+            return [add_prompt_node(base, record, "", gold)]
+        return []
     graphs = []
     for _ in range(versions):
         order = present[:]
@@ -298,24 +346,34 @@ class AnswerLabelMasker:
 # Driver — data_prep mode of the experiment (consumes a RunConfig)
 # --------------------------------------------------------------------------- #
 def process_split(split, records, entity_names, tokenizer, question_end, cfg, out_dir):
-    """Build + save one split's `.gtds` from raw SR records. Returns (kept, graphs)."""
+    """Build + save one split's `.gtds` from raw SR records. Returns (kept, graphs).
+
+    Train keeps only supervisable questions (>=1 graph-present gold). Dev/test
+    additionally keep unanswerable-but-scoreable questions as empty-target rows,
+    so eval metrics use benchmark-comparable denominators (those rows score ~0).
+    """
     versions = cfg.versions if split == "train" else 1        # augmentation only for training
+    keep_unanswerable = split != "train"
     # data_seed (not the training seed) drives the answer-order augmentation RNG;
-    # per-split offset so train/dev/test don't share a shuffle stream.
-    rng = random.Random(cfg.data_seed + hash(split) % 10_000)
+    # per-split offset so train/dev/test don't share a shuffle stream. Seed with a
+    # string (SHA-512-based, process-independent) — hash(str) varies per process.
+    rng = random.Random(f"{cfg.data_seed}:{split}")
 
     graphs, kept, skipped = [], 0, 0
     for rec in tqdm(records, desc=f"Building {split} graphs"):
         if not rec.get("answers"):
             skipped += 1
             continue
-        gs = build_question_graphs(rec, entity_names, cfg, versions, rng)
+        gs = build_question_graphs(rec, entity_names, cfg, versions, rng,
+                                   keep_unanswerable=keep_unanswerable)
         if not gs:
             skipped += 1
             continue
         graphs.extend(gs)
         kept += 1
-    print(f"[{split}] kept {kept} questions ({len(graphs)} graphs, {versions}x), skipped {skipped}")
+    n_unans = sum(1 for g in graphs if g.graph.get("unanswerable"))
+    print(f"[{split}] kept {kept} questions ({len(graphs)} graphs, {versions}x; "
+          f"{n_unans} unanswerable empty-target rows), skipped {skipped} unscorable")
 
     ds = TextGraphDataset(graphs, dataset_label=f"kgqa/{split}",
                           per_graph_versions=versions, rcm_ordering=cfg.rcm)
@@ -337,13 +395,14 @@ def _build_split_if_missing(split, cfg, out_dir, entity_names, tokenizer, questi
     expressiveness ``load_or_create_dataset``.
     """
     split_dir = os.path.join(out_dir, split)
-    if os.path.isdir(split_dir):
-        print(f"[data_prep] {split}: already present at {split_dir} — skipping.")
+    built_dir = split_dir + ".gtds"          # TextGraphDataset.save appends the suffix
+    if os.path.isdir(built_dir):
+        print(f"[data_prep] {split}: already present at {built_dir} — skipping.")
         return
     os.makedirs(out_dir, exist_ok=True)
     with open(split_dir + ".lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if os.path.isdir(split_dir):
+        if os.path.isdir(built_dir):
             print(f"[data_prep] {split}: built by a concurrent job — skipping.")
             return
         records = [json.loads(l) for l in open(os.path.join(SR_DIR, SPLITS[split]))]
@@ -360,8 +419,10 @@ def run_data_prep_mode(cfg, splits=("train", "dev", "test")):
     """
     out_dir = os.path.join(OUTPUT_ROOT, cfg.data_config_key())
     os.makedirs(out_dir, exist_ok=True)
+    from .config import DATA_FORMAT_VERSION
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump({"data_config_key": cfg.data_config_key(),
+                   "data_format_version": DATA_FORMAT_VERSION,
                    "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
                    "versions": cfg.versions, "max_length": cfg.max_length, "rcm": cfg.rcm,
                    "data_seed": cfg.data_seed, "model_name": cfg.model_name,
