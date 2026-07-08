@@ -120,43 +120,132 @@ Reading it for our purposes:
   them from SR inputs is impossible by construction; the honest target for GTLM is the
   retrieval-matched comparison plus closing the gap to the SR ceiling.
 
-> **NOTE:** This README is a temporary stub holding the answer-coverage measurements
-> below. A full rewrite (task description, data-prep pipeline, usage) is pending.
+## Reproducing from scratch
 
-## Running (sweep workflow)
+Everything below is **run from the repo root** — dataset paths and `results_dir`
+are repo-root-relative. The pipeline is four ordered stages: **setup → acquire
+raw data → build the name dictionary → build datasets → train/evaluate**. Later
+stages hard-depend on earlier ones (data prep reads the name dictionary, which
+reads the raw subgraphs), so run them in order the first time.
 
-The experiment is a standalone single-run program driven by the generic `sweep`
-runner. **Run everything from the repo root** — both the dataset paths and
-`results_dir` are repo-root-relative.
+### 1. Environment
 
 ```bash
-# 1. Scaffold a sweep config, then edit its axes / scalars.
-python3 -m src.experiments.kgqa --init my_sweep
-#    -> src/experiments/kgqa/configs/my_sweep.jsonc
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt              # pip-tools lock; edit requirements.in to change deps
 
-# 2. Build the .gtds datasets for every data config the sweep references
-python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/my_sweep.jsonc
-
-# 3. Train (flip "mode" back to "train").
-python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/my_sweep.jsonc
-
-# 4. Aggregate the runs once the (sbatch) jobs finish.
-python3 -m sweep.report src/experiments/kgqa/results/my_sweep
+# Llama-3.2-1B is a GATED model: accept its license on the HF model page, then
+# authenticate. wandb is only needed if a config sets "wandb_project".
+huggingface-cli login                        # (in-house: `bash login.sh` does hf + wandb)
 ```
 
-For a single config / quick iteration, invoke the experiment directly (bypassing
-the sweep runner):
+### 2. Acquire the raw SR subgraphs + seed name dictionary
+
+Both come from GNN-RAG's public release (Mavromatis & Karypis, 2024). The
+[`gnn/`](https://github.com/cmavro/GNN-RAG/tree/main/gnn) README points to the
+Drive folder for "the datasets", and the
+[`llm/`](https://github.com/cmavro/GNN-RAG/tree/main/llm) README points to the
+same folder for `entities_names.json`:
+
+- **`data.zip`** — SR-retrieved subgraphs, ~1.5 GB
+- **`entities_names.json`** — 560k Freebase-mid → name seed dictionary
 
 ```bash
-python3 -m src.experiments.kgqa --mode data_prep                 # build this config's datasets
-python3 -m src.experiments.kgqa --lora-r 16 --k-hop 2            # train one config
-python3 -m src.experiments.kgqa --max-steps 4 --gen-max-samples 8   # smoke test
+KGQA=src/experiments/kgqa
+pip install gdown
+
+# GNN-RAG Drive folder (canonical source):
+gdown --folder 1ifgVHQDnvFEunP9hmVYT07Y3rvcpIfQp -O /tmp/gnnrag
+# (Fallback mirror if the above is unavailable: <TODO: your Drive/HF link>)
+
+unzip /tmp/gnnrag/data.zip -d "$KGQA"         # -> $KGQA/data/{sr-webqsp,sr-cwq,webqsp,CWQ}/
+cp    /tmp/gnnrag/entities_names.json "$KGQA" # -> $KGQA/entities_names.json (the "v1" seed)
+```
+
+Only `data/sr-webqsp/` is consumed for WebQSP (`data/sr-cwq/` for the not-yet-run
+CWQ arm); `data/webqsp/`, `data/CWQ/`, and the `*.npy` embeddings are GNN-RAG's
+GNN-training inputs and go unused here. Everything under `data/` and both
+`entities_names*.json` files are git-ignored (they are large / externally sourced).
+
+### 3. Build the name dictionary (naming v2)
+
+`entities_names.json` from the release misses ~76 test golds, which then collapse
+as presumed CVT mediators (see [drop decomposition](#why-the-two-ceilings-differ-drop-decomposition)).
+Naming v2 extends it in place with Freebase-native aliases — in-subgraph
+`type.object.name` triples plus the FB5M name dump — and backs the seed up to
+`entities_names.v1.json`:
+
+```bash
+# FB5M Freebase name dump (naming v2's third source):
+curl -L -o "$KGQA/data/FB5M.name.txt.bz2" \
+  https://raw.githubusercontent.com/castorini/BuboQA-data/master/FB5M.name.txt.bz2
+
+python3 -m src.experiments.kgqa.build_entities_names_v2   # 560k -> 598.5k entries
+```
+
+> **Ordering caveat:** the name file is **not** part of the `.gtds` cache key, so a
+> dataset built *after* this step always uses naming v2. To reproduce the
+> `v2-control` arm (naming v1) you must build its `dfv2` cache *before* running
+> this step — otherwise it silently picks up v2 names. A fresh clone reproducing
+> only the headline **v3** numbers can ignore this.
+
+### 4. Build the datasets and train
+
+The experiment is a standalone single-run program driven by the generic `sweep`
+runner. The headline results come from [`configs/attribution_v3.jsonc`](configs/attribution_v3.jsonc)
+(annotated in-file). The two-step workflow — **data_prep once, then train** — is
+idempotent; data prep is cheap (no GPU):
+
+```bash
+CFG=$KGQA/configs/attribution_v3.jsonc
+
+# a) Build every .gtds the config references. Set "mode": "data_prep" in $CFG, then:
+python3 -m sweep src.experiments.kgqa "$CFG"
+
+# b) Train. Flip "mode" back to "train", then:
+python3 -m sweep src.experiments.kgqa "$CFG"
+
+# c) Aggregate once the (sbatch) jobs finish -> results/attribution_v3/report.md
+python3 -m sweep.report "$KGQA/results/attribution_v3"
+```
+
+`attribution_v3.jsonc` runs on Slurm (`"mode": "sbatch"`, B300 GPU); flip
+`execution.mode` to `"local"` to run on the current machine. The best single run
+(v3, `n_max` 20, seed 1) reproduces **72.5 F1 / 78.75 Hits@1**; see
+[Results so far](#results-so-far).
+
+### Single-config / quick iteration
+
+To bypass the sweep runner (one config, direct CLI flags):
+
+```bash
+python3 -m src.experiments.kgqa --mode data_prep                     # build this config's datasets
+python3 -m src.experiments.kgqa --lora-r 16 --k-hop 0 --lr 1e-4      # train one config
+python3 -m src.experiments.kgqa --max-steps 4 --gen-max-samples 8    # smoke test
+python3 -m src.experiments.kgqa --init my_sweep                      # scaffold a new sweep config
 ```
 
 Standalone train runs (no `--runs-jsonl`) append their record to
-`src/experiments/kgqa/results/train_runs.jsonl`.
+`results/train_runs.jsonl`. Every CLI flag maps 1:1 to a `RunConfig` field
+(`config.py`); see `configs/example.jsonc` for an annotated sweep template and
+the [Running](#running-sweep-workflow) note below.
 
-See `configs/example.jsonc` for an annotated template.
+## Running (sweep workflow)
+
+The generic `sweep` runner expands a JSONC config (scalars fixed, lists swept,
+bundles varied together) into one run per resolved config, invoking
+`python3 -m src.experiments.kgqa` per run. A key appears in exactly one place and
+maps 1:1 to a CLI flag. **Run from the repo root** — paths are repo-root-relative.
+
+```bash
+python3 -m src.experiments.kgqa --init my_sweep                        # -> configs/my_sweep.jsonc
+python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/my_sweep.jsonc  # data_prep, then train
+python3 -m sweep.report src/experiments/kgqa/results/my_sweep          # aggregate
+```
+
+The `.gtds` cache directory is keyed only by data-affecting fields
+(`RunConfig.data_config_key`), so runs differing only in training config
+(seed, lr, k_hop, …) share one built dataset.
 
 ## Results so far
 
