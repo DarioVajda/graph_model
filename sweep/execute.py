@@ -238,8 +238,10 @@ def _array_wrap(labels, scripts, sb):
     srun_str = " ".join(shlex.quote(a) for a in srun)
     labels_arr = " ".join(shlex.quote(x) for x in labels)
     scripts_arr = " ".join(shlex.quote(x) for x in scripts)
-    return (f'LABELS=({labels_arr}); SCRIPTS=({scripts_arr}); i="$SLURM_ARRAY_TASK_ID"; '
+    body = (f'LABELS=({labels_arr}); SCRIPTS=({scripts_arr}); i="$SLURM_ARRAY_TASK_ID"; '
             f'{srun_str} "${{LABELS[$i]}}" "${{SCRIPTS[$i]}}"')
+    # sbatch --wrap scripts run under /bin/sh, which has no arrays: force bash.
+    return "exec bash -c " + shlex.quote(body)
 
 
 def _sbatch_argv(jobname, logpath, wrap, sb, array=None):

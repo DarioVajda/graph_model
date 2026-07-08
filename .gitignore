@@ -9,6 +9,7 @@ src/kernels/
 src/graph_attn_tests/
 
 *.gtds/
+*.gtds.lock
 job_logs/
 .inductor_cache/
 **/_inductor_cache/

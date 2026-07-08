@@ -9,10 +9,13 @@ finish::
 
     python -m sweep.report <sweep_dir>
 
-This module is experiment-agnostic: it prints one row per run over the union of
-columns. An experiment that knows its own metrics (which column is "accuracy",
-which axes to average over) can build a richer table on top of :func:`load_runs`
-and :func:`format_table`.
+This module is experiment-agnostic: rows are sorted by run id (``runs.jsonl``
+is in *completion* order — parallel sbatch jobs finish shuffled), columns whose
+value is identical across all runs are pulled out into a "shared config" list,
+and the table shows one row per run over the remaining (varying) columns. An
+experiment that knows its own metrics (which column is "accuracy", which axes
+to average over) can build a richer table on top of :func:`load_runs` and
+:func:`format_table`.
 """
 
 import json
@@ -50,8 +53,56 @@ def _cell(v):
     return "" if v is None else str(v)
 
 
+def _sort_key(run):
+    """Stable run identity: sweep_run ("0003_..."), else run_name, else last."""
+    return (0, run["sweep_run"]) if "sweep_run" in run else \
+           (1, run.get("run_name") or "")
+
+
+def split_constant_columns(runs, columns=None):
+    """Partition columns into ``(varying, constants)``.
+
+    ``constants`` maps column -> rendered value for every column whose value is
+    identical across all runs (a column missing from some runs counts as
+    varying). With fewer than two runs nothing is "constant", so everything
+    stays in the table.
+    """
+    columns = columns if columns is not None else _columns(runs)
+    if len(runs) < 2:
+        return columns, {}
+    varying, constants = [], {}
+    for c in columns:
+        vals = {_cell(r.get(c)) for r in runs}
+        if len(vals) == 1 and all(c in r for r in runs):
+            constants[c] = vals.pop()
+        else:
+            varying.append(c)
+    return varying, constants
+
+
+def format_markdown_table(rows, columns=None):
+    """Render a list of dicts as a GitHub-flavored markdown pipe table.
+
+    Columns whose every non-empty cell is numeric are right-aligned.
+    """
+    if not rows:
+        return "(no runs)"
+    columns = columns if columns is not None else _columns(rows)
+    cells = [{c: _cell(r.get(c)).replace("|", "\\|") for c in columns} for r in rows]
+
+    def _numeric(col):
+        vals = [r.get(col) for r in rows if r.get(col) is not None]
+        return bool(vals) and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                                  for v in vals)
+
+    header = "| " + " | ".join(columns) + " |"
+    sep = "|" + "|".join(" ---: " if _numeric(c) else " --- " for c in columns) + "|"
+    body = ["| " + " | ".join(row[c] for c in columns) + " |" for row in cells]
+    return "\n".join([header, sep] + body)
+
+
 def format_table(rows, columns=None):
-    """Render a list of dicts as a fixed-width text table."""
+    """Render a list of dicts as a fixed-width text table (for terminal use)."""
     if not rows:
         return "(no runs)"
     columns = columns or _columns(rows)
@@ -70,12 +121,15 @@ def format_table(rows, columns=None):
 
 def write_report(sweep_dir):
     """Write ``<sweep_dir>/report.md`` from ``runs.jsonl`` and return its text."""
-    runs = load_runs(sweep_dir)
+    runs = sorted(load_runs(sweep_dir), key=_sort_key)
     name = os.path.basename(os.path.normpath(sweep_dir))
-    table = format_table(runs)
+    varying, constants = split_constant_columns(runs)
     text = (f"# Sweep report: {name}\n\n"
-            f"{len(runs)} run(s) recorded.\n\n"
-            f"```\n{table}\n```\n")
+            f"{len(runs)} run(s) recorded.\n\n")
+    if constants:
+        shared = "\n".join(f"- `{k}` = {v}" for k, v in constants.items())
+        text += f"Shared across all runs:\n\n{shared}\n\n"
+    text += format_markdown_table(runs, columns=varying) + "\n"
     with open(os.path.join(sweep_dir, "report.md"), "w") as f:
         f.write(text)
     return text
@@ -87,10 +141,9 @@ def main(argv=None):
         print("usage: python -m sweep.report <sweep_dir>", file=sys.stderr)
         return 2
     sweep_dir = argv[0]
-    runs = load_runs(sweep_dir)
-    print(format_table(runs))
-    write_report(sweep_dir)
-    print(f"\n[report] wrote {os.path.join(sweep_dir, 'report.md')} ({len(runs)} runs)")
+    text = write_report(sweep_dir)
+    print(text)
+    print(f"[report] wrote {os.path.join(sweep_dir, 'report.md')}")
     return 0
 
 
