@@ -112,6 +112,31 @@ class GraphTrainerV2(Trainer):
                     break
         super().log(logs, *args, **kwargs)
 
+    # ── Correctness: honor the eval_dataset object actually passed ──────────────
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        """Rebuild the eval dataloader when a *different* dataset object is passed.
+
+        HF's ``Trainer.get_eval_dataloader`` (through 4.5x) caches the eval
+        dataloader under the constant key ``"eval"`` for any ``Dataset`` *object*
+        (only a ``str`` key is kept distinct) and returns that cache whenever
+        ``dataloader_persistent_workers`` is on. So scoring a second split after
+        training — e.g. ``evaluate(eval_dataset=test_dataset)`` right after the
+        in-training val evals — silently reuses the cached VAL loader and reports
+        val numbers under the ``test_`` prefix. Dropping the stale entry forces
+        the passed dataset to be the one actually loaded.
+
+        In-training evals pass ``eval_dataset=None`` (the fixed val set), so their
+        cache is left untouched and no worker re-forking happens on the hot path.
+        The ``str`` (named-eval-dataset) path is HF's own keyed cache and is left
+        entirely alone.
+        """
+        if eval_dataset is not None and not isinstance(eval_dataset, str):
+            cache = getattr(self, "_eval_dataloaders", None)
+            if cache:
+                cache.pop("eval", None)
+        return super().get_eval_dataloader(eval_dataset)
+
     # ── Optional: lightweight bias-only checkpoint ──────────────────────────────
 
     def save_model(self, output_dir=None, _internal_call=False):
