@@ -17,8 +17,11 @@ as serialized text.* Retrieval is deliberately held fixed — it is a confound, 
 contribution; every point gained by swapping retrievers would be unattributable to the
 graph architecture. Concretely, in order:
 
-1. **Beat retrieval-matched SR-GNN-RAG** (~78.9 WebQSP Hits@1; we are at 75.4). This is
-   the apples-to-apples pipeline-vs-single-model comparison the setup was designed for.
+1. **Beat retrieval-matched SR-GNN-RAG** (~78.9 WebQSP Hits@1 / 71.3 F1; we are at
+   78.8 / 72.5 after data-format v3 — **F1 already ahead, Hits@1 0.15 short**; and per
+   the A2 diagnostic, Hits@1 structurally under-credits a set generator: Hit/F1 are the
+   honest primary metrics). This is the apples-to-apples pipeline-vs-single-model
+   comparison the setup was designed for.
 2. **Beat the text-serialization ablation**: same base LLM, same SR subgraph flattened to
    triples in the prompt, no structural biases. This isolates whether the graph attention
    biases do anything — the result that transfers to the rest of the repo. *(Not yet run.)*
@@ -42,24 +45,28 @@ higher = better); the last column is our best run to date.
 
 | Benchmark | Metric | RoG | GNN-RAG | GNN-RAG + RA | Best published (2026) | **Ours — best** |
 |---|---|---:|---:|---:|---:|---:|
-| **WebQSP** | Hits@1 | 80.0 | 80.6 | 82.8 | 91.6 | **75.4** |
-| **WebQSP** | F1 | 70.8 | 71.3 | 73.5 | 88.6 | **66.9** |
+| **WebQSP** | Hits@1 | 80.0 | 80.6 | 82.8 | 91.6 | **78.8** |
+| **WebQSP** | F1 | 70.8 | 71.3 | 73.5 | 88.6 | **72.5** |
 | **CWQ** | Hits@1 | 57.8 | 61.7 | 62.8 | 79.6 | — *(not run)* |
 | **CWQ** | F1 | 56.2 | 59.4 | 60.4 | 74.2 | — *(not run)* |
 
-- **Ours** = best `baseline`-sweep config (Llama-3.2-1B, k_hop 0, lr 1e-4); test set, verbatim
-  GNN-RAG scoring. WebQSP only — no CWQ runs yet. See [Results so far](#results-so-far).
+- **Ours** = best `attribution_v3` run (Llama-3.2-1B, data-format v3, k_hop 0, lr 1e-4,
+  n_max 20, seed 1; test Hit 82.7); test set, verbatim GNN-RAG scoring. The 3-seed v3 arm
+  means are F1 71.1–71.5 / Hits@1 77.5 (±1.0 seed noise). WebQSP only — no CWQ runs yet.
+  See [Results so far](#results-so-far).
 - **GNN-RAG / GNN-RAG+RA / RoG**: from GNN-RAG Table 2 (Mavromatis & Karypis, 2024). Those use
   *combined* GNN retrievers; the **retrieval-matched** SR-only GNN-RAG is ~**78.9** WebQSP Hits@1
-  — the fairest single baseline given our SR inputs (still ~3.5 pts above ours).
+  — the fairest single baseline given our SR inputs (0.15 above our best run, with our F1
+  ahead 72.5 vs 71.3).
 - **Best published (2026)**: WebQSP Hits@1 = TRACE (91.6, GPT-4.1 agentic); WebQSP F1 and both
   CWQ cells = GraphWalker (Qwen2.5-7B SFT+RL; reports EM, ≈Hits@1). Metric caveats and the full
   method list are in [Published SOTA landscape](#published-sota-landscape-as-of-2026-07) below.
   These methods run their **own retrieval/agentic KG access**, so they are *not* bounded by our
   SR answer-coverage ceiling and upper-bound the field loosely, not our setting.
-- Our SR-retrieval **answer-coverage ceiling** (below) caps WebQSP at Hits@1 ≤ 89.7 / F1 ≤ 87.3 —
-  the headroom any GTLM on these inputs is competing for. Note current SOTA already presses
-  against it: the field has moved past what SR retrieval can support.
+- Our SR-retrieval **answer-coverage ceiling** (below) caps WebQSP at Hits@1 ≤ 90.9 / F1 ≤ 89.1
+  (data-format v3; pipeline losses now ≈0, so this is within 0.2 of raw SR itself) — the headroom
+  any GTLM on these inputs is competing for. Note current SOTA already presses against it: the
+  field has moved past what SR retrieval can support.
 
 ### Published SOTA landscape (as of 2026-07)
 
@@ -105,11 +112,11 @@ Reading it for our purposes:
 - **F1 SOTA** (no oracle): **GraphWalker 88.6** WebQSP / **74.2** CWQ — a 7B model with SFT+RL
   and agentic multi-turn KG access, i.e. *not* a single-pass reader over a fixed subgraph.
 - **The most informative anchor for us is RPO-RAG's Llama-3.2-1B row** (bolded): same base
-  model as ours, single-pass RAG-style reading. Hit 82.3 / F1 69.8 WebQSP vs our Hit 80.4 /
-  F1 66.9 — we are ~2–3 pts behind a 2026 preference-optimized text-RAG pipeline at equal
-  model size, with a different (their own) retriever.
-- Everything above ~87 WebQSP Hits@1 exceeds our capped SR ceiling (89.7 uncapped-input /
-  87.3 F1) — those systems retrieve better than SR or query the KG interactively. Beating
+  model as ours, single-pass RAG-style reading. Hit 82.3 / F1 69.8 WebQSP vs our Hit 82.7 /
+  F1 72.5 (data-format v3) — **we now exceed the 2026 preference-optimized text-RAG pipeline
+  at equal model size** (+0.4 Hit, +2.7 F1), with a different (their own) retriever.
+- Everything above ~89 WebQSP Hits@1 exceeds our capped SR ceiling (90.9 / 89.1 F1, data v3)
+  — those systems retrieve better than SR or query the KG interactively. Beating
   them from SR inputs is impossible by construction; the honest target for GTLM is the
   retrieval-matched comparison plus closing the gap to the SR ceiling.
 
@@ -153,7 +160,38 @@ See `configs/example.jsonc` for an annotated template.
 
 ## Results so far
 
-All completed sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep
+### Data-format v3 sweeps (2026-07-08) — current best
+
+`attribution_v3` (data {v2-control, v3, v3/n_max=50} × seed {0,1,2}) and
+`capacity_lora` (lora_r {8,64}), all at the cheap operating point: k_hop 0,
+last_1, lr 1e-4, bias_lr 5e-3, 15 epochs, full-dev checkpoint selection
+(eval_steps 200), B300. Test set, 1628 questions:
+
+| arm | lora_r | n_max | test F1 (seeds 0/1/2) | mean F1 | Hits@1 | Hit |
+|---|---:|---:|---|---:|---:|---:|
+| v2-control | 16 | 20 | 66.81 / 66.73 / 65.93 | **66.49 ± 0.4** | 74.42 | 80.08 |
+| **v3** | 16 | 20 | 70.26 / **72.50** / 70.56 | **71.11 ± 1.0** | 77.48 | 82.15 |
+| v3, recall arm | 16 | 50 | 72.12 / 71.46 / 70.80 | **71.46 ± 0.5** | 77.60 | 81.84 |
+| v3, capacity | 8 | 20 | 69.40 (seed 0) | 69.40 | 76.23 | 80.41 |
+| v3, capacity | 64 | 20 | 71.90 (seed 0) | 71.90 | 77.76 | 82.74 |
+
+Takeaways:
+
+- **Data-format v3 (newline answer delimiter + naming v2) is worth +4.6 test F1**
+  (66.5 → 71.1) at identical training config — 5–10× the seed-noise bar, which this
+  sweep measured for the first time (±0.4 v2 / ±1.0 v3). The v2-control landing on
+  the historical 66.5 plateau validates the comparison.
+- **Best run** (v3, n_max 20, seed 1): **72.50 F1 / 78.75 Hits@1 / 82.74 Hit** —
+  F1 above retrieval-matched SR-GNN-RAG (71.3), Hits@1 within 0.15 of it (78.9).
+- **n_max=50** buys ~+0.35 mean F1 (within noise of n_max=20's spread), flat Hits@1 —
+  the enumeration tail is not the binding constraint.
+- **LoRA capacity is monotone** (r8 69.4 < r16 70.3 < r64 71.9 at seed 0): +1.6 F1
+  for r64 over control vs ±1.0 noise — suggestive; the miss_copied bucket diff
+  (error analysis v3) is the deciding readout for the 3B/8B scale-run decision.
+
+### Data-format v2 sweeps (historical)
+
+All v2-era sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep
 reports live in `results/<sweep>/report.md`). Fixed across every run: Llama-3.2-1B,
 lora_r 16, max_nodes 512, n_max 20, versions 8, one B200. The sweeps also differ in
 seed (42 vs 0) and checkpoint selection (`baseline`: 128 dev samples; `relmode_khop`:
@@ -189,8 +227,9 @@ These bound how well *any* model can do given SR retrieval — the input either 
 the answer or it doesn't. WebQSP reports **macro** metrics (per-question, averaged over
 questions), so the macro rows are the operative ceilings; micro is diagnostic only.
 
-Measured from `data/sr-webqsp/{train,dev,test}.json` (data-format v2). Each cell
-is **uncapped / capped**:
+Measured from `data/sr-webqsp/{train,dev,test}.json` (**data-format v3** — newline
+delimiter + naming v2; the v2 tables live in the `_dfv2` caches'
+`coverage_analysis.json`). Each cell is **uncapped / capped**:
 
 - **uncapped** — the gold's `kb_id` occurs anywhere in the raw `subgraph.tuples`:
   the pure SR-retrieval ceiling, before any data prep of ours.
@@ -212,23 +251,29 @@ next to the built splits).
 
 | Ceiling (uncapped / capped) | **test** (n=1628) | train (n=2826) | dev (n=246) | Bounds |
 |---|---|---|---|---|
-| ≥1 gold present per question | **91.1% / 89.7%** | 92.6% / 91.0% | 89.8% / 88.2% | **Hits@1** |
-| Recall — macro (avg per-q present/total) | 89.2% / 86.4% | 90.5% / 87.6% | 86.7% / 84.2% | per-q recall |
-| Recall — micro (Σpresent/Σtotal) | 63.3% / 53.8% | 56.9% / 47.4% | 34.0% / 32.2% | answer-instance recall *(diagnostic)* |
-| **F1 — macro**, perfect precision, uncapped | **89.6% / 87.3%** | 91.0% / 88.5% | 87.1% / 85.0% | **macro-F1 (WebQSP metric)** |
-| Recall — macro, cap N_max=20 | 86.4% / 83.9% | 87.9% / 85.3% | 85.2% / 83.1% | — |
-| F1 — macro, cap N_max=20 | **87.4% / 85.3%** | 88.9% / 86.8% | 86.1% / 84.1% | macro-F1 under our cap |
+| ≥1 gold present per question | **91.1% / 90.9%** | 92.6% / 92.3% | 89.8% / 89.8% | **Hits@1** |
+| Recall — macro (avg per-q present/total) | 89.2% / 88.6% | 90.5% / 89.7% | 86.7% / 86.4% | per-q recall |
+| Recall — micro (Σpresent/Σtotal) | 63.3% / 54.5% | 56.9% / 47.9% | 34.0% / 32.6% | answer-instance recall *(diagnostic)* |
+| **F1 — macro**, perfect precision, uncapped | **89.6% / 89.1%** | 91.0% / 90.3% | 87.1% / 86.9% | **macro-F1 (WebQSP metric)** |
+| Recall — macro, cap N_max=20 | 86.4% / 86.0% | 87.9% / 87.4% | 85.2% / 85.2% | — |
+| F1 — macro, cap N_max=20 | **87.4% / 87.1%** | 88.9% / 88.5% | 86.1% / 86.1% | macro-F1 under our cap |
 
 **Reading it:**
 - Operative test ceilings for models trained/scored on the built dataset:
-  **Hits@1 ≤ 89.7%**, **macro-F1 ≤ 87.3%** (→ **85.3%** under the N_max=20 cap).
-  Against raw SR retrieval: 91.1% / 89.6% (→ 87.4%).
+  **Hits@1 ≤ 90.9%**, **macro-F1 ≤ 89.1%** (→ **87.1%** under the N_max=20 cap).
+  Against raw SR retrieval: 91.1% / 89.6% (→ 87.4%). Pipeline losses are now ≈0:
+  the capped ceilings sit within 0.2–0.5 pts of raw SR (v2 had a 1.4-pt gap).
+- On the stricter **text-generatable** criterion (some node text contains a
+  normalized gold — what generation can actually copy), the test Hit ceiling moved
+  **87.5% (v2) → 92.1% (v3)**: naming v2 recovered 74 test questions. It can exceed
+  the kb_id-based row because a gold string can also appear inside another node's text.
 - micro ≪ macro: entirely the enumeration tail (6.8% of questions have >20 golds,
   up to 3688). Micro weights every (q, answer) pair equally so those questions dominate; it is
   **not** a benchmark ceiling — don't optimize for it.
-- The N_max=20 cap costs only ~2 macro-F1 points → cheap.
+- The N_max=20 cap costs only ~2 macro-F1 points → cheap (and the n_max=50 recall arm
+  confirmed it empirically: +0.35 F1, within noise).
 - All rows assume perfect precision, so real achievable numbers are strictly below.
-- GNN-RAG's SR Hits@1 (~78.9) sits ~11 pts under even the capped ceiling — that gap is the
+- GNN-RAG's SR Hits@1 (~78.9) sits ~12 pts under even the capped ceiling — that gap is the
   graph-reasoning headroom GTLM targets (genuine reasoning, not retrieval failure).
 
 ### Why the two ceilings differ (drop decomposition)
@@ -239,13 +284,13 @@ only the answerable questions (there is nothing to supervise otherwise);
 empty-target rows that score ~0 — so all eval metrics use the full benchmark
 denominators out of the box (no post-hoc correction needed).
 
-| Questions | train | dev | **test** |
+| Questions (data-format v3, v2 in parens) | train | dev | **test** |
 |---|---|---|---|
-| **answerable** (supervisable; = train's kept rows) | 2573 | 217 | **1460** |
+| **answerable** (supervisable; = train's kept rows) | 2607 (2573) | 221 (217) | **1480 (1460)** |
 | answer not in SR subgraph (retrieval failure) | 209 | 25 | 145 |
 | retrieved, no scoreable answer text | 0 | 0 | 0 |
 | lost to the `max_nodes=512` cap | 10 | 0 | 3 |
-| lost to CVT collapse | 34 | 4 | 20 |
+| lost to CVT collapse | 0 (34) | 0 (4) | **0 (20)** |
 | **total answered** (dev/test `.gtds` size = eval denominator) | 2826 | 246 | **1628** |
 
 - The `max_nodes=512` cap is nearly free: 3/1628 test questions (0.2 pt). Raising it is
@@ -256,10 +301,13 @@ denominators out of the box (no post-hoc correction needed).
 - The old "retrieved but no `text`" bucket (24 test questions) is gone: those golds are
   *literals* (dates, numbers, currency codes) whose `kb_id` is the answer string itself,
   and `answer_text` now falls back to it — the same string the graph shows for the node.
-- CVT-collapse losses are answers that are *unnamed* single-parent mediator nodes. Under
-  v1 naming (`entities_names.json` only) they would read "unnamed entity" even if kept, so
-  they are effectively unanswerable anyway; a naming v2 (broader, answer-independent alias
-  source) would both name them and stop their collapse.
+- CVT-collapse losses are **zero since naming v2** (data-format v3). The A1 audit
+  (`results/error_analysis/audit_pipeline_losses.py`) showed the v2 losses were never
+  true CVTs: they were real named entities missing from `entities_names.json`, whose
+  "unnamed entity" fallback text made `_collapse_cvts` contract them as presumed
+  mediators. Naming v2 (`build_entities_names_v2.py`: in-subgraph `type.object.name`
+  triples + the FB5M Freebase name dump, 560k → 598.5k entries) names them, which both
+  fixes their node text and stops their collapse.
 
 ### Evaluation parity with GNN-RAG
 
@@ -274,13 +322,19 @@ Benchmark comparability is exact, not approximate:
   `rmanluo/RoG-webqsp` (their test split is exactly our 1628 answered questions).
   Like theirs, golds with no name anywhere stay as raw-mid placeholders that never
   match — deflating recall for us exactly as it does for them.
-- `entities_names.json` (node naming) is itself the file shipped in GNN-RAG's
-  `llm/` folder.
+- `entities_names.json` (node naming) started as the file shipped in GNN-RAG's
+  `llm/` folder (560k entries, preserved at `entities_names.v1.json`); naming v2
+  extends it to 598.5k with Freebase-native aliases only (in-subgraph
+  `type.object.name` triples + the FB5M name dump — see
+  `build_entities_names_v2.py`). No per-question answer-text harvesting: gold
+  texts still feed ONLY targets/eval, never node text.
 
 ### Built-split token lengths
 
 Total tokens per stored example (sum over all node texts of one graph, ≈3 tokens/node;
-the train split stores `versions`=8 answer-order augmentations per question):
+the train split stores `versions`=8 answer-order augmentations per question).
+Measured on the dfv2 build; v3 graphs are marginally larger (fewer collapses,
++34 train questions):
 
 | Split (examples) | mean | p50 | p75 | p90 | p95 | p99 | max | tokens/node |
 |---|---|---|---|---|---|---|---|---|
