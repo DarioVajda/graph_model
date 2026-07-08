@@ -201,6 +201,7 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         gen_max_new_tokens=cfg.gen_max_new_tokens,
         gen_max_samples=(cfg.gen_eval_samples if cfg.gen_eval_samples is not None
                          else cfg.gen_max_samples),
+        gen_answer_sep=cfg.answer_parse_sep,
     )
 
     trainer.train()

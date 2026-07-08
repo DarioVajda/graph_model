@@ -34,7 +34,14 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B"
 # SEMANTICS change without any config knob changing, so stale caches can't be
 # silently reused. v2 = literal-kb_id fallback for answer texts + unanswerable
 # dev/test questions kept as empty-target eval rows (benchmark denominators).
-DATA_FORMAT_VERSION = 2
+# v3 = newline answer separator (commas appear INSIDE 12.7% of test golds,
+# making comma-joined sets unlearnable/unparseable; "\n" is collision-free and
+# matches GNN-RAG's own generation format) + naming v2 (entities_names.json
+# extended with a broader mid->name alias source).
+# This module constant is only the DEFAULT for ``RunConfig.data_format_version``
+# — the version is a real config knob so sweeps can pin an older format (e.g.
+# a dfv2 control arm) against current code.
+DATA_FORMAT_VERSION = 3
 
 REL_MODES = ("last_1", "last_2", "full")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
@@ -60,6 +67,7 @@ class RunConfig:
     max_length: int = 1024                    # per-node token cap (kept non-binding)
     rcm: bool = True                          # reverse-Cuthill-McKee node ordering
     data_seed: int = 42                       # augmentation RNG seed (baked into cache key)
+    data_format_version: int = DATA_FORMAT_VERSION   # pipeline-semantics version (cache key + answer separator)
     use_gpu: bool = True                      # data-prep only (SPD/magnetic on GPU); train ignores it
     analyse_dataset: bool = False             # data-prep only: coverage-ceiling analysis (not in cache key)
 
@@ -100,6 +108,16 @@ class RunConfig:
     wandb_project: str = None                 # None = no tracking; a string = the wandb project
 
     # ── helpers ──────────────────────────────────────────────────────────────
+    @property
+    def answer_sep(self):
+        """Separator JOINING answers in the training target (v3: newline)."""
+        return "\n" if self.data_format_version >= 3 else ", "
+
+    @property
+    def answer_parse_sep(self):
+        """Separator the evaluator SPLITS generations on (must mirror ``answer_sep``)."""
+        return "\n" if self.data_format_version >= 3 else ","
+
     @property
     def torch_dtype(self):
         import torch
@@ -145,7 +163,7 @@ class RunConfig:
         return (f"sr-webqsp_{model}_v{self.rel_mode}_cap{self.max_nodes}_nmax{self.n_max}"
                 f"_ver{self.versions}_spd{self.max_spd}_magq{self.magnetic_q}m{self.magnetic_m}"
                 f"_len{self.max_length}_rcm{int(self.rcm)}_seed{self.data_seed}"
-                f"_dfv{DATA_FORMAT_VERSION}")
+                f"_dfv{self.data_format_version}")
 
     def validate(self):
         """Reject accepted-but-unsupported combinations with a clear message.
@@ -164,6 +182,9 @@ class RunConfig:
             raise ValueError(f"lora_r must be >= 0 (0 disables LoRA); got {self.lora_r}.")
         if self.n_max < 1:
             raise ValueError(f"n_max must be >= 1; got {self.n_max}.")
+        if self.data_format_version not in (2, 3):
+            raise ValueError(
+                f"data_format_version must be 2 or 3; got {self.data_format_version}.")
         if self.versions < 1:
             raise ValueError(f"versions must be >= 1; got {self.versions}.")
         if not (self.spd or self.magnetic):

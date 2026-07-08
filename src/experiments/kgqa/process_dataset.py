@@ -19,9 +19,12 @@ numbers — see ``answer_text``). Train keeps only supervisable questions; dev/t
 also keep unanswerable-but-scoreable ones as empty-target rows so eval
 denominators match the benchmark (GNN-RAG scores retrieval failures as 0 too).
 
-Node naming is v1 = entity_names.json ONLY. Harvesting answer `text` into node
-text would leak the answer at eval (gold nodes would be the only newly-named
-ones), so answer text feeds ONLY the target / eval matching.
+Node naming reads entities_names.json ONLY. Harvesting a question's own answer
+`text` into node text would leak the answer at eval (gold nodes would be the
+only newly-named ones), so answer text feeds ONLY the target / eval matching.
+Naming v2 (data-format v3) extends that FILE with Freebase-native aliases
+(in-subgraph ``type.object.name`` triples + the FB5M name dump — see
+``build_entities_names_v2.py``); the no-per-question-harvesting rule stands.
 
 This is the ``data_prep`` mode of the experiment. It consumes a ``RunConfig``
 (not its own argparse) and is driven by ``run_data_prep_mode``; the entry point is
@@ -49,8 +52,10 @@ OUTPUT_ROOT = os.path.join(EXPERIMENT_DIR, "processed_datasets")
 
 UNNAMED = "unnamed entity"
 END_OF_HOP = "END OF HOP"
-ANSWER_DELIM = "\nAnswer:"          # prompt = "{question}\nAnswer: a1, a2, ..."
-ANSWER_SEP = ", "
+# Prompt = "{question}\nAnswer: a1<sep>a2<sep>...". The truncation anchor below is
+# a fixed string; the answer separator is version-dependent (cfg.answer_sep:
+# dfv2 ", ", dfv3 "\n" — collision-free, single-token, GNN-RAG's own format).
+ANSWER_DELIM = "\nAnswer:"
 
 SPLITS = {"train": "train.json", "dev": "dev.json", "test": "test.json"}
 
@@ -64,7 +69,7 @@ def _decode_literal(s: str) -> str:
 
 
 def resolve_entity_text(node, entity_names: dict) -> str:
-    """v1 entity node text: entity_names.json only; unnamed MIDs -> 'unnamed entity'."""
+    """Entity node text: entities_names.json only; unnamed MIDs -> 'unnamed entity'."""
     if not isinstance(node, str):
         return str(node)
     if node in entity_names:
@@ -310,7 +315,7 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
     for _ in range(versions):
         order = present[:]
         rng.shuffle(order)
-        answer_str = ANSWER_SEP.join(order[: cfg.n_max])
+        answer_str = cfg.answer_sep.join(order[: cfg.n_max])
         graphs.append(add_prompt_node(base, record, answer_str, gold))
     return graphs
 
@@ -419,10 +424,9 @@ def run_data_prep_mode(cfg, splits=("train", "dev", "test")):
     """
     out_dir = os.path.join(OUTPUT_ROOT, cfg.data_config_key())
     os.makedirs(out_dir, exist_ok=True)
-    from .config import DATA_FORMAT_VERSION
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump({"data_config_key": cfg.data_config_key(),
-                   "data_format_version": DATA_FORMAT_VERSION,
+                   "data_format_version": cfg.data_format_version,
                    "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
                    "versions": cfg.versions, "max_length": cfg.max_length, "rcm": cfg.rcm,
                    "data_seed": cfg.data_seed, "model_name": cfg.model_name,

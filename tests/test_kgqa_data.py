@@ -133,3 +133,40 @@ def test_eval_hits():
 def test_parse_answer_list_keeps_raw_parts():
     assert ev.parse_answer_list(" Jamaican English, Jamaican Creole ,") == \
         ["Jamaican English", "Jamaican Creole"]
+
+
+# --------------------------------------------------------------------------- #
+# data-format v3: newline answer separator (comma-in-gold fix)
+# --------------------------------------------------------------------------- #
+def test_answer_sep_tracks_data_format_version():
+    assert RunConfig(data_format_version=2).answer_sep == ", "
+    assert RunConfig(data_format_version=2).answer_parse_sep == ","
+    assert RunConfig(data_format_version=3).answer_sep == "\n"
+    assert RunConfig(data_format_version=3).answer_parse_sep == "\n"
+
+
+def test_data_format_version_in_cache_key_and_validated():
+    assert RunConfig(data_format_version=2).data_config_key().endswith("_dfv2")
+    assert RunConfig(data_format_version=3).data_config_key().endswith("_dfv3")
+    with pytest.raises(ValueError):
+        RunConfig(data_format_version=1).validate()
+
+
+def test_v3_target_newline_joined_and_comma_gold_roundtrips():
+    # the motivating case: a gold with an internal comma survives join+parse
+    rec = _record(
+        [{"kb_id": "m.a", "text": "Return J. Meigs, Jr."},
+         {"kb_id": "m.b", "text": "Second Answer"}],
+        [["m.topic", "r.r", "m.a"], ["m.topic", "r.r", "m.b"]],
+    )
+    names = {**NAMES, "m.a": "Return J. Meigs, Jr.", "m.b": "Second Answer"}
+    cfg = RunConfig(data_format_version=3)
+    gs = build_question_graphs(rec, names, cfg, versions=1, rng=random.Random(0))
+    target = gs[0].nodes["PROMPT"]["text"].split(ANSWER_DELIM)[1]
+    parsed = ev.parse_answer_list(target, sep=cfg.answer_parse_sep)
+    assert sorted(parsed) == ["Return J. Meigs, Jr.", "Second Answer"]
+
+
+def test_v3_parse_drops_blank_segments():
+    # "\n\n" drift in generations must not create empty predictions
+    assert ev.parse_answer_list(" A1\n\nA2\n", sep="\n") == ["A1", "A2"]

@@ -1,0 +1,59 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Capacity probe (C1 of the TODO roadmap): lora_r {8, 64} on v3/n_max=20 at
+  // the same operating point as attribution_v3; the r=16 control is that
+  // sweep's v3 arm. Target bucket: miss_copied (8.1 F1 pts — copied real node
+  // texts, wrong ones). If r=64 doesn't move that bucket, the residual gap is
+  // backbone scale -> feeds the planned 3B/8B one-off (README goal #3), not
+  // more 1B tuning. Readout = C2's bucket diff, not headline F1.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/capacity_lora.jsonc
+  //   python3 -m sweep.report src/experiments/kgqa/results/capacity_lora
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "capacity_lora",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axis ──────────────────────────────────────────────────────────────────
+  "mode": "train",
+  "lora_r": [8, 64],
+
+  // ── fixed: attribution_v3's v3 arm, seed 0 ────────────────────────────────
+  "seed": 0,
+  "data_format_version": 3,
+  "n_max": 20,
+  "gen_max_new_tokens": 128,
+  "k_hop": 0,
+  "rel_mode": "last_1",
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "max_nodes": 512,
+  "versions": 8,
+  "data_seed": 42,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+
+  "wandb_project": "GraphLLM"
+}

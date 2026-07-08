@@ -7,7 +7,8 @@ as a set. This module:
 
   * truncates each eval example's prompt node at the "Answer:" delimiter,
   * runs ``model.generate`` (greedy) from that prefix with the graph bias,
-  * parses the comma-separated continuation into an answer list, and
+  * parses the continuation into an answer list (separator per data-format
+    version: "," for dfv2, "\n" for dfv3), and
   * scores macro **Hits@1 / F1 / Hit\*** against the FULL gold set
     (``graph['gold_answers']``, stored by process_dataset).
 
@@ -88,13 +89,16 @@ def eval_hit(prediction, answer):
 # --------------------------------------------------------------------------- #
 # Parsing + strict secondary metrics
 # --------------------------------------------------------------------------- #
-def parse_answer_list(text: str):
-    """Split a generated 'a1, a2, ...' continuation into raw (un-normalized) parts.
+def parse_answer_list(text: str, sep: str = ","):
+    """Split a generated answer-list continuation into raw (un-normalized) parts.
 
-    GNN-RAG splits its generations on newlines; ours are trained to be
-    comma-separated, so the comma is our delimiter. Matching normalizes later.
+    ``sep`` must mirror the separator the data was BUILT with
+    (``RunConfig.answer_parse_sep``): "," for dfv2 targets, "\n" for dfv3 —
+    where it matches GNN-RAG's own newline-split generations exactly.
+    Matching normalizes later; empty segments are dropped, so "\n\n" drift in
+    generations is harmless.
     """
-    return [p.strip() for p in text.split(",") if p.strip()]
+    return [p.strip() for p in text.split(sep) if p.strip()]
 
 
 def _find_prefix_len(ids, question_end):
@@ -125,7 +129,8 @@ def _strict_set_f1(pred, gold):
 # --------------------------------------------------------------------------- #
 @torch.no_grad()
 def generative_eval(model, dataset, tokenizer, collator, question_end,
-                    max_new_tokens=128, device=None, max_samples=None, prefix="eval"):
+                    max_new_tokens=128, device=None, max_samples=None, prefix="eval",
+                    answer_sep=","):
     was_training = model.training
     model.eval()
     device = device or next(model.parameters()).device
@@ -165,7 +170,7 @@ def generative_eval(model, dataset, tokenizer, collator, question_end,
         new_tokens = out[0][batch["input_ids"].shape[1]:]
         text = tokenizer.decode(new_tokens, skip_special_tokens=True)
 
-        pred = parse_answer_list(text)
+        pred = parse_answer_list(text, sep=answer_sep)
 
         # ── primary: GNN-RAG metrics (benchmark-comparable) ──
         if pred:
@@ -207,13 +212,15 @@ class KGQAGraphTrainer(GraphTrainerV2):
     """GraphTrainerV2 whose ``evaluate`` also runs generative set-level scoring."""
 
     def __init__(self, *args, gen_tokenizer=None, gen_collator=None, question_end=None,
-                 gen_max_new_tokens=128, gen_max_samples=None, **kwargs):
+                 gen_max_new_tokens=128, gen_max_samples=None, gen_answer_sep=",",
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self._gen_tokenizer = gen_tokenizer
         self._gen_collator = gen_collator or GraphCollatorV2(tokenizer=gen_tokenizer)
         self._question_end = question_end
         self._gen_max_new_tokens = gen_max_new_tokens
         self._gen_max_samples = gen_max_samples
+        self._gen_answer_sep = gen_answer_sep
 
     def set_gen_max_samples(self, n):
         """Switch the generative-eval cap (cheap in-training cap -> full final scoring)."""
@@ -226,6 +233,7 @@ class KGQAGraphTrainer(GraphTrainerV2):
             self.model, ds, self._gen_tokenizer, self._gen_collator, self._question_end,
             max_new_tokens=self._gen_max_new_tokens, max_samples=self._gen_max_samples,
             device=self.args.device, prefix=metric_key_prefix,
+            answer_sep=self._gen_answer_sep,
         )
         metrics.update(gen)
         self.log(gen)

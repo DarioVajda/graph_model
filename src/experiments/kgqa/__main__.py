@@ -147,6 +147,9 @@ def build_parser():
     p.add_argument("--max-length", type=int, default=d.max_length, help="per-node token cap (kept non-binding)")
     p.add_argument("--rcm", action=B, default=d.rcm, help="reverse-Cuthill-McKee node ordering.")
     p.add_argument("--data-seed", type=int, default=d.data_seed, help="augmentation RNG seed (in the cache key).")
+    p.add_argument("--data-format-version", type=int, default=d.data_format_version,
+                   help="pipeline-semantics version (cache key + answer separator); "
+                        "pin an older value to run a legacy-format control arm.")
     p.add_argument("--use-gpu", action=B, default=d.use_gpu, help="build SPD/magnetic features on GPU (data prep).")
     p.add_argument("--analyse-dataset", action=B, default=d.analyse_dataset,
                    help="during data prep, also run the answer-coverage ceiling analysis "
@@ -207,7 +210,8 @@ def config_from_args(args):
         mode=args.mode,
         rel_mode=args.rel_mode, max_nodes=args.max_nodes, n_max=args.n_max,
         versions=args.versions, max_length=args.max_length, rcm=args.rcm,
-        data_seed=args.data_seed, use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
+        data_seed=args.data_seed, data_format_version=args.data_format_version,
+        use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
         model_name=args.model_name,
         spd=args.spd, max_spd=args.max_spd, magnetic=args.magnetic,
         magnetic_dim=args.magnetic_dim, magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
