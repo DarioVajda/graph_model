@@ -1,0 +1,31 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build the 4 probe datasets once, before the suite runs (one sequential
+  // job; each task's `.gtds` artifact is shared by all 36 of its runs).
+  //   python3 -m sweep src.experiments.probes <this file>
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "data_prep",
+  "results_dir": "src/experiments/probes/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",          // GPU speeds up the SPD / eigh feature passes
+      "cpus": 16,
+      "mem": "64G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+    }
+  },
+
+  "mode": "data_prep",
+  "task": ["direction", "substructure", "local_hop", "text_path"],
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0
+}

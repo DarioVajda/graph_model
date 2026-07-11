@@ -1,0 +1,49 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Cluster smoke test: tiny datasets, 40 optimizer steps, the REAL flex
+  // backend (v2-flex) so the smoke run exercises the same path as the 144-run
+  // suite — including flex-attention kernel compilation. One GPU job runs all
+  // 8 configs (4 tasks x 2 arms) sequentially; verifies the full generate ->
+  // featurize -> train -> best-val -> test -> runs.jsonl path.
+  //   python3 -m sweep src.experiments.probes <this file>
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "smoke",
+  "results_dir": "src/experiments/probes/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",   // all 8 runs in one sequential GPU job
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",
+      "cpus": 16,
+      "mem": "64G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+    }
+  },
+
+  "task": ["direction", "substructure", "local_hop", "text_path"],
+  "bias": ["spd", "spd+magnetic_shared"],
+  "k_hop": 0,
+  "seed": 0,
+
+  // Real flex path (matches the suite). "default" compile keeps the one-time
+  // kernel build fast for a plumbing check; 40 steps gets well past it so a
+  // handful of steps are actually timed rather than dominated by compilation.
+  "impl": "v2-flex",
+  "flex_compile_mode": "default",
+  "train_size": 32,
+  "val_size": 8,
+  "test_size": 8,
+  "num_epochs": 1,
+  "max_steps": 40,
+  "eval_steps": 20,
+  "batch_size": 2,
+  "accumulation_steps": 1,
+  "num_workers": 0,
+  "measure_density": false,
+  "wandb_project": null
+}

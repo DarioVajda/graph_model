@@ -1,0 +1,52 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // The full probe suite (README): 4 tasks x 6 bias arms x 2 k_hop x 3 seeds
+  // = 144 runs. Run the data_prep config first (builds the 4 datasets once),
+  // then:  python3 -m sweep src.experiments.probes <this file>
+  // Aggregate with:  python3 -m sweep.report src/experiments/probes/results/suite
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "suite",
+  "results_dir": "src/experiments/probes/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 16,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 16,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+      // "dry_run": true,
+    }
+  },
+
+  // ── the suite's axes ──────────────────────────────────────────────────────
+  "task": ["direction", "substructure", "local_hop", "text_path"],
+  "bias": ["none", "spd", "magnetic", "spd+magnetic", "magnetic_shared", "spd+magnetic_shared"],
+  "k_hop": [0, 4],
+  "seed":  [0, 1, 2],
+
+  // ── fixed recipe (README suite-wide conventions; also the config defaults,
+  //    pinned here so the sweep snapshot is self-describing) ─────────────────
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+  "num_epochs": 16,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "eval_steps": 100,
+  "lr": 5e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 4,
+  "wandb_project": null
+}
