@@ -16,7 +16,7 @@
   // The last_2 arms need a fresh dataset build (rel_mode is in the cache key):
   //   python3 -m src.experiments.kgqa --mode data_prep --rel-mode last_2
   //
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/relmode_khop.jsonc
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/004_relmode_khop.jsonc
   //   python3 -m sweep.report src/experiments/kgqa/results/relmode_khop
   // ─────────────────────────────────────────────────────────────────────────
   "name": "relmode_khop",

@@ -1,51 +1,59 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // D2.3 extension (2026-07-09): the flat arm landed WITHIN 2 F1 of the graph
-  // arm at seed 0 (test F1 73.10 @ lr 1e-4 vs graph r64 71.90 / best 72.50)
-  // -> extend to 3 seeds for the real comparison. lr probe verdict: 1e-4 ≥
-  // 2e-4 (73.10 vs 72.96 test) — keep 1e-4, same as the graph arm.
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/flat_v3_seeds.jsonc
+  // D4 — recall-side set calibration (activated by D0.1 verdict (a)-partial).
+  //
+  // ONE training-side lever: boundary_loss_weight=4 — the dfv3 "\n"
+  // answer-boundary token's loss upweighted (renormalized: total loss scale
+  // unchanged; see KGQAGraphTrainer.boundary_weighted_loss + unit tests).
+  // Generation logic and target format untouched.
+  //
+  // Control = the r64 3-seed set (capacity_lora_0001 seed 0 + retune_v3 seeds
+  // 1,2) at the identical config — so only w differs.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/010_calib_v3.jsonc
   // ─────────────────────────────────────────────────────────────────────────
-  "name": "flat_v3_seeds",
+  "name": "calib_v3",
   "results_dir": "src/experiments/kgqa/results",
 
   "execution": {
     "mode": "sbatch",
     "sbatch": {
       "granularity": "per_config",
-      "max_concurrent": 2,
+      "max_concurrent": 3,
       "partition": "frida",
       "account": "povejmo",
       "gpus": "B300:1",
       "cpus": 8,
       "mem": "64G",
-      "time": "24:00:00",
+      "time": "12:00:00",
       "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
     }
   },
 
-  "mode": "flat_train",
-  "seed": [1, 2],
+  "mode": "train",
+  "boundary_loss_weight": 4.0,
+  "seed": [0, 1, 2],
 
-  "lr": 1e-4,
   "lora_r": 64,
-  "seq_len": 4096,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "k_hop": 0,
+  "rel_mode": "last_1",
   "num_epochs": 15,
   "batch_size": 2,
   "accumulation_steps": 4,
   "num_workers": 4,
+  "graph_attn_impl": "flex",
   "dtype": "bf16",
   "gradient_checkpointing": true,
 
   "data_format_version": 3,
-  "rel_mode": "last_1",
-  "max_nodes": 512,
   "n_max": 20,
+  "gen_max_new_tokens": 128,
+  "max_nodes": 512,
   "versions": 8,
   "data_seed": 42,
 
   "eval_steps": 200,
-  "gen_max_new_tokens": 128,
   "gen_eval_samples": null,
   "gen_max_samples": null,
 

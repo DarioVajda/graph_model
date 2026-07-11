@@ -192,17 +192,17 @@ this step.
 > semantics*; `naming_version` versions the *name dictionary* — and the numbers run
 > opposite ways. Data-format **v3** bundles naming **v2**, so a faithful dfv2 control
 > arm pins **both** (`data_format_version: 2` + `naming_version: 1`), as
-> `attribution_v3.jsonc` does.
+> `005_attribution_v3.jsonc` does.
 
 ### 4. Build the datasets and train
 
 The experiment is a standalone single-run program driven by the generic `sweep`
-runner. The headline results come from [`configs/attribution_v3.jsonc`](configs/attribution_v3.jsonc)
+runner. The headline results come from [`configs/005_attribution_v3.jsonc`](configs/005_attribution_v3.jsonc)
 (annotated in-file). The two-step workflow — **data_prep once, then train** — is
 idempotent; data prep is cheap (no GPU):
 
 ```bash
-CFG=$KGQA/configs/attribution_v3.jsonc
+CFG=$KGQA/configs/005_attribution_v3.jsonc
 
 # a) Build every .gtds the config references. Set "mode": "data_prep" in $CFG, then:
 python3 -m sweep src.experiments.kgqa "$CFG"
@@ -214,7 +214,7 @@ python3 -m sweep src.experiments.kgqa "$CFG"
 python3 -m sweep.report "$KGQA/results/attribution_v3"
 ```
 
-`attribution_v3.jsonc` runs on Slurm (`"mode": "sbatch"`, B300 GPU); flip
+`005_attribution_v3.jsonc` runs on Slurm (`"mode": "sbatch"`, B300 GPU); flip
 `execution.mode` to `"local"` to run on the current machine. The best single run
 (v3, `n_max` 20, seed 1) reproduces **72.5 F1 / 78.75 Hits@1**; see
 [Results so far](#results-so-far).
@@ -232,7 +232,7 @@ python3 -m src.experiments.kgqa --init my_sweep                      # scaffold 
 
 Standalone train runs (no `--runs-jsonl`) append their record to
 `results/train_runs.jsonl`. Every CLI flag maps 1:1 to a `RunConfig` field
-(`config.py`); see `configs/example.jsonc` for an annotated sweep template and
+(`config.py`); see `configs/000_example.jsonc` for an annotated sweep template and
 the [Running](#running-sweep-workflow) note below.
 
 ## Running (sweep workflow)

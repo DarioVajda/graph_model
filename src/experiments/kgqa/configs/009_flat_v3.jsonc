@@ -1,13 +1,22 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // D1 follow-up (2026-07-09): the n_max-50 arm won D1 (test F1 72.35, argmax
-  // dev 73.29) — r64 and n_max 50 stack. This sweep completes the frozen-
-  // recipe picture: graph arm seeds {1,2} at r64/lr1e-4/nmax50 (3-seed set
-  // with retune_v3_0006 seed 0) + the flat control at the same recipe
-  // (seed 0), so the D5 scale run inherits a matched pair.
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/frozen_nmax50.jsonc
+  // D2.3 — text-serialization ablation runs (README goal #2 control arm).
+  //
+  // Same base LLM, same select_triples(512) subgraphs flattened to
+  // 'h | r | t' lines (pre-Levi / pre-CVT-collapse), targets verified
+  // byte-identical to the graph arm's (22 730/22 730 rows) — the control that
+  // isolates whether the graph attention biases do anything.
+  //
+  // Training config = the graph arm's presumptive D1 winner (r64, lr 1e-4,
+  // 15 ep, full-dev selection; decision logged in TODO.md) + one lr probe arm
+  // (2e-4) since the flat loss surface may want its own lr.
+  // If the winner lands within ~2 F1 of the graph arm -> extend to 3 seeds.
+  //
+  // Dataset must exist first (CPU, local):
+  //   python3 -m src.experiments.kgqa --mode flat_data_prep
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/009_flat_v3.jsonc
   // ─────────────────────────────────────────────────────────────────────────
-  "name": "frozen_nmax50",
+  "name": "flat_v3",
   "results_dir": "src/experiments/kgqa/results",
 
   "execution": {
@@ -25,34 +34,28 @@
     }
   },
 
-  "arm": [
-    { "mode": "train",      "seed": 1 },
-    { "mode": "train",      "seed": 2 },
-    { "mode": "flat_train", "seed": 0 }
-  ],
+  "mode": "flat_train",
+  "lr": [1e-4, 2e-4],
 
+  "seed": 0,
   "lora_r": 64,
-  "lr": 1e-4,
-  "bias_lr": 5e-3,
-  "k_hop": 0,
-  "rel_mode": "last_1",
+  "seq_len": 4096,
   "num_epochs": 15,
   "batch_size": 2,
   "accumulation_steps": 4,
   "num_workers": 4,
-  "graph_attn_impl": "flex",
   "dtype": "bf16",
   "gradient_checkpointing": true,
-  "seq_len": 4096,
 
   "data_format_version": 3,
-  "n_max": 50,
-  "gen_max_new_tokens": 256,
+  "rel_mode": "last_1",
   "max_nodes": 512,
+  "n_max": 20,
   "versions": 8,
   "data_seed": 42,
 
   "eval_steps": 200,
+  "gen_max_new_tokens": 128,
   "gen_eval_samples": null,
   "gen_max_samples": null,
 

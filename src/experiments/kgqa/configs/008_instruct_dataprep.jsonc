@@ -7,7 +7,7 @@
   // Content-wise the plain cache matches the base-model cache (same tokenizer
   // vocab), but model_name is in the key, so it builds separately — correct
   // over clever.
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/instruct_dataprep.jsonc
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/008_instruct_dataprep.jsonc
   // ─────────────────────────────────────────────────────────────────────────
   "name": "instruct_dataprep",
   "results_dir": "src/experiments/kgqa/results",

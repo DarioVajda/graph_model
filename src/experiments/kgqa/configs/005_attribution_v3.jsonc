@@ -22,7 +22,7 @@
   // empty segments regardless).
   //
   // Datasets must exist first (results/dataprep_v3 jobs; _dfv2 already built):
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/attribution_v3.jsonc
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/005_attribution_v3.jsonc
   //   python3 -m sweep.report src/experiments/kgqa/results/attribution_v3
   // ─────────────────────────────────────────────────────────────────────────
   "name": "attribution_v3",

@@ -17,7 +17,7 @@
   //     (gen budget 256 as in attribution_v3's n_max-50 arm)
   //
   // Datasets already built: dfv3 nmax20 + nmax50 caches exist.
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/retune_v3.jsonc
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/007_retune_v3.jsonc
   //   python3 -m sweep.report src/experiments/kgqa/results/retune_v3
   // ─────────────────────────────────────────────────────────────────────────
   "name": "retune_v3",

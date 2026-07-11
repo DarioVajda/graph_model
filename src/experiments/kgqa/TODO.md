@@ -115,7 +115,7 @@ r64 gain (+1.6 F1, single seed) is real. ~7 runs × ~2 h on B300.*
 All arms dfv3, n_max 20 unless noted, k_hop 0, last_1, 15 epochs, full-dev
 checkpoint selection (eval_steps 200):
 
-- [x] **D1.1** sweep ran 2026-07-08/09 (`configs/retune_v3.jsonc`, 7 runs).
+- [x] **D1.1** sweep ran 2026-07-08/09 (`configs/007_retune_v3.jsonc`, 7 runs).
   Test F1 (dev F1) per arm, all r64/lr1e-4/bias_lr5e-3/nmax20 unless noted:
   | arm | test F1 | dev F1 |
   |---|---|---|
@@ -176,7 +176,7 @@ outliers). ≈2.2× the graph model's token count → est. 3–5× the ~2 h grap
   scoring functions / schedule / greedy decoding / full-dev eval_f1 selection;
   appends to the same runs.jsonl schema (`arm: flat_text`). Smoke run passed
   end-to-end (4 steps, generation + parsing + record, rc=0).
-- [ ] **D2.3 runs**: launched 2026-07-08 (`configs/flat_v3.jsonc`, job 110138):
+- [ ] **D2.3 runs**: launched 2026-07-08 (`configs/009_flat_v3.jsonc`, job 110138):
   lr {1e-4, 2e-4} × r64 × seed 0. **Decision logged:** launched at the
   PRESUMPTIVE D1 winner (r64 / lr 1e-4 / n_max 20) without waiting ~1.5 h for
   D1 — r64 was the only arm with prior evidence (+0.8 F1 at seed 0); if D1
@@ -254,9 +254,9 @@ Steps:
   standalone-"\n" boundaries after the header, unanswerable labels =
   terminator only, header-subsequence unambiguity, plain-style dfv3 golden.
 - [x] **D3.4 data prep**: both instruct caches built on GPU (`_pschat` +
-  instruct-plain; configs/instruct_dataprep.jsonc). Smoke run submitted before
+  instruct-plain; configs/008_instruct_dataprep.jsonc). Smoke run submitted before
   the arms (confirm `generate` stops on `<|eot_id|>`, parses on newlines).
-- [x] **D3.5 arms** (`configs/instruct_v3.jsonc`) — results 2026-07-09:
+- [x] **D3.5 arms** (`configs/011_instruct_v3.jsonc`) — results 2026-07-09:
   | arm | test F1 | test H@1 |
   |---|---|---|
   | instruct+chat s0 | 71.97 | 78.32 |
@@ -326,7 +326,7 @@ structural asymmetry between the arms beyond the biases themselves.*
 
 Design: cross `cvt_collapse` over both arms at the frozen recipe
 (r64 / lr 1e-4 / n_max 50 / gen 256), 3 seeds per new cell
-(`configs/collapse_2x2.jsonc`; knob: `--cvt-collapse/--no-cvt-collapse`,
+(`configs/014_collapse_2x2.jsonc`; knob: `--cvt-collapse/--no-cvt-collapse`,
 None = arm default so all existing caches keep their keys; unit tests in
 `tests/test_kgqa_cvt_collapse.py`):
 

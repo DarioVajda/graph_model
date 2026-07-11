@@ -6,7 +6,7 @@
   // else at defaults; seeds/ablations (bias features, lora_r, rel_mode) come
   // after this establishes the operating point.
   //
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/baseline.jsonc
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/003_baseline.jsonc
   //   python3 -m sweep.report src/experiments/kgqa/results/baseline
   // ─────────────────────────────────────────────────────────────────────────
   "name": "baseline",

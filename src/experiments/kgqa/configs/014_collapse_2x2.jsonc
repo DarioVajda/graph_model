@@ -10,7 +10,7 @@
   //
   // All at the frozen recipe: r64 / lr 1e-4 / bias_lr 5e-3 / n_max 50 /
   // gen 256 / dfv3 / 15 ep / full-dev selection. 8 runs.
-  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/collapse_2x2.jsonc
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/014_collapse_2x2.jsonc
   // ─────────────────────────────────────────────────────────────────────────
   "name": "collapse_2x2",
   "results_dir": "src/experiments/kgqa/results",
