@@ -156,7 +156,6 @@ pip install gdown
 
 # GNN-RAG Drive folder (canonical source):
 gdown --folder 1ifgVHQDnvFEunP9hmVYT07Y3rvcpIfQp -O /tmp/gnnrag
-# (Fallback mirror if the above is unavailable: <TODO: your Drive/HF link>)
 
 unzip /tmp/gnnrag/data.zip -d "$KGQA"         # -> $KGQA/data/{sr-webqsp,sr-cwq,webqsp,CWQ}/
 cp    /tmp/gnnrag/entities_names.json "$KGQA" # -> $KGQA/entities_names.json (the "v1" seed)
@@ -183,11 +182,17 @@ curl -L -o "$KGQA/data/FB5M.name.txt.bz2" \
 python3 -m src.experiments.kgqa.build_entities_names_v2   # 560k -> 598.5k entries
 ```
 
-> **Ordering caveat:** the name file is **not** part of the `.gtds` cache key, so a
-> dataset built *after* this step always uses naming v2. To reproduce the
-> `v2-control` arm (naming v1) you must build its `dfv2` cache *before* running
-> this step — otherwise it silently picks up v2 names. A fresh clone reproducing
-> only the headline **v3** numbers can ignore this.
+Both dictionaries are kept, and which one a run reads is the explicit
+`naming_version` knob (`1` = `entities_names.v1.json`, `2` = `entities_names.json`),
+which is part of the dataset cache key. So the legacy-naming control arm rebuilds
+reproducibly from a clean clone, in any order — nothing depends on *when* you ran
+this step.
+
+> **Two different "v2"s.** `data_format_version` (dfv2/dfv3) versions the *pipeline
+> semantics*; `naming_version` versions the *name dictionary* — and the numbers run
+> opposite ways. Data-format **v3** bundles naming **v2**, so a faithful dfv2 control
+> arm pins **both** (`data_format_version: 2` + `naming_version: 1`), as
+> `attribution_v3.jsonc` does.
 
 ### 4. Build the datasets and train
 
