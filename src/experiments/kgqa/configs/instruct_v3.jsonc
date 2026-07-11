@@ -1,0 +1,64 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // D3.5 — instruct backbone arms (design locked 2026-07-08, see TODO):
+  //   * instruct+chat × seed {0,1,2}   — the headline arm
+  //   * instruct+plain × seed 0        — isolates weights vs formatting
+  // vs the graph-arm base-model reference (r64 3-seed set from D1/retune_v3).
+  //
+  // Training config = the presumptive D1 winner (r64, lr 1e-4; decision
+  // logged in TODO.md). Caches built by configs/instruct_dataprep.jsonc.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/instruct_v3.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "instruct_v3",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "arm": [
+    { "prompt_style": "chat",  "seed": 0 },
+    { "prompt_style": "chat",  "seed": 1 },
+    { "prompt_style": "chat",  "seed": 2 },
+    { "prompt_style": "plain", "seed": 0 }
+  ],
+
+  "lora_r": 64,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "k_hop": 0,
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+
+  "data_format_version": 3,
+  "n_max": 20,
+  "gen_max_new_tokens": 128,
+  "max_nodes": 512,
+  "versions": 8,
+  "data_seed": 42,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+
+  "wandb_project": "GraphLLM"
+}

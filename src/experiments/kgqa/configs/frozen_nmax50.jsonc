@@ -1,0 +1,60 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // D1 follow-up (2026-07-09): the n_max-50 arm won D1 (test F1 72.35, argmax
+  // dev 73.29) — r64 and n_max 50 stack. This sweep completes the frozen-
+  // recipe picture: graph arm seeds {1,2} at r64/lr1e-4/nmax50 (3-seed set
+  // with retune_v3_0006 seed 0) + the flat control at the same recipe
+  // (seed 0), so the D5 scale run inherits a matched pair.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/frozen_nmax50.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "frozen_nmax50",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "arm": [
+    { "mode": "train",      "seed": 1 },
+    { "mode": "train",      "seed": 2 },
+    { "mode": "flat_train", "seed": 0 }
+  ],
+
+  "lora_r": 64,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "k_hop": 0,
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "seq_len": 4096,
+
+  "data_format_version": 3,
+  "n_max": 50,
+  "gen_max_new_tokens": 256,
+  "max_nodes": 512,
+  "versions": 8,
+  "data_seed": 42,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+
+  "wandb_project": "GraphLLM"
+}

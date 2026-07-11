@@ -1,0 +1,40 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // D3 — build the two Llama-3.2-1B-Instruct dataset caches (2026-07-08):
+  //   * prompt_style chat  -> ..._dfv3_pschat   (headline instruct arm)
+  //   * prompt_style plain -> ..._dfv3          (instruct+plain control: same
+  //     weights, base formatting — isolates weights vs formatting)
+  // Content-wise the plain cache matches the base-model cache (same tokenizer
+  // vocab), but model_name is in the key, so it builds separately — correct
+  // over clever.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/instruct_dataprep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "instruct_dataprep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 16,
+      "mem": "64G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": ["chat", "plain"],
+
+  "data_format_version": 3,
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 20,
+  "versions": 8,
+  "data_seed": 42,
+  "use_gpu": true
+}

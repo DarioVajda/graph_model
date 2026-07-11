@@ -1,0 +1,75 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // D1 — hyperparameter retune under data-format v3 (TODO 2026-07-08).
+  //
+  // The current operating point (lr 1e-4, r16, 15 ep) was tuned on the v2
+  // comma-format landscape; v3 changed the loss surface. Also settles whether
+  // the r64 gain (+1.6 F1 over r16, single seed: capacity_lora_0001, seed 0,
+  // test F1 71.90) is real at 3 seeds.
+  //
+  // 7 arms as ONE bundle (the arms don't form a cartesian product); every
+  // swept key lives ONLY in the bundle (runner forbids top-level collisions):
+  //   * r64 x seed {1,2}         — completes the r64 3-seed set (seed 0 exists)
+  //   * lr {5e-5, 2e-4} @ r64 s0 — lr re-centering (1e-4 = capacity_lora_0001)
+  //   * bias_lr 1e-2  @ r64 s0
+  //   * r128 seed 0              — capacity monotone past 64?
+  //   * n_max 50 @ r64 s0        — cross the two individually-positive arms
+  //     (gen budget 256 as in attribution_v3's n_max-50 arm)
+  //
+  // Datasets already built: dfv3 nmax20 + nmax50 caches exist.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/retune_v3.jsonc
+  //   python3 -m sweep.report src/experiments/kgqa/results/retune_v3
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "retune_v3",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 7,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── the single bundle axis: 7 fully-specified arms ───────────────────────
+  "mode": "train",
+  "arm": [
+    { "lora_r": 64,  "seed": 1, "lr": 1e-4, "bias_lr": 5e-3, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "lora_r": 64,  "seed": 2, "lr": 1e-4, "bias_lr": 5e-3, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "lora_r": 64,  "seed": 0, "lr": 5e-5, "bias_lr": 5e-3, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "lora_r": 64,  "seed": 0, "lr": 2e-4, "bias_lr": 5e-3, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "lora_r": 64,  "seed": 0, "lr": 1e-4, "bias_lr": 1e-2, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "lora_r": 128, "seed": 0, "lr": 1e-4, "bias_lr": 5e-3, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "lora_r": 64,  "seed": 0, "lr": 1e-4, "bias_lr": 5e-3, "n_max": 50, "gen_max_new_tokens": 256 }
+  ],
+
+  // ── fixed: v3 operating point (matches attribution_v3) ───────────────────
+  "data_format_version": 3,
+  "k_hop": 0,
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+
+  "max_nodes": 512,
+  "versions": 8,
+  "data_seed": 42,
+
+  // ── eval schedule: full-dev selection ─────────────────────────────────────
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+
+  "wandb_project": "GraphLLM"
+}

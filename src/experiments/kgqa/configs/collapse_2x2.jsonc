@@ -1,0 +1,70 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Collapse 2x2 ablation (user-requested 2026-07-09): is the CVT collapse —
+  // the one structural difference between the arms beyond the biases — the
+  // reason GTLM trails the flat serialization?
+  //
+  //                     collapsed input          uncollapsed input
+  //   GTLM              72.55 ± 0.22 (have)      seeds {0,1,2}  <- new
+  //   flat LLM          seeds {0,1,2}  <- new    75.03 s0 (have) + s{1,2} <- new
+  //
+  // All at the frozen recipe: r64 / lr 1e-4 / bias_lr 5e-3 / n_max 50 /
+  // gen 256 / dfv3 / 15 ep / full-dev selection. 8 runs.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/collapse_2x2.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "collapse_2x2",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 8,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "arm": [
+    { "mode": "train",      "cvt_collapse": false, "seed": 0 },
+    { "mode": "train",      "cvt_collapse": false, "seed": 1 },
+    { "mode": "train",      "cvt_collapse": false, "seed": 2 },
+    { "mode": "flat_train", "cvt_collapse": true,  "seed": 0 },
+    { "mode": "flat_train", "cvt_collapse": true,  "seed": 1 },
+    { "mode": "flat_train", "cvt_collapse": true,  "seed": 2 },
+    { "mode": "flat_train", "cvt_collapse": false, "seed": 1 },
+    { "mode": "flat_train", "cvt_collapse": false, "seed": 2 }
+  ],
+
+  "lora_r": 64,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "k_hop": 0,
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "seq_len": 4096,
+
+  "data_format_version": 3,
+  "n_max": 50,
+  "gen_max_new_tokens": 256,
+  "max_nodes": 512,
+  "versions": 8,
+  "data_seed": 42,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+
+  "wandb_project": "GraphLLM"
+}

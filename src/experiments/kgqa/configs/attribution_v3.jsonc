@@ -5,11 +5,10 @@
   //
   // 3 data arms x 3 seeds at the cheap k=0 operating point (15 epochs — the
   // 66.5±0.7 plateau is reachable there; full-dev checkpoint selection):
-  //   * v2-control — data_format_version pinned to 2: comma-joined targets,
-  //     comma parsing, naming v1. REUSES the existing _dfv2 cache (built
-  //     before naming v2 landed — do NOT delete/rebuild it: a fresh "dfv2"
-  //     build would silently pick up the v2 naming file, since the names file
-  //     is not part of the cache key).
+  //   * v2-control — data_format_version 2 (comma-joined targets, comma
+  //     parsing) + naming_version 1. Both are cache-key fields, so this arm
+  //     rebuilds reproducibly from entities_names.v1.json in any order — it no
+  //     longer depends on a fossil cache predating naming v2.
   //   * v3 — newline separator + naming v2 (entities_names.json extended with
   //     FB5M / in-data Freebase aliases; fixes the 76 collapse-lost golds).
   //   * v3 recall arm — n_max=50 (questions with >5 present golds averaged
@@ -48,9 +47,9 @@
   "mode": "train",
   "seed": [0, 1, 2],
   "data_arm": [
-    { "data_format_version": 2, "n_max": 20, "gen_max_new_tokens": 128 },
-    { "data_format_version": 3, "n_max": 20, "gen_max_new_tokens": 128 },
-    { "data_format_version": 3, "n_max": 50, "gen_max_new_tokens": 256 }
+    { "data_format_version": 2, "naming_version": 1, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "data_format_version": 3, "naming_version": 2, "n_max": 20, "gen_max_new_tokens": 128 },
+    { "data_format_version": 3, "naming_version": 2, "n_max": 50, "gen_max_new_tokens": 256 }
   ],
 
   // ── fixed: cheap k=0 operating point ─────────────────────────────────────
