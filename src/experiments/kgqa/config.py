@@ -43,9 +43,29 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B"
 # a dfv2 control arm) against current code.
 DATA_FORMAT_VERSION = 3
 
+# Which mid->name dictionary node naming reads. NOT the same axis as
+# DATA_FORMAT_VERSION (and the numbers run opposite ways): naming v1 is the 560k
+# dict shipped by GNN-RAG, naming v2 the 598.5k Freebase-alias extension built by
+# ``build_entities_names_v2.py``. Data-format v3 *bundles* naming v2, so a dfv2
+# control arm must pin ``naming_version=1`` to be a true control — it is a real
+# config knob (and part of the cache key) precisely so that pinning works
+# regardless of what ``entities_names.json`` currently holds on disk.
+NAMING_VERSION = 2
+ENTITY_NAMES_FILES = {1: "entities_names.v1.json", 2: "entities_names.json"}
+
 REL_MODES = ("last_1", "last_2", "full")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
+PROMPT_STYLES = ("plain", "chat")
+
+# D3 (design locked 2026-07-08): the chat prompt style wraps the question in the
+# Llama-3 chat template INSIDE the single prompt node (graph nodes unchanged).
+# The system turn is pinned to a minimal constant — never the template default,
+# whose auto-inserted "Today Date" would make cache content depend on build date.
+PINNED_SYSTEM_PROMPT = "Answer the question using the provided knowledge graph context."
+# The assistant-header token sequence replaces "Answer:" as the label/generation
+# boundary (question_end) under the chat style.
+ASSISTANT_HEADER = "<|start_header_id|>assistant<|end_header_id|>\n\n"
 
 # LoRA target modules for the Llama backbone (fixed architecture choice).
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj",
@@ -68,6 +88,12 @@ class RunConfig:
     rcm: bool = True                          # reverse-Cuthill-McKee node ordering
     data_seed: int = 42                       # augmentation RNG seed (baked into cache key)
     data_format_version: int = DATA_FORMAT_VERSION   # pipeline-semantics version (cache key + answer separator)
+    naming_version: int = NAMING_VERSION      # mid->name dict: 1 = GNN-RAG's 560k, 2 = +Freebase aliases
+    prompt_style: str = None                  # "plain" | "chat" | None = auto ("chat" iff Instruct model)
+    cvt_collapse: bool = None                 # single-parent CVT mediator collapse. None = arm default:
+                                              # True for the graph pipeline (its historical behavior),
+                                              # False for the flat serialization (raw triples). The 2x2
+                                              # collapse ablation (2026-07-09) sets it explicitly.
     use_gpu: bool = True                      # data-prep only (SPD/magnetic on GPU); train ignores it
     analyse_dataset: bool = False             # data-prep only: coverage-ceiling analysis (not in cache key)
 
@@ -97,6 +123,10 @@ class RunConfig:
     gradient_checkpointing: bool = True
     active_params: tuple = ("graph_bias",)    # trainable param groups besides LoRA
     num_workers: int = 4                      # DataLoader workers (0 = synchronous feature build)
+    seq_len: int = 4096                       # flat (text-serialization) arm only: max prompt+target
+                                              # tokens (covers 99.6%+; outliers drop trailing triples)
+    boundary_loss_weight: float = 1.0         # D4: loss weight on the "\n" answer-boundary token
+                                              # (1.0 = off; renormalized, see KGQAGraphTrainer)
 
     # ── generative-eval keys ─────────────────────────────────────────────────
     gen_max_new_tokens: int = 128
@@ -117,6 +147,43 @@ class RunConfig:
     def answer_parse_sep(self):
         """Separator the evaluator SPLITS generations on (must mirror ``answer_sep``)."""
         return "\n" if self.data_format_version >= 3 else ","
+
+    @property
+    def resolved_prompt_style(self):
+        """``prompt_style`` with the auto default applied: "chat" iff the backbone
+        is an Instruct variant, unless explicitly overridden (the instruct+plain
+        control arm sets ``prompt_style="plain"`` on an Instruct model)."""
+        if self.prompt_style is not None:
+            return self.prompt_style
+        return "chat" if "Instruct" in str(self.model_name) else "plain"
+
+    @property
+    def question_end_str(self):
+        """The label-mask / generation-cut anchor string (tokenized by callers).
+
+        Plain: the literal "Answer:" (the prompt is "{q}\\nAnswer: ..."); chat:
+        the assistant-header sequence — everything up to and including it is
+        prompt, everything after is target. ``AnswerLabelMasker`` and
+        ``_find_prefix_len`` match arbitrary token subsequences, so only this
+        constant changes between the styles."""
+        return ASSISTANT_HEADER if self.resolved_prompt_style == "chat" else "Answer:"
+
+    @property
+    def entity_names_file(self):
+        """Basename of the mid->name dict this config's node naming reads."""
+        return ENTITY_NAMES_FILES[self.naming_version]
+
+    def resolved_cvt_collapse(self, arm):
+        """``cvt_collapse`` with the arm default applied (``arm``: "graph"|"flat").
+
+        The graph pipeline has always collapsed single-parent CVT mediators; the
+        flat serialization was deliberately built on the RAW pre-collapse triples
+        (the collapse is our graph processing). The 2x2 collapse ablation crosses
+        the knob explicitly; every pre-existing cache keeps its key because only
+        non-default values add a suffix."""
+        if self.cvt_collapse is not None:
+            return self.cvt_collapse
+        return arm == "graph"
 
     @property
     def torch_dtype(self):
@@ -160,10 +227,17 @@ class RunConfig:
         semantic pipeline changes invalidate old caches.
         """
         model = str(self.model_name).replace("/", "-")
+        # prompt_style and naming_version are data-affecting, but each suffix is
+        # only added for non-default values so every pre-existing cache keeps its
+        # name (plain style, naming v2).
+        ps = self.resolved_prompt_style
         return (f"sr-webqsp_{model}_v{self.rel_mode}_cap{self.max_nodes}_nmax{self.n_max}"
                 f"_ver{self.versions}_spd{self.max_spd}_magq{self.magnetic_q}m{self.magnetic_m}"
                 f"_len{self.max_length}_rcm{int(self.rcm)}_seed{self.data_seed}"
-                f"_dfv{self.data_format_version}")
+                f"_dfv{self.data_format_version}"
+                + ("" if ps == "plain" else f"_ps{ps}")
+                + ("" if self.naming_version == NAMING_VERSION else f"_nm{self.naming_version}")
+                + ("" if self.resolved_cvt_collapse("graph") else "_nocvt"))
 
     def validate(self):
         """Reject accepted-but-unsupported combinations with a clear message.
@@ -185,6 +259,21 @@ class RunConfig:
         if self.data_format_version not in (2, 3):
             raise ValueError(
                 f"data_format_version must be 2 or 3; got {self.data_format_version}.")
+        if self.naming_version not in ENTITY_NAMES_FILES:
+            raise ValueError(
+                f"naming_version must be one of {sorted(ENTITY_NAMES_FILES)}; "
+                f"got {self.naming_version}.")
+        if self.prompt_style is not None and self.prompt_style not in PROMPT_STYLES:
+            raise ValueError(
+                f"prompt_style must be one of {PROMPT_STYLES} or None (auto); "
+                f"got {self.prompt_style!r}.")
+        if self.boundary_loss_weight <= 0:
+            raise ValueError(
+                f"boundary_loss_weight must be > 0; got {self.boundary_loss_weight}.")
+        if self.boundary_loss_weight != 1.0 and self.data_format_version < 3:
+            raise ValueError(
+                "boundary_loss_weight requires the dfv3 newline separator "
+                "(the boundary token is '\\n').")
         if self.versions < 1:
             raise ValueError(f"versions must be >= 1; got {self.versions}.")
         if not (self.spd or self.magnetic):

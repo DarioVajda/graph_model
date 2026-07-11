@@ -21,7 +21,7 @@ logs one record; ``data_prep`` just builds that config's ``.gtds`` datasets.
 import argparse
 import os
 
-from .config import RunConfig, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES
+from .config import RunConfig, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES, PROMPT_STYLES
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
@@ -135,8 +135,11 @@ def build_parser():
 
     p.add_argument("--init", nargs="?", const="template", default=None, metavar="NAME",
                    help="Write a sweep-config template to configs/<NAME>.jsonc and exit.")
-    p.add_argument("--mode", choices=("train", "data_prep"), default=d.mode,
-                   help="train one config | build that config's datasets.")
+    p.add_argument("--mode", choices=("train", "data_prep", "flat_train", "flat_data_prep"),
+                   default=d.mode,
+                   help="train one config | build that config's datasets. The flat_* modes "
+                        "are the D2 text-serialization control arm (same subgraph as triple "
+                        "text, plain HF causal LM, no graph biases).")
 
     # ── data-prep keys (determine the .gtds cache directory) ─────────────────
     p.add_argument("--rel-mode", choices=REL_MODES, default=d.rel_mode)
@@ -150,6 +153,18 @@ def build_parser():
     p.add_argument("--data-format-version", type=int, default=d.data_format_version,
                    help="pipeline-semantics version (cache key + answer separator); "
                         "pin an older value to run a legacy-format control arm.")
+    p.add_argument("--naming-version", type=int, default=d.naming_version,
+                   help="mid->name dict: 1 = GNN-RAG's 560k seed (entities_names.v1.json), "
+                        "2 = +Freebase aliases (entities_names.json). Pin 1 for a true dfv2 control.")
+    p.add_argument("--prompt-style", choices=PROMPT_STYLES, default=d.prompt_style,
+                   help="prompt-node format: plain '{q}\\nAnswer:' | chat-templated turns; "
+                        "omit for the auto default (chat iff an Instruct model). Explicit "
+                        "'plain' on an Instruct model = the weights-vs-formatting control arm.")
+    p.add_argument("--cvt-collapse", action=B, default=d.cvt_collapse,
+                   help="single-parent CVT mediator collapse; omit for the arm default "
+                        "(graph: collapse, flat: raw triples). Explicit values run the "
+                        "2x2 collapse ablation (--no-cvt-collapse graph arm / "
+                        "--cvt-collapse flat arm).")
     p.add_argument("--use-gpu", action=B, default=d.use_gpu, help="build SPD/magnetic features on GPU (data prep).")
     p.add_argument("--analyse-dataset", action=B, default=d.analyse_dataset,
                    help="during data prep, also run the answer-coverage ceiling analysis "
@@ -184,6 +199,11 @@ def build_parser():
                    help="comma-separated trainable param groups (besides LoRA).")
     p.add_argument("--num-workers", type=int, default=d.num_workers,
                    help="DataLoader workers (0 = synchronous feature build; >0 overlaps with compute).")
+    p.add_argument("--seq-len", type=int, default=d.seq_len,
+                   help="flat arm only: max prompt+target tokens (outliers drop trailing triples).")
+    p.add_argument("--boundary-loss-weight", type=float, default=d.boundary_loss_weight,
+                   help="D4: loss weight on the '\\n' answer-boundary token (1.0 = off; "
+                        "weights renormalized so total loss scale is unchanged).")
 
     # ── generative eval ──────────────────────────────────────────────────────
     p.add_argument("--gen-max-new-tokens", type=int, default=d.gen_max_new_tokens)
@@ -211,6 +231,8 @@ def config_from_args(args):
         rel_mode=args.rel_mode, max_nodes=args.max_nodes, n_max=args.n_max,
         versions=args.versions, max_length=args.max_length, rcm=args.rcm,
         data_seed=args.data_seed, data_format_version=args.data_format_version,
+        naming_version=args.naming_version, prompt_style=args.prompt_style,
+        cvt_collapse=args.cvt_collapse,
         use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
         model_name=args.model_name,
         spd=args.spd, max_spd=args.max_spd, magnetic=args.magnetic,
@@ -222,6 +244,7 @@ def config_from_args(args):
         graph_attn_impl=args.graph_attn_impl, dtype=args.dtype,
         gradient_checkpointing=args.gradient_checkpointing,
         active_params=tuple(args.active_params), num_workers=args.num_workers,
+        seq_len=args.seq_len, boundary_loss_weight=args.boundary_loss_weight,
         gen_max_new_tokens=args.gen_max_new_tokens, gen_max_samples=args.gen_max_samples,
         gen_eval_samples=args.gen_eval_samples,
         wandb_project=args.wandb_project,
@@ -250,6 +273,17 @@ def main(argv=None):
     if args.mode == "data_prep":
         from .process_dataset import run_data_prep_mode
         run_data_prep_mode(cfg)
+        return 0
+
+    if args.mode == "flat_data_prep":
+        from .flat_data import run_flat_data_prep_mode
+        run_flat_data_prep_mode(cfg)
+        return 0
+
+    if args.mode == "flat_train":
+        from .flat_train import run_flat_train_mode
+        run_flat_train_mode(cfg, runs_jsonl=args.runs_jsonl, run_name=args.run_name,
+                            sweep_id=args.sweep_id)
         return 0
 
     from .train import run_train_mode

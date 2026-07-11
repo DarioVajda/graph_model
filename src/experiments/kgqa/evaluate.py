@@ -209,10 +209,22 @@ def generative_eval(model, dataset, tokenizer, collator, question_end,
 # Trainer that appends generative metrics to the eval schedule
 # --------------------------------------------------------------------------- #
 class KGQAGraphTrainer(GraphTrainerV2):
-    """GraphTrainerV2 whose ``evaluate`` also runs generative set-level scoring."""
+    """GraphTrainerV2 whose ``evaluate`` also runs generative set-level scoring.
+
+    D4 (2026-07-08): optional boundary-token loss re-weighting — a strictly
+    training-side lever against recall-side under-generation (D0.1 verdict:
+    under-generating stops have small logP(EOS)-logP("\\n") margins, i.e. a
+    soft stopping decision). Supervised tokens equal to ``boundary_token_id``
+    (the dfv3 "\\n" answer separator) get weight ``boundary_loss_weight``;
+    weights are renormalized so the MEAN weight over supervised tokens is 1 —
+    total loss scale (and thus the effective lr) matches the unweighted path,
+    only the emphasis shifts toward the continue-vs-stop decision. Generation
+    logic and target format are untouched.
+    """
 
     def __init__(self, *args, gen_tokenizer=None, gen_collator=None, question_end=None,
                  gen_max_new_tokens=128, gen_max_samples=None, gen_answer_sep=",",
+                 boundary_loss_weight=1.0, boundary_token_id=None,
                  **kwargs):
         super().__init__(*args, **kwargs)
         self._gen_tokenizer = gen_tokenizer
@@ -221,6 +233,21 @@ class KGQAGraphTrainer(GraphTrainerV2):
         self._gen_max_new_tokens = gen_max_new_tokens
         self._gen_max_samples = gen_max_samples
         self._gen_answer_sep = gen_answer_sep
+        self._boundary_loss_weight = boundary_loss_weight
+        self._boundary_token_id = boundary_token_id
+        if boundary_loss_weight != 1.0 and boundary_token_id is None:
+            raise ValueError("boundary_loss_weight != 1 requires boundary_token_id.")
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if self._boundary_loss_weight == 1.0:
+            return super().compute_loss(model, inputs, return_outputs=return_outputs,
+                                        num_items_in_batch=num_items_in_batch)
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        loss = boundary_weighted_loss(
+            outputs.logits, labels, self._boundary_loss_weight,
+            self._boundary_token_id, num_items_in_batch=num_items_in_batch)
+        return (loss, outputs) if return_outputs else loss
 
     def set_gen_max_samples(self, n):
         """Switch the generative-eval cap (cheap in-training cap -> full final scoring)."""
@@ -238,3 +265,26 @@ class KGQAGraphTrainer(GraphTrainerV2):
         metrics.update(gen)
         self.log(gen)
         return metrics
+
+
+def boundary_weighted_loss(logits, labels, boundary_weight, boundary_token_id,
+                           num_items_in_batch=None):
+    """Causal-LM CE with the boundary token's positions re-weighted (D4).
+
+    Weights are renormalized so the MEAN weight over supervised tokens is 1
+    (total loss scale — and thus effective lr — matches the unweighted path).
+    Accounting mirrors the HF default: sum/num_items during training
+    (grad-accum-correct), per-token mean when num_items is unknown (eval).
+    """
+    shift_logits = logits.float()[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous().to(shift_logits.device)
+    flat = shift_labels.view(-1)
+    losses = torch.nn.functional.cross_entropy(
+        shift_logits.view(-1, shift_logits.size(-1)), flat,
+        ignore_index=-100, reduction="none")
+    mask = flat != -100
+    weights = torch.ones_like(losses)
+    weights[flat == boundary_token_id] = boundary_weight
+    weighted = (losses * weights)[mask].sum() * (mask.sum() / weights[mask].sum())
+    denom = num_items_in_batch if num_items_in_batch is not None else mask.sum()
+    return weighted / denom

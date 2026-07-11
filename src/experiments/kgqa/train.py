@@ -58,15 +58,18 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         **(sweep_meta or {}),
         "run_name": run_name,
         # ── hyperparameters ──
-        "model_name": cfg.model_name,
+        "model_name": cfg.model_name, "prompt_style": cfg.resolved_prompt_style,
         "lora_r": cfg.lora_r, "k_hop": cfg.k_hop, "k_hop_directed": cfg.k_hop_directed,
         "graph_attn_impl": cfg.graph_attn_impl, "dtype": cfg.dtype,
         "lr": cfg.lr, "bias_lr": cfg.bias_lr, "num_epochs": cfg.num_epochs,
         "batch_size": cfg.batch_size, "accumulation_steps": cfg.accumulation_steps,
         "max_steps": cfg.max_steps, "seed": cfg.seed,
+        "boundary_loss_weight": cfg.boundary_loss_weight,
         # data keys
         "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
         "versions": cfg.versions, "magnetic_m": cfg.magnetic_m, "data_seed": cfg.data_seed,
+        "data_format_version": cfg.data_format_version,
+        "cvt_collapse": cfg.resolved_cvt_collapse("graph"),
         # ── results: best-checkpoint dev metrics (GNN-RAG-comparable) ──
         "eval_f1": dev.get("eval_f1"), "eval_hits1": dev.get("eval_hits1"),
         "eval_hit_star": dev.get("eval_hit_star"),
@@ -124,7 +127,8 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         param.requires_grad = False
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
-    question_end = tokenizer("Answer:", add_special_tokens=False)["input_ids"]
+    # Style-dependent anchor: "Answer:" (plain) | assistant header (chat, D3).
+    question_end = tokenizer(cfg.question_end_str, add_special_tokens=False)["input_ids"]
 
     print("Loading data...")
     train_dataset, eval_dataset, test_dataset = load_data(cfg)
@@ -202,6 +206,10 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         gen_max_samples=(cfg.gen_eval_samples if cfg.gen_eval_samples is not None
                          else cfg.gen_max_samples),
         gen_answer_sep=cfg.answer_parse_sep,
+        # D4 lever (1.0 = off): re-weight the "\n" answer-boundary token's loss.
+        boundary_loss_weight=cfg.boundary_loss_weight,
+        boundary_token_id=(tokenizer("\n", add_special_tokens=False)["input_ids"][0]
+                           if cfg.boundary_loss_weight != 1.0 else None),
     )
 
     trainer.train()

@@ -19,7 +19,8 @@ numbers — see ``answer_text``). Train keeps only supervisable questions; dev/t
 also keep unanswerable-but-scoreable ones as empty-target rows so eval
 denominators match the benchmark (GNN-RAG scores retrieval failures as 0 too).
 
-Node naming reads entities_names.json ONLY. Harvesting a question's own answer
+Node naming reads the mid->name dict ONLY (``cfg.naming_version`` picks it:
+1 = entities_names.v1.json, 2 = entities_names.json). Harvesting a question's own answer
 `text` into node text would leak the answer at eval (gold nodes would be the
 only newly-named ones), so answer text feeds ONLY the target / eval matching.
 Naming v2 (data-format v3) extends that FILE with Freebase-native aliases
@@ -44,10 +45,10 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from ...utils import TextGraphDataset
+from .config import ASSISTANT_HEADER, PINNED_SYSTEM_PROMPT
 
 EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SR_DIR = os.path.join(EXPERIMENT_DIR, "data", "sr-webqsp")
-ENTITY_NAMES_PATH = os.path.join(EXPERIMENT_DIR, "entities_names.json")
 OUTPUT_ROOT = os.path.join(EXPERIMENT_DIR, "processed_datasets")
 
 UNNAMED = "unnamed entity"
@@ -58,6 +59,11 @@ END_OF_HOP = "END OF HOP"
 ANSWER_DELIM = "\nAnswer:"
 
 SPLITS = {"train": "train.json", "dev": "dev.json", "test": "test.json"}
+
+
+def entity_names_path(cfg):
+    """Path to the mid->name dict ``cfg.naming_version`` selects."""
+    return os.path.join(EXPERIMENT_DIR, cfg.entity_names_file)
 
 
 # --------------------------------------------------------------------------- #
@@ -181,8 +187,12 @@ def select_triples(record, max_nodes):
 # --------------------------------------------------------------------------- #
 # Levi construction + CVT collapse
 # --------------------------------------------------------------------------- #
-def build_base_levi(record, entity_names, rel_mode, max_nodes):
-    """Directed per-triple Levi graph with node text and collapsed CVTs. No prompt node yet."""
+def build_base_levi(record, entity_names, rel_mode, max_nodes, cvt_collapse=True):
+    """Directed per-triple Levi graph with node text (CVTs collapsed by default).
+    No prompt node yet. ``cvt_collapse=False`` keeps mediators as nodes (the
+    2x2 collapse ablation's uncollapsed graph arm); the ``select_triples``
+    budget already counts PRE-collapse Levi nodes, so uncollapsed graphs still
+    respect ``max_nodes``."""
     selected = select_triples(record, max_nodes)
     G = nx.DiGraph()
     for i, (h, rel, t) in enumerate(selected):
@@ -197,7 +207,8 @@ def build_base_levi(record, entity_names, rel_mode, max_nodes):
             continue
         G.nodes[n]["text"] = resolve_entity_text(n, entity_names)
 
-    _collapse_cvts(G, set(record["entities"]))
+    if cvt_collapse:
+        _collapse_cvts(G, set(record["entities"]))
 
     # ensure every topic entity is present so the prompt can attach
     for tp in record["entities"]:
@@ -279,12 +290,35 @@ def full_gold_texts(record):
     return out
 
 
-def add_prompt_node(G, record, answer_str, gold_answers):
+def chat_prompt_text(question):
+    """The chat-templated prompt prefix (D3, design locked 2026-07-08).
+
+    One node holds the full templated string; the graph stays a plain-text
+    modality in the other nodes. The leading BOS is kept verbatim mid-sequence
+    (after the graph prefix) so from ``<|begin_of_text|>`` onward the stream
+    matches the instruct SFT distribution exactly; the pinned system turn keeps
+    cache content independent of build date. Targets follow the assistant
+    header directly; ``tokenize(add_eos=True)`` appends the closing
+    ``<|eot_id|>`` (the instruct tokenizer's EOS).
+    """
+    return ("<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
+            f"{PINNED_SYSTEM_PROMPT}<|eot_id|>"
+            "<|start_header_id|>user<|end_header_id|>\n\n"
+            f"{question}<|eot_id|>" + ASSISTANT_HEADER)
+
+
+def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain"):
     g = G.copy()
-    # No trailing space when the target is empty (unanswerable eval row): the
-    # prompt then ends exactly at the "Answer:" delimiter and labels are EOS only.
-    suffix = f" {answer_str}" if answer_str else ""
-    g.add_node("PROMPT", text=f"{record['question']}{ANSWER_DELIM}{suffix}")
+    if prompt_style == "chat":
+        # Empty target (unanswerable eval row): the prompt ends exactly at the
+        # assistant header ("...\n\n") and labels are the terminator only.
+        text = chat_prompt_text(record["question"]) + answer_str
+    else:
+        # No trailing space when the target is empty (unanswerable eval row): the
+        # prompt then ends exactly at the "Answer:" delimiter and labels are EOS only.
+        suffix = f" {answer_str}" if answer_str else ""
+        text = f"{record['question']}{ANSWER_DELIM}{suffix}"
+    g.add_node("PROMPT", text=text)
     g.graph["prompt_node"] = "PROMPT"
     g.graph["gold_answers"] = gold_answers
     g.graph["question"] = record["question"]
@@ -304,19 +338,21 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
     denominators equal RoG/GNN-RAG's (all answered questions; such rows score
     ~0, like their retrieval failures).
     """
-    base = build_base_levi(record, entity_names, cfg.rel_mode, cfg.max_nodes)
+    base = build_base_levi(record, entity_names, cfg.rel_mode, cfg.max_nodes,
+                           cvt_collapse=cfg.resolved_cvt_collapse("graph"))
     present = present_answer_texts(base, record)
     gold = full_gold_texts(record)
+    style = cfg.resolved_prompt_style
     if not present:
         if keep_unanswerable and gold:
-            return [add_prompt_node(base, record, "", gold)]
+            return [add_prompt_node(base, record, "", gold, prompt_style=style)]
         return []
     graphs = []
     for _ in range(versions):
         order = present[:]
         rng.shuffle(order)
         answer_str = cfg.answer_sep.join(order[: cfg.n_max])
-        graphs.append(add_prompt_node(base, record, answer_str, gold))
+        graphs.append(add_prompt_node(base, record, answer_str, gold, prompt_style=style))
     return graphs
 
 
@@ -427,6 +463,7 @@ def run_data_prep_mode(cfg, splits=("train", "dev", "test")):
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump({"data_config_key": cfg.data_config_key(),
                    "data_format_version": cfg.data_format_version,
+                   "naming_version": cfg.naming_version,
                    "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
                    "versions": cfg.versions, "max_length": cfg.max_length, "rcm": cfg.rcm,
                    "data_seed": cfg.data_seed, "model_name": cfg.model_name,
@@ -434,10 +471,19 @@ def run_data_prep_mode(cfg, splits=("train", "dev", "test")):
                    "magnetic_m": cfg.magnetic_m}, f, indent=2)
 
     print(f"[data_prep] out_dir={out_dir}")
-    print(f"Loading entity names from {ENTITY_NAMES_PATH} ...")
-    entity_names = json.load(open(ENTITY_NAMES_PATH))
+    names_path = entity_names_path(cfg)
+    if not os.path.exists(names_path):
+        raise FileNotFoundError(
+            f"naming_version={cfg.naming_version} needs {names_path}, which is missing.\n"
+            f"See the README: download entities_names.json from GNN-RAG's release, then run "
+            f"`python3 -m src.experiments.kgqa.build_entities_names_v2` (it writes naming v2 "
+            f"and backs the v1 seed up to entities_names.v1.json)."
+        )
+    print(f"Loading entity names (v{cfg.naming_version}) from {names_path} ...")
+    entity_names = json.load(open(names_path))
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
-    question_end = tokenizer("Answer:", add_special_tokens=False)["input_ids"]
+    # Style-dependent anchor: "Answer:" (plain) | assistant header (chat).
+    question_end = tokenizer(cfg.question_end_str, add_special_tokens=False)["input_ids"]
 
     for split in splits:
         _build_split_if_missing(split, cfg, out_dir, entity_names, tokenizer, question_end)

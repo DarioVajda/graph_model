@@ -59,7 +59,7 @@ import os
 
 import numpy as np
 
-from .process_dataset import (ENTITY_NAMES_PATH, answer_text, build_base_levi,
+from .process_dataset import (entity_names_path, answer_text, build_base_levi,
                               select_triples)
 
 # Row order + labels mirror the README table.
@@ -233,7 +233,7 @@ def run_analysis(cfg, sr_dir, split_files, out_dir):
     passes ``process_dataset.SPLITS``). Results land in
     ``<out_dir>/coverage_analysis.json`` next to the built ``.gtds`` splits.
     """
-    entity_names = json.load(open(ENTITY_NAMES_PATH))
+    entity_names = json.load(open(entity_names_path(cfg)))
 
     results, built = {}, {}
     for split, fname in split_files.items():
