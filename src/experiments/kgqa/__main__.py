@@ -204,26 +204,12 @@ def build_parser():
     p.add_argument("--boundary-loss-weight", type=float, default=d.boundary_loss_weight,
                    help="D4: loss weight on the '\\n' answer-boundary token (1.0 = off; "
                         "weights renormalized so total loss scale is unchanged).")
-    # ── regularization probes (TODO_reg; all defaults = historical behavior) ──
+    # ── regularization (survivors of the TODO_reg probe campaign) ────────────
     p.add_argument("--bias-weight-decay", type=float, default=d.bias_weight_decay,
                    help="AdamW weight decay on graph-bias MATRICES (0.0 = the historical "
                         "accidental no-decay; SPD table + 1-D gains stay exempt).")
-    p.add_argument("--magnetic-eigvec-dropout", type=float, default=d.magnetic_eigvec_dropout,
-                   help="training-only: drop whole magnetic eigenvectors with this prob.")
-    p.add_argument("--magnetic-eigvec-shared-mask", action=B, default=d.magnetic_eigvec_shared_mask,
-                   help="sample ONE eigvec keep-mask per forward (all layers see the same "
-                        "spectral truncation) instead of per-layer masks.")
-    p.add_argument("--magnetic-mlp-dropout", type=float, default=d.magnetic_mlp_dropout,
-                   help="training-only: dropout after each MagneticBias SiLU.")
-    p.add_argument("--bias-droppath", type=float, default=d.bias_droppath,
-                   help="training-only: per-sample whole-graph-bias drop per layer.")
-    p.add_argument("--bias-dropout", type=float, default=d.bias_dropout,
-                   help="training-only: element-wise dropout on the summed graph bias.")
     p.add_argument("--lora-dropout", type=float, default=d.lora_dropout,
                    help="LoRA adapter-input dropout (honored in both arms).")
-    p.add_argument("--reg-onset-frac", type=float, default=d.reg_onset_frac,
-                   help="keep the bias dropouts at 0 for this fraction of training, "
-                        "then switch the configured rates on (0 = from step 0).")
 
     # ── generative eval ──────────────────────────────────────────────────────
     p.add_argument("--gen-max-new-tokens", type=int, default=d.gen_max_new_tokens)
@@ -265,12 +251,7 @@ def config_from_args(args):
         gradient_checkpointing=args.gradient_checkpointing,
         active_params=tuple(args.active_params), num_workers=args.num_workers,
         seq_len=args.seq_len, boundary_loss_weight=args.boundary_loss_weight,
-        bias_weight_decay=args.bias_weight_decay,
-        magnetic_eigvec_dropout=args.magnetic_eigvec_dropout,
-        magnetic_eigvec_shared_mask=args.magnetic_eigvec_shared_mask,
-        magnetic_mlp_dropout=args.magnetic_mlp_dropout,
-        bias_droppath=args.bias_droppath, bias_dropout=args.bias_dropout,
-        lora_dropout=args.lora_dropout, reg_onset_frac=args.reg_onset_frac,
+        bias_weight_decay=args.bias_weight_decay, lora_dropout=args.lora_dropout,
         gen_max_new_tokens=args.gen_max_new_tokens, gen_max_samples=args.gen_max_samples,
         gen_eval_samples=args.gen_eval_samples,
         wandb_project=args.wandb_project,

@@ -242,17 +242,6 @@ class GraphCausalLMMixin:
             "rrwp": rrwp,
             "magnetic": magnetic,
         }
-        # Shared eigenvector-dropout mask: ONE (B, M) keep-mask per forward,
-        # consumed by every layer's MagneticBias in place of per-layer masks, so
-        # the whole step sees a single consistent spectral truncation. Sampled
-        # here — outside the checkpointed layers — so backward recompute replays
-        # the identical tensor.
-        p_eig = getattr(self.config, "magnetic_eigvec_dropout", 0.0)
-        if (self.training and p_eig > 0 and magnetic is not None
-                and getattr(self.config, "magnetic_eigvec_shared_mask", False)):
-            features["magnetic_keep"] = (
-                torch.rand(magnetic_lambdas.shape, device=device) >= p_eig)
-
         # Shared bias: computed ONCE here — outside the (gradient-checkpointed)
         # decoder layers, so training saves its activations a single time and
         # every layer reuses the same (B, H, N, N) tensor. In eval/generation it

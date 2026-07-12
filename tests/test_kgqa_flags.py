@@ -29,10 +29,7 @@ REPRESENTATIVE = {
     "num_epochs": 2, "batch_size": 1, "accumulation_steps": 2,
     "lr": 1e-4, "bias_lr": 2e-3, "eval_steps": 50, "max_steps": 4, "seed": 3,
     "lora_r": 8, "k_hop": 0, "k_hop_directed": True,
-    "bias_weight_decay": 0.1, "magnetic_eigvec_dropout": 0.2,
-    "magnetic_eigvec_shared_mask": True, "magnetic_mlp_dropout": 0.15,
-    "bias_droppath": 0.05, "bias_dropout": 0.1, "lora_dropout": 0.1,
-    "reg_onset_frac": 0.33,
+    "bias_weight_decay": 0.1, "lora_dropout": 0.1,
     "graph_attn_impl": "eager", "dtype": "fp32", "gradient_checkpointing": False,
     "active_params": ["graph_bias", "embeddings"], "num_workers": 2,
     "gen_max_new_tokens": 64, "gen_max_samples": None, "gen_eval_samples": 32,
@@ -65,13 +62,7 @@ def test_every_runconfig_field_has_a_flag():
 
 @pytest.mark.parametrize("bad", [
     {"bias_weight_decay": -0.1},
-    {"magnetic_eigvec_dropout": 1.0},
-    {"magnetic_mlp_dropout": -0.05},
-    {"bias_droppath": 1.5},
-    {"bias_dropout": -0.1},
     {"lora_dropout": 1.0},
-    {"reg_onset_frac": 1.0},
-    {"magnetic_eigvec_shared_mask": True},   # requires eigvec dropout > 0
 ])
 def test_validate_rejects_bad_regularization_values(bad):
     with pytest.raises(ValueError):

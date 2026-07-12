@@ -19,8 +19,7 @@ from transformers import AutoTokenizer, TrainingArguments
 
 from ...models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 from ...utils import GraphCollatorV2, set_wandb_project
-from ...utils.text_graph_trainer_v2 import (
-    RegOnsetCallback, make_compute_metrics, shift_logits_for_metrics)
+from ...utils.text_graph_trainer_v2 import make_compute_metrics, shift_logits_for_metrics
 from ...train import select_active_params, print_trainable_parameters, get_device
 from .load_data import load_data
 from .evaluate import KGQAGraphTrainer
@@ -66,13 +65,8 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         "batch_size": cfg.batch_size, "accumulation_steps": cfg.accumulation_steps,
         "max_steps": cfg.max_steps, "seed": cfg.seed,
         "boundary_loss_weight": cfg.boundary_loss_weight,
-        "bias_weight_decay": cfg.bias_weight_decay,
-        "magnetic_eigvec_dropout": cfg.magnetic_eigvec_dropout,
-        "magnetic_eigvec_shared_mask": cfg.magnetic_eigvec_shared_mask,
-        "magnetic_mlp_dropout": cfg.magnetic_mlp_dropout,
-        "bias_droppath": cfg.bias_droppath, "bias_dropout": cfg.bias_dropout,
-        "lora_dropout": cfg.lora_dropout, "reg_onset_frac": cfg.reg_onset_frac,
-        # data keys
+        "bias_weight_decay": cfg.bias_weight_decay, "lora_dropout": cfg.lora_dropout,
+        # data keys (dataset-resolvable knobs may be per-dataset mappings)
         "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
         "versions": cfg.versions, "magnetic_m": cfg.magnetic_m, "data_seed": cfg.data_seed,
         "data_format_version": cfg.data_format_version,
@@ -219,9 +213,6 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         boundary_token_id=(tokenizer("\n", add_special_tokens=False)["input_ids"][0]
                            if cfg.boundary_loss_weight != 1.0 else None),
     )
-
-    if cfg.reg_onset_frac > 0:
-        trainer.add_callback(RegOnsetCallback(model, cfg.reg_onset_frac))
 
     trainer.train()
 

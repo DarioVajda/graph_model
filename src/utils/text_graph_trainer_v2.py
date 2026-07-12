@@ -25,7 +25,7 @@ import json
 
 import numpy as np
 import torch
-from transformers import Trainer, TrainerCallback
+from transformers import Trainer
 
 try:
     from peft import PeftModel
@@ -167,46 +167,6 @@ class GraphTrainerV2(Trainer):
             json.dump({"base_model_name_or_path": base_model_name}, f, indent=4)
         self.model.config.save_pretrained(output_dir)
         save_bias_parameters(self.model, output_dir, params=self.active_params)
-
-
-class RegOnsetCallback(TrainerCallback):
-    """Delayed onset for the bias-path dropouts (TODO_reg round 2).
-
-    Keeps every graph-bias dropout at 0 for the first ``onset_frac`` of training
-    so the zero-init bias channel can form cleanly, then switches the configured
-    rates on. Works by flipping the modules' plain-float rate attributes (they
-    are re-read every forward), so no model code is involved; stateless across
-    checkpoint resumes (everything derives from ``state.global_step``). Scope is
-    the graph-bias dropouts only — LoRA dropout is untouched.
-    """
-
-    def __init__(self, model, onset_frac):
-        from ..models.bias import GraphAttentionBias, MagneticBias
-        attrs = {MagneticBias: ("eigvec_dropout", "mlp_dropout"),
-                 GraphAttentionBias: ("droppath", "bias_dropout")}
-        self.onset_frac = onset_frac
-        self._sites = []                       # (module, attr, configured rate)
-        for m in model.modules():
-            for cls, names in attrs.items():
-                if isinstance(m, cls):
-                    self._sites.extend(
-                        (m, a, getattr(m, a)) for a in names if getattr(m, a, 0.0) > 0)
-        self._onset_step = None
-        self._active = None
-
-    def _set(self, active):
-        if active == self._active:
-            return
-        self._active = active
-        for module, attr, rate in self._sites:
-            setattr(module, attr, rate if active else 0.0)
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        self._onset_step = int(state.max_steps * self.onset_frac)
-        self._set(state.global_step >= self._onset_step)
-
-    def on_step_begin(self, args, state, control, **kwargs):
-        self._set(state.global_step >= self._onset_step)
 
 
 # ── Evaluation helpers (prompt-only exact match, no prediction_step override) ───
