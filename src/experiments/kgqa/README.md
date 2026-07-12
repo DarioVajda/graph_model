@@ -297,6 +297,29 @@ full 246-graph dev split), so cross-sweep deltas under ~1 F1 are noise.
 | relmode_khop | 0 | last_1 | 5e-5 | 1e-2 | 30 | 3h 25m | 66.45 | 73.03 | 79.73 | 64.85 | 67.32 |
 | baseline | 0 | last_1 | 3e-4 | 5e-3 | 15 | 2h 02m | 65.88 | 73.65 | 79.91 | 64.35 | 67.81 |
 | relmode_khop | 0 | last_2 | 5e-5 | 1e-2 | 30 | 3h 43m | 65.61 | 73.77 | 79.79 | 64.26 | 67.02 |
+### Regularization probes (2026-07-11/12)
+
+32-run campaign (`reg_probes` / `reg_combo` / `reg_round2`) probing whether the
+graph-bias channel's total lack of regularization drives the memorization seen
+in the train-slice diagnostic (train-fit 96.7 vs test 72.6). Full design,
+per-arm tables and verdict: `TODO_reg.md`. Bottom line vs the frozen-recipe
+control (test F1 72.55 ± 0.22):
+
+- **`lora_dropout 0.15` is the only winner (+0.62)**; 0.25 overshoots (−0.8).
+  Carried into the scale/CWQ recipe.
+- **Every graph-side regularizer is neutral-to-catastrophic** (coherent
+  spectral dropout −0.3; droppath −1.8/−3.9 at 0.05/0.1; per-layer eigvec
+  dropout −11.9; element-wise bias dropout −35). Train-slice shows they *do*
+  cut memorization (96.7 → 89–94) but test falls harder: the structural
+  channel carries disproportionately *generalizing* signal. Graph channel
+  exonerated; memorization lives in the LoRA/backbone path.
+- Weight decay on graph-bias params (an accidental never-decayed group, now
+  fixable via `bias_weight_decay`) is flat at 0.1 and mildly harmful at 0.3 —
+  the fix stays, the value stays 0.
+
+The negative model-side mechanisms are removed from the codebase after this
+campaign; reproducing those arms = checkout tag `reg-probes-2026-07`.
+
 | relmode_khop | 5 | last_2 | 5e-5 | 1e-2 | 30 | 3h 36m | 61.64 | 69.53 | 75.86 | 59.91 | 63.64 |
 | relmode_khop | 5 | last_1 | 5e-5 | 1e-2 | 30 | 3h 28m | 60.51 | 68.61 | 76.66 | 59.08 | 62.05 |
 | baseline | 2 | last_1 | 1e-4 | 5e-3 | 15 | 1h 45m | 48.76 | 58.17 | 65.72 | 47.63 | 48.02 |

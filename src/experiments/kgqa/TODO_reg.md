@@ -1,8 +1,9 @@
 # TODO_reg — Regularization knobs + probe sweep for the GTLM overfitting question
 
-Status: **runs complete, readout in progress** (started 2026-07-11; all 32
-training runs finished 2026-07-12; train-slice jobs 111104 (round 2) + 111105
-(combo) running). Verdict + keep/remove decision below (§ Final verdict).
+Status: **COMPLETE** (started 2026-07-11; all 32 training runs + all
+train-slice evals finished 2026-07-12). Verdict + keep/remove decision below
+(§ Final verdict). Experiment-as-run committed as 06ac9bd, tag
+`reg-probes-2026-07`; mechanism removal is the follow-up commit.
 
 ## Summary — every regularization arm (all rounds)
 
@@ -15,22 +16,31 @@ R1 = 015 reg_probes, C = 016 reg_combo, R2 = 017 reg_round2.
 |---|---|---|---|---|---|---|
 | — | control | lora_dropout 0.05 (recipe default) | 72.35 / 72.86 / 72.45 | 72.55 | 96.71 | baseline |
 | R1 | lora_do | lora_dropout 0.15 | 72.95 / 73.39 | **73.17 (+0.62)** | 96.83 | **only winner**; train-fit unchanged → better adaptation, not de-memorization |
-| R2 | lora25 | lora_dropout 0.25 | 71.95 / 71.95 / 71.30 | 71.73 (−0.82) | job 111104 | overshoots; dose peaks near 0.15 |
+| R2 | lora25 | lora_dropout 0.25 | 71.95 / 71.95 / 71.30 | 71.73 (−0.82) | 95.96 | overshoots — starts cutting train-fit AND test; dose peaks near 0.15 |
 | R1 | wd | bias_weight_decay 0.1 | 72.57 / 73.02 / 72.02 | 72.54 (−0.01) | 96.53 | flat — no effect anywhere |
-| R2 | wd3 | bias_weight_decay 0.3 | 71.51 / 71.97 / 73.08 | 72.19 (−0.36) | job 111104 | stronger dose drifts negative |
+| R2 | wd3 | bias_weight_decay 0.3 | 71.51 / 71.97 / 73.08 | 72.19 (−0.36) | 96.65 | train-fit untouched, test drifts down |
 | R1 | eig | eigvec 0.1 + mlp 0.1, per-layer masks | 58.50 / 66.27 / 57.31 | 60.69 (−11.86) | 89.09 | overdosed + incoherent spectrum |
-| R2 | eig_shared | eigvec 0.05, ONE mask/forward | 72.27 / 71.69 / 72.90 | 72.28 (−0.27) | job 111104 | mechanism fix recovers to control — never above |
-| R2 | eig_shared_onset | + reg_onset_frac 0.33 | 72.30 / 72.00 / 71.63 | 71.98 (−0.57) | job 111104 | late onset does not help |
+| R2 | eig_shared | eigvec 0.05, ONE mask/forward | 72.27 / 71.69 / 72.90 | 72.28 (−0.27) | 96.41 | "recovery" = the dose stopped doing ANYTHING (train-fit ≈ control) — no benign regularization window found |
+| R2 | eig_shared_onset | + reg_onset_frac 0.33 | 72.30 / 72.00 / 71.63 | 71.98 (−0.57) | 97.08 | late onset memorizes slightly MORE than control |
 | R1 | droppath | bias_droppath 0.1 | 68.21 / 69.83 / 67.83 | 68.62 (−3.93) | 94.16 | drops generalizing signal |
-| R2 | droppath05 | bias_droppath 0.05 | 69.69 / 71.48 / 71.03 | 70.73 (−1.82) | job 111104 | half dose ≈ half damage |
-| R2 | elem | bias_dropout 0.1 (element-wise) | 33.09 / 40.82 / 38.16 | 37.36 (−35.19) | job 111104 | catastrophic: logit-space zero+rescale corrupts attention |
-| C | combo | all R1 knobs at once | 52.03 / 64.21 / 51.97 | 56.07 (−16.48) | job 111105 | compounded eig damage; relocation unreadable |
+| R2 | droppath05 | bias_droppath 0.05 | 69.69 / 71.48 / 71.03 | 70.73 (−1.82) | 96.06 | half dose ≈ half damage |
+| R2 | elem | bias_dropout 0.1 (element-wise) | 33.09 / 40.82 / 38.16 | 37.36 (−35.19) | 64.10 | catastrophic: logit-space zero+rescale corrupts attention |
+| C | combo | all R1 knobs at once | 52.03 / 64.21 / 51.97 | 56.07 (−16.48) | 84.51 | compounded eig damage; relocation unreadable |
 
 Reading order: rows grouped by mechanism family (LoRA dropout, bias weight
 decay, magnetic spectral dropout, whole-bias droppath, element-wise bias
 dropout, everything combined) — each family's round-2 row is the dose/mechanism
-correction of its round-1 row. Train-slice cells naming a job get filled when
-111104/111105 land.
+correction of its round-1 row. Train-slice jobs: controls 110940, R1 111023,
+R2 111104, combo 111105 (same 200 train questions throughout).
+
+**The campaign-wide pattern (the strongest single result):** sorting all 12
+rows by train-slice vs test, there is NO arm that cut train-fit while holding
+test — every mechanism either left train-fit at ~96–97 (wd, wd3, eig_shared,
+lora_do) or dragged test down faster than train-fit (droppath 2.5↓/3.9↓,
+eig 7.6↓/11.9↓, elem 32.6↓/35.2↓, combo 12.2↓/16.5↓, lora25 0.75↓/0.82↓).
+The "de-memorize the graph channel" hypothesis is dead across 8 mechanisms ×
+2 doses: memorization headroom on this dataset is not convertible into test F1
+by ANY tested regularizer — only more data (CWQ arm) can move it.
 
 ## Progress
 
@@ -63,9 +73,9 @@ correction of its round-1 row. Train-slice cells naming a job get filled when
   F1 but squeezing both channels at once does). `016_reg_combo.jsonc` = ALL
   knobs on (wd 0.1 + eig/mlp 0.1 + droppath 0.1 + lora_do 0.15), 3 seeds,
   array job **110947**. Total concurrent: 11 + 3 = 14 ≤ 16.
-- [~] Part 7 — readout: per-arm metrics + train-slice eval + verdict.
-  Round-1 test + train-slice done (tables below). Round-2 test done; round-2
-  train-slice on all 18 checkpoints = job **111104** (launched 2026-07-12).
+- [x] Part 7 — readout: per-arm metrics + train-slice eval + verdict.
+  Train-slice jobs: controls 110940, round-1 111023, round-2 111104 (all 18
+  checkpoints), combo 111105. Full grid in the summary table at the top.
   Tooling ready: `error_analysis/train_slice_probes.py` (parameterized version
   of train_slice_eval.py; same 200 questions; controls rescored with the same
   script on the nmax50 control checkpoints for internal consistency).
@@ -135,8 +145,9 @@ is the lever that moves test F1.
   (18 runs, 2026-07-11 ~22:55).
 - [x] Round-1 train-slice on probe checkpoints (job 111023 — tables above).
 - [x] Round-2 sweep complete (all 18 runs COMPLETED 2026-07-12, results below).
-- [~] Round-2 train-slice on all 18 checkpoints: job **111104** (running).
-- [ ] Final readout: fold round-2 train-slice into the grid, close out.
+- [x] Round-2 train-slice on all 18 checkpoints: job **111104**; combo
+  checkpoints (missed by 111023) backfilled via job **111105**.
+- [x] Final readout: full grid + campaign-wide pattern in the summary table.
 
 ## Round-2 results (017 reg_round2, job 111008) — test F1 FINAL
 
@@ -163,7 +174,10 @@ for the main ones, vs a 3-seed control. Outcome of the campaign:
    shows why: these knobs DO cut memorization (train-fit 96.7 → 89–94) but test
    falls *harder* — the structural channel's content is disproportionately
    generalizing signal (the answer is a subgraph node; the magnetic bias does
-   real work locating it).
+   real work locating it). The round-2 train-slice closes the loop: the
+   "fixed" gentle dose (eig_shared 0.05) recovered test only by ceasing to
+   affect train-fit at all (96.4 ≈ control) — there is no dose window where a
+   graph-side regularizer trades memorization for test F1.
 2. **LoRA dropout 0.15 is the single validated positive** (+0.62, both seeds
    above every control seed) and the dose-response peaks there (0.25 → −0.82).
    Train-fit unchanged at 96.8 → it is better-quality adaptation, not
