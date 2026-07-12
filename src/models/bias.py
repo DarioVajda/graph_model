@@ -64,6 +64,10 @@ class SPDBias(BaseBias):
         super().__init__()
         self.max_spd = getattr(bias_config, 'max_spd', 32)
         self.weights = nn.Parameter(torch.zeros(self.max_spd, num_heads))
+        # 2-D by shape but semantically an additive logit lookup (64 globally
+        # shared values per head — it cannot memorize examples): exempt from the
+        # trainer's shape-based weight-decay rule.
+        self.weights._no_weight_decay = True
 
     def forward(self, *, dtype, device, spd=None, **kwargs) -> Optional[torch.Tensor]:
         if spd is None:
@@ -140,6 +144,11 @@ class MagneticBias(BaseBias):
     def __init__(self, num_heads: int, head_dim: int, bias_config):
         super().__init__()
         magnetic_dim = getattr(bias_config, 'magnetic_dim', 32)
+        # Training-only regularization (0.0 = exactly the historical forward).
+        # Applied FUNCTIONALLY — inserting nn.Dropout into the Sequentials would
+        # shift child indices and break checkpoint param names / proj[2] refs.
+        self.eigvec_dropout = getattr(bias_config, 'magnetic_eigvec_dropout', 0.0)
+        self.mlp_dropout = getattr(bias_config, 'magnetic_mlp_dropout', 0.0)
         self.lambda_lin = nn.Linear(1, head_dim, bias=True)
         self.deep_set = nn.Sequential(
             nn.Linear(head_dim * 2, magnetic_dim, bias=True),
@@ -158,6 +167,7 @@ class MagneticBias(BaseBias):
         self, *, dtype, device,
         magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         num_nodes: Optional[torch.Tensor] = None,
+        magnetic_keep: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Optional[torch.Tensor]:
         if magnetic is None or num_nodes is None:
@@ -168,12 +178,31 @@ class MagneticBias(BaseBias):
         h_i   = self.lambda_lin(lambdas.unsqueeze(-1))                                          # (B, M, head_dim)
         valid = (torch.arange(lambdas.shape[1], device=device).unsqueeze(0)
                  < num_nodes.unsqueeze(1))                                                       # (B, M) bool
+
+        # Eigenvector dropout (training-only): drop whole eigenvectors — out of
+        # h_avg (via `valid`) and out of the einsums (zeroed V columns contract
+        # to exactly nothing; done upstream so folded and legacy_unfolded share
+        # the path). Kept columns scale by 1/sqrt(1-p): the bias terms are
+        # V·V products, so the product carries the standard 1/(1-p) rescale.
+        p_eig = self.eigvec_dropout
+        if self.training and p_eig > 0:
+            # `magnetic_keep`: an optional pre-drawn (B, M) mask, sampled once
+            # per forward by the causal-LM mixin (magnetic_eigvec_shared_mask)
+            # so every layer sees the SAME spectral truncation this step.
+            keep = (magnetic_keep if magnetic_keep is not None
+                    else torch.rand(lambdas.shape, device=device) >= p_eig)                      # (B, M) bool
+            valid = valid & keep
+            col_scale = keep.to(V_real.dtype).unsqueeze(1) / (1.0 - p_eig) ** 0.5               # (B, 1, M)
+            V_real = V_real * col_scale
+            V_imag = V_imag * col_scale
+
         # Divide by the number of valid eigenvalues, not num_nodes.
         # With full eigenvectors (M=N) these are equal; with truncated (M<N) they differ.
         n_valid = valid.sum(dim=1, keepdim=True).unsqueeze(-1).to(h_i.dtype).clamp(min=1)       # (B, 1, 1)
         h_avg   = (h_i * valid.unsqueeze(-1)).sum(1, keepdim=True) / n_valid                   # (B, 1, head_dim)
 
         phi = self.deep_set(torch.cat([h_i, h_avg.expand_as(h_i)], dim=-1))                                 # (B, N, magnetic_dim)
+        phi = F.dropout(phi, self.mlp_dropout, training=self.training)
 
         if getattr(self, "legacy_unfolded", False):
             # Original formulation, kept for parity testing: materializes the
@@ -181,7 +210,9 @@ class MagneticBias(BaseBias):
             # before the first projection.
             real = (torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phi) + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phi))
             imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi) - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi))
-            b = self.proj(torch.cat([real, imag], dim=-1))
+            hidden = self.proj[1](self.proj[0](torch.cat([real, imag], dim=-1)))
+            hidden = F.dropout(hidden, self.mlp_dropout, training=self.training)
+            b = self.proj[2](hidden)
         else:
             # Folded formulation (algebraically identical): the first proj
             # layer is linear, so project phi (B,M,m — tiny) BEFORE the N²
@@ -200,7 +231,9 @@ class MagneticBias(BaseBias):
                 + torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phiI)
                 - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phiI)
             ) + b1                                                # (B, N, N, m)
-            b = self.proj[2](self.proj[1](hidden))                # SiLU, Linear
+            hidden = self.proj[1](hidden)                         # SiLU
+            hidden = F.dropout(hidden, self.mlp_dropout, training=self.training)
+            b = self.proj[2](hidden)
 
         b = b.permute(0, 3, 1, 2).contiguous()                    # (B, H, N, N)
         diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
@@ -217,6 +250,10 @@ class MagneticSharedBias(MagneticBias):
     so the O(N²·M·m) einsums execute once instead of once per layer per
     recompute), and threads the resulting (B, H, N, N) tensor to every layer via
     ``GraphContext.shared_node_bias``.
+
+    Footnote: because it runs once per forward, the eigvec/MLP dropout masks are
+    sampled once and shared by all layers within a step (per-layer MagneticBias
+    samples fresh masks per layer). Acceptable; KGQA uses the per-layer variant.
     """
 
     config_key = 'magnetic_shared'
@@ -259,6 +296,12 @@ class GraphAttentionBias(nn.Module):
         self.layer_idx = layer_idx
         self.num_heads = num_heads
         self.k_hop     = k_hop
+        # Per-sample whole-bias DropPath (training-only, 0.0 = no-op);
+        # per-layer independent masks (this module is called once per layer).
+        self.droppath  = getattr(bias_config, 'bias_droppath', 0.0)
+        # Element-wise dropout on the summed bias (training-only, 0.0 = no-op):
+        # zeroes individual (h, i, j) entries, survivors rescaled by 1/(1-p).
+        self.bias_dropout = getattr(bias_config, 'bias_dropout', 0.0)
 
         # Shared types are instantiated once on the top-level model (see
         # build_shared_bias_modules), never per layer.
@@ -302,6 +345,7 @@ class GraphAttentionBias(nn.Module):
         rwse:        Optional[torch.Tensor]                           = None,
         rrwp:        Optional[torch.Tensor]                           = None,
         magnetic:    Optional[Tuple[torch.Tensor, torch.Tensor]]      = None,
+        magnetic_keep: Optional[torch.Tensor]                         = None,
         k_hop_mask:  Optional[torch.Tensor]                           = None,
         cache_dict:  Optional[dict]                                   = None,
     ) -> Optional[torch.Tensor]:
@@ -324,9 +368,19 @@ class GraphAttentionBias(nn.Module):
                 dtype=dtype, device=device,
                 num_nodes=num_nodes, spd=spd, laplacian=laplacian,
                 rwse=rwse, rrwp=rrwp, magnetic=magnetic,
+                magnetic_keep=magnetic_keep,
             )
             if b is not None:
                 node_bias = b if node_bias is None else node_bias + b
+
+        # Both dropouts BEFORE the K-hop gate: the gate is a hard attendability
+        # mask, not signal — it must survive when a sample's soft bias is dropped.
+        if self.training and self.bias_dropout > 0 and node_bias is not None:
+            node_bias = F.dropout(node_bias, self.bias_dropout, training=True)
+        if self.training and self.droppath > 0 and node_bias is not None:
+            keep = (torch.rand(node_bias.shape[0], 1, 1, 1, device=node_bias.device)
+                    >= self.droppath).to(node_bias.dtype)
+            node_bias = node_bias * keep / (1.0 - self.droppath)
 
         node_bias = self._apply_k_hop_gate(node_bias, k_hop_mask, dtype, device)
 
@@ -393,6 +447,7 @@ def compute_shared_node_bias(
             spd=features.get("spd"), laplacian=features.get("laplacian"),
             rwse=features.get("rwse"), rrwp=features.get("rrwp"),
             magnetic=features.get("magnetic"),
+            magnetic_keep=features.get("magnetic_keep"),
         )
         if b is not None:
             node_bias = b if node_bias is None else node_bias + b

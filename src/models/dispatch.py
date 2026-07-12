@@ -212,8 +212,9 @@ def compute_node_bias(
 
     Optionally gradient-checkpointed: the bias compute is milliseconds, but
     autograd would otherwise keep every layer's ``(B, N, N, ·)`` intermediates
-    alive. Safe to recompute — in training the bias cache is never read, so the
-    recompute is deterministic.
+    alive. Safe to recompute — in training the bias cache is never read, and
+    the bias dropouts (eigvec/MLP/droppath) rely on ``checkpoint``'s default
+    ``preserve_rng_state=True`` to replay identical masks in the recompute.
     """
     feats = ctx.features
 
@@ -227,6 +228,7 @@ def compute_node_bias(
             rwse=feats["rwse"],
             rrwp=feats["rrwp"],
             magnetic=feats["magnetic"],
+            magnetic_keep=feats.get("magnetic_keep"),
             k_hop_mask=None,
             cache_dict=ctx.cache,
         )

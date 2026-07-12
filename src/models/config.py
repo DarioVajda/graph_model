@@ -25,6 +25,11 @@ class GraphConfigMixin:
         magnetic_shared: bool = False,
         magnetic_dim: int = 32,
         magnetic_q: float = 0.25,
+        magnetic_eigvec_dropout: float = 0.0,
+        magnetic_eigvec_shared_mask: bool = False,
+        magnetic_mlp_dropout: float = 0.0,
+        bias_droppath: float = 0.0,
+        bias_dropout: float = 0.0,
         k_hop: int = 0,
         k_hop_directed: bool = False,
         graph_attn_impl: str = "eager",
@@ -45,6 +50,18 @@ class GraphConfigMixin:
         self.magnetic_shared = magnetic_shared
         self.magnetic_dim = magnetic_dim
         self.magnetic_q = magnetic_q
+        # Bias-path regularization (all training-only, 0.0/False = no-op):
+        #   magnetic_eigvec_dropout — drop whole eigenvectors from MagneticBias;
+        #   magnetic_eigvec_shared_mask — sample ONE eigvec keep-mask per forward
+        #     (all layers see the same spectral truncation) instead of per-layer;
+        #   magnetic_mlp_dropout    — dropout after MagneticBias' SiLUs;
+        #   bias_droppath           — per-sample drop of a layer's summed bias;
+        #   bias_dropout            — element-wise dropout on the summed bias.
+        self.magnetic_eigvec_dropout = magnetic_eigvec_dropout
+        self.magnetic_eigvec_shared_mask = magnetic_eigvec_shared_mask
+        self.magnetic_mlp_dropout = magnetic_mlp_dropout
+        self.bias_droppath = bias_droppath
+        self.bias_dropout = bias_dropout
         self.k_hop = k_hop
         self.k_hop_directed = k_hop_directed
         self.graph_attn_impl = graph_attn_impl

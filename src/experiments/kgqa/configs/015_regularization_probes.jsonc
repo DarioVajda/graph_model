@@ -1,0 +1,84 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Regularization probes (TODO_reg, 2026-07-11): the graph-bias pathway is
+  // the least-regularized part of the model (zero dropout in bias.py; zero
+  // weight decay on every graph-bias param via HF's "bias"-substring rule).
+  // Four uncrossed direction-finding arms on the frozen recipe; every knob's
+  // DEFAULT preserves current behavior exactly, so the control is the three
+  // existing frozen-recipe seeds (retune_v3_0006 s0 + frozen_nmax50 s1/s2,
+  // test F1 72.35/72.86/72.45, mean 72.55) — no control re-runs.
+  //
+  //   arm       | knobs                                   | hypothesis
+  //   wd        | bias_weight_decay 0.1                   | undecayed bias channel drives memorization
+  //   eig       | magnetic_{eigvec,mlp}_dropout 0.1       | magnetic spectrum = example fingerprint
+  //   droppath  | bias_droppath 0.1                       | model leans exclusively on structural channel
+  //   lora_do   | lora_dropout 0.15                       | generic overfit lives in LoRA, not graph channel
+  //
+  // Base = 013_frozen_nmax50 verbatim (r64, lr 1e-4, bias_lr 5e-3, k_hop 0,
+  // nmax50, 15 ep, dfv3, flex/bf16); reuses the existing nmax50 .gtds cache.
+  // Readout (Part 7): dev/test F1 + Hits@1 AND the train-slice eval on each
+  // arm's best checkpoint — decisive signal is the train-fit vs test gap.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/015_regularization_probes.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "reg_probes",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 11,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // Every object pins all four probe knobs explicitly (defaults included) so
+  // the resolved run names are self-describing (014_collapse_2x2 convention).
+  "arm": [
+    { "bias_weight_decay": 0.1, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.0, "lora_dropout": 0.05, "seed": 0 },
+    { "bias_weight_decay": 0.1, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.0, "lora_dropout": 0.05, "seed": 1 },
+    { "bias_weight_decay": 0.1, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.0, "lora_dropout": 0.05, "seed": 2 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.1, "magnetic_mlp_dropout": 0.1, "bias_droppath": 0.0, "lora_dropout": 0.05, "seed": 0 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.1, "magnetic_mlp_dropout": 0.1, "bias_droppath": 0.0, "lora_dropout": 0.05, "seed": 1 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.1, "magnetic_mlp_dropout": 0.1, "bias_droppath": 0.0, "lora_dropout": 0.05, "seed": 2 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.1, "lora_dropout": 0.05, "seed": 0 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.1, "lora_dropout": 0.05, "seed": 1 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.1, "lora_dropout": 0.05, "seed": 2 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.0, "lora_dropout": 0.15, "seed": 0 },
+    { "bias_weight_decay": 0.0, "magnetic_eigvec_dropout": 0.0, "magnetic_mlp_dropout": 0.0, "bias_droppath": 0.0, "lora_dropout": 0.15, "seed": 1 }
+  ],
+
+  "mode": "train",
+  "lora_r": 64,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "k_hop": 0,
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "seq_len": 4096,
+
+  "data_format_version": 3,
+  "n_max": 50,
+  "gen_max_new_tokens": 256,
+  "max_nodes": 512,
+  "versions": 8,
+  "data_seed": 42,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+
+  "wandb_project": "GraphLLM"
+}

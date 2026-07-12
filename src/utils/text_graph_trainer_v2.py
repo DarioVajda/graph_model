@@ -25,7 +25,7 @@ import json
 
 import numpy as np
 import torch
-from transformers import Trainer
+from transformers import Trainer, TrainerCallback
 
 try:
     from peft import PeftModel
@@ -38,12 +38,17 @@ from ..models.io import save_bias_parameters
 class GraphTrainerV2(Trainer):
     """HF Trainer with opt-in bias-LR groups and a lightweight bias checkpoint."""
 
-    def __init__(self, *args, active_params=None, bias_lr=None, **kwargs):
+    def __init__(self, *args, active_params=None, bias_lr=None, bias_weight_decay=0.0, **kwargs):
         if kwargs.get("args") is not None:
             # The collator needs raw graph columns that aren't forward arguments.
             kwargs["args"].remove_unused_columns = False
         self.active_params = active_params
         self.bias_lr = bias_lr
+        # Decay for the graph-bias matrices. Distinct from args.weight_decay
+        # because HF's name-based decay rule (excludes any param whose name
+        # contains "bias") never matched the graph-bias modules — the historical
+        # behavior is NO decay on them, and 0.0 preserves it exactly.
+        self.bias_weight_decay = bias_weight_decay
         super().__init__(*args, **kwargs)
 
     # ── Optional: a distinct learning rate for the bias parameters ──────────────
@@ -69,7 +74,14 @@ class GraphTrainerV2(Trainer):
                 if not p.requires_grad:
                     continue
                 is_active = any(act in n for act in active_p)
-                has_decay = n in decay_parameters
+                if is_active:
+                    # HF's name-based rule would exempt every graph-bias param
+                    # (their module names contain "bias"). Decide by shape
+                    # instead: matrices decay, 1-D gains/offsets don't; modules
+                    # opt individual params out via `_no_weight_decay = True`.
+                    has_decay = p.ndim >= 2 and not getattr(p, "_no_weight_decay", False)
+                else:
+                    has_decay = n in decay_parameters
                 key = ("bias" if is_active else "base") + ("_decay" if has_decay else "_no_decay")
                 groups[key].append(p)
 
@@ -78,7 +90,7 @@ class GraphTrainerV2(Trainer):
             grouped = [
                 {"params": groups["base_decay"], "weight_decay": self.args.weight_decay, "lr": base_lr, "is_bias": False},
                 {"params": groups["base_no_decay"], "weight_decay": 0.0, "lr": base_lr, "is_bias": False},
-                {"params": groups["bias_decay"], "weight_decay": self.args.weight_decay, "lr": bias_lr, "is_bias": True},
+                {"params": groups["bias_decay"], "weight_decay": self.bias_weight_decay, "lr": bias_lr, "is_bias": True},
                 {"params": groups["bias_no_decay"], "weight_decay": 0.0, "lr": bias_lr, "is_bias": True},
             ]
             grouped = [g for g in grouped if g["params"]]
@@ -109,6 +121,7 @@ class GraphTrainerV2(Trainer):
             for group in self.optimizer.param_groups:
                 if group.get("is_bias", False):
                     logs["bias_learning_rate"] = group["lr"]
+                    logs["bias_weight_decay"] = self.bias_weight_decay
                     break
         super().log(logs, *args, **kwargs)
 
@@ -154,6 +167,46 @@ class GraphTrainerV2(Trainer):
             json.dump({"base_model_name_or_path": base_model_name}, f, indent=4)
         self.model.config.save_pretrained(output_dir)
         save_bias_parameters(self.model, output_dir, params=self.active_params)
+
+
+class RegOnsetCallback(TrainerCallback):
+    """Delayed onset for the bias-path dropouts (TODO_reg round 2).
+
+    Keeps every graph-bias dropout at 0 for the first ``onset_frac`` of training
+    so the zero-init bias channel can form cleanly, then switches the configured
+    rates on. Works by flipping the modules' plain-float rate attributes (they
+    are re-read every forward), so no model code is involved; stateless across
+    checkpoint resumes (everything derives from ``state.global_step``). Scope is
+    the graph-bias dropouts only — LoRA dropout is untouched.
+    """
+
+    def __init__(self, model, onset_frac):
+        from ..models.bias import GraphAttentionBias, MagneticBias
+        attrs = {MagneticBias: ("eigvec_dropout", "mlp_dropout"),
+                 GraphAttentionBias: ("droppath", "bias_dropout")}
+        self.onset_frac = onset_frac
+        self._sites = []                       # (module, attr, configured rate)
+        for m in model.modules():
+            for cls, names in attrs.items():
+                if isinstance(m, cls):
+                    self._sites.extend(
+                        (m, a, getattr(m, a)) for a in names if getattr(m, a, 0.0) > 0)
+        self._onset_step = None
+        self._active = None
+
+    def _set(self, active):
+        if active == self._active:
+            return
+        self._active = active
+        for module, attr, rate in self._sites:
+            setattr(module, attr, rate if active else 0.0)
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._onset_step = int(state.max_steps * self.onset_frac)
+        self._set(state.global_step >= self._onset_step)
+
+    def on_step_begin(self, args, state, control, **kwargs):
+        self._set(state.global_step >= self._onset_step)
 
 
 # ── Evaluation helpers (prompt-only exact match, no prediction_step override) ───

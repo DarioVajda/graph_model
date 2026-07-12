@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import math
 
-from src.models.bias import GraphAttentionBias
+from src.models.bias import GraphAttentionBias, MagneticBias
 from src.models.legacy.modeling_gtlm_llama_v1 import expand_node_to_token_bias
 from src.utils.text_graph_collator import GraphCollator, _k_hop_reachability
 
@@ -33,6 +33,10 @@ class _BiasConfig:
         self.max_rw_steps = kwargs.get('max_rw_steps', 4)
         self.magnetic  = kwargs.get('magnetic',  False)
         self.magnetic_dim = kwargs.get('magnetic_dim', 8)
+        self.magnetic_eigvec_dropout = kwargs.get('magnetic_eigvec_dropout', 0.0)
+        self.magnetic_mlp_dropout    = kwargs.get('magnetic_mlp_dropout',    0.0)
+        self.bias_droppath           = kwargs.get('bias_droppath',           0.0)
+        self.bias_dropout            = kwargs.get('bias_dropout',            0.0)
 
 
 def make_bias(k_hop=0, **cfg_kwargs) -> GraphAttentionBias:
@@ -458,6 +462,222 @@ class TestExpandNodeToTokenBias:
         node_ids  = torch.tensor([[0, 1, 2], [2, 1, 0]])
         token_bias = expand_node_to_token_bias(node_bias, node_ids, q_len=3, kv_len=3)
         assert token_bias.shape == (B, H, 3, 3)
+
+
+# ─── Bias-path regularization knobs (TODO_reg, 2026-07-11) ───────────────────
+
+class _FixedRand:
+    """torch.rand stand-in returning canned tensors keyed by requested shape."""
+
+    def __init__(self, by_shape):
+        self.by_shape = {tuple(k): v for k, v in by_shape.items()}
+
+    def __call__(self, *args, **kwargs):
+        shape = (tuple(args[0]) if len(args) == 1 and isinstance(args[0], (tuple, torch.Size))
+                 else tuple(args))
+        return self.by_shape[shape].clone()
+
+
+def _magnetic_module(p_eig=0.0, p_mlp=0.0, seed=0):
+    torch.manual_seed(seed)
+    cfg = _BiasConfig(magnetic=True, magnetic_dim=8,
+                      magnetic_eigvec_dropout=p_eig, magnetic_mlp_dropout=p_mlp)
+    m = MagneticBias(num_heads=4, head_dim=8, bias_config=cfg)
+    # proj[2] is zero-init (the bias starts as a no-op); randomize it so the
+    # output is non-trivial and dropout effects are observable.
+    with torch.no_grad():
+        nn.init.normal_(m.proj[2].weight, std=0.5)
+        nn.init.normal_(m.proj[2].bias, std=0.5)
+    return m
+
+
+def _magnetic_inputs(B=2, N=5, seed=1):
+    torch.manual_seed(seed)
+    V = torch.randn(B, N, N, 2)
+    lambdas = torch.randn(B, N)
+    return (V, lambdas), torch.full((B,), N, dtype=torch.long)
+
+
+class TestMagneticEigvecDropout:
+
+    def test_eval_mode_is_noop(self):
+        m = _magnetic_module(p_eig=0.5, p_mlp=0.5).eval()
+        mag, nn_ = _magnetic_inputs()
+        out = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        m.eigvec_dropout = 0.0
+        m.mlp_dropout = 0.0
+        ref = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        assert torch.equal(out, ref), "eval-mode dropout must be an exact no-op"
+
+    def test_dropped_eigvec_equals_truncation(self, monkeypatch):
+        # Dropping eigenvector j must equal physically removing it: same
+        # 1/sqrt(1-p) scale on kept columns, same h_avg validity set.
+        p, j, keep_idx = 0.25, 2, [0, 1, 3, 4]
+        m = _magnetic_module(p_eig=p).train()
+        (V, lam), nn_ = _magnetic_inputs(B=2, N=5)
+        mask_full = torch.ones(2, 5)
+        mask_full[:, j] = 0.0                       # rand < p  =>  dropped
+        monkeypatch.setattr(torch, "rand", _FixedRand({
+            (2, 5): mask_full, (2, 4): torch.ones(2, 4)}))
+
+        out_masked = m(dtype=DTYPE, device=DEVICE, magnetic=(V, lam), num_nodes=nn_)
+        out_trunc = m(dtype=DTYPE, device=DEVICE,
+                      magnetic=(V[:, :, keep_idx, :], lam[:, keep_idx]), num_nodes=nn_)
+        assert torch.allclose(out_masked, out_trunc, atol=1e-5), \
+            "a dropped eigenvector must contribute exactly nothing"
+
+    def test_rescaling_preserves_expectation(self):
+        p = 0.1
+        m = _magnetic_module(p_eig=p)
+        mag, nn_ = _magnetic_inputs(B=1, N=6)
+        m.eval()
+        ref = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        m.train()
+        torch.manual_seed(123)
+        acc = torch.zeros_like(ref)
+        n_draws = 1500
+        for _ in range(n_draws):
+            acc += m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        rel = (acc / n_draws - ref).abs().max() / (ref.abs().max() + 1e-6)
+        assert rel < 0.1, f"mean over draws deviates {rel:.3f} from the p=0 output"
+
+
+class TestMagneticMLPDropout:
+
+    def test_eval_noop_train_active(self):
+        m = _magnetic_module(p_mlp=0.5)
+        mag, nn_ = _magnetic_inputs()
+        m.eval()
+        out_eval = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        m.mlp_dropout = 0.0
+        ref = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        assert torch.equal(out_eval, ref)
+        m.mlp_dropout = 0.5
+        m.train()
+        torch.manual_seed(0)
+        out_train = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        assert not torch.allclose(out_train, ref), "train-mode MLP dropout must act"
+
+    def test_folded_legacy_parity_with_dropout(self):
+        # Both branches consume identical RNG shapes, so folded and
+        # legacy_unfolded stay in exact parity even with dropout active.
+        m = _magnetic_module(p_eig=0.2, p_mlp=0.3).train()
+        mag, nn_ = _magnetic_inputs()
+        torch.manual_seed(7)
+        out_folded = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        m.legacy_unfolded = True
+        torch.manual_seed(7)
+        out_legacy = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        assert torch.allclose(out_folded, out_legacy, atol=1e-5)
+
+
+class TestBiasDropPath:
+
+    def _gb(self, p, k_hop=0, seed=0):
+        torch.manual_seed(seed)
+        gb = make_bias(k_hop=k_hop, spd=True, max_spd=8, bias_droppath=p)
+        with torch.no_grad():
+            gb.bias_modules[0].weights.normal_(std=1.0)
+        return gb
+
+    def test_eval_mode_is_noop(self):
+        gb = self._gb(0.5).eval()
+        spd = torch.randint(0, 5, (2, 4, 4))
+        out = gb(dtype=DTYPE, device=DEVICE, spd=spd)
+        gb.droppath = 0.0
+        assert torch.equal(out, gb(dtype=DTYPE, device=DEVICE, spd=spd))
+
+    def test_per_sample_all_or_nothing(self, monkeypatch):
+        p = 0.5
+        gb = self._gb(p).train()
+        spd = torch.randint(0, 5, (4, 6, 6))
+        gb_ref = self._gb(0.0).train()
+        gb_ref.load_state_dict(gb.state_dict())
+        ref = gb_ref(dtype=DTYPE, device=DEVICE, spd=spd)
+        monkeypatch.setattr(torch, "rand", _FixedRand({
+            (4, 1, 1, 1): torch.tensor([0.1, 0.9, 0.2, 0.8]).view(4, 1, 1, 1)}))
+        out = gb(dtype=DTYPE, device=DEVICE, spd=spd)
+        for b in (0, 2):     # rand < p  =>  dropped: exactly zero
+            assert torch.equal(out[b], torch.zeros_like(out[b])), f"sample {b}"
+        for b in (1, 3):     # kept: exactly bias/(1-p)
+            assert torch.allclose(out[b], ref[b] / (1 - p)), f"sample {b}"
+
+    def test_k_hop_gate_unaffected(self, monkeypatch):
+        p, B = 0.5, 2
+        mask = torch.tensor([[True, True, False],
+                             [True, True, True],
+                             [False, True, True]]).unsqueeze(0).repeat(B, 1, 1)
+        gb = self._gb(p, k_hop=1).train()
+        spd = torch.randint(0, 5, (B, 3, 3))
+        monkeypatch.setattr(torch, "rand", _FixedRand({
+            (B, 1, 1, 1): torch.tensor([0.1, 0.9]).view(B, 1, 1, 1)}))
+        out = gb(dtype=DTYPE, device=DEVICE, spd=spd, k_hop_mask=mask)
+        # Dropped sample: gate survives (-inf outside), soft bias gone (0 inside).
+        assert _is_neg_inf(out[0, :, 0, 2]).all() and _is_neg_inf(out[0, :, 2, 0]).all()
+        assert out[0][:, mask[0]].eq(0.0).all()
+        # Kept sample: gate applied, soft bias present inside.
+        assert _is_neg_inf(out[1, :, 0, 2]).all()
+        assert not out[1][:, mask[1]].eq(0.0).all()
+
+
+class TestMagneticSharedKeepMask:
+
+    def test_provided_mask_equals_own_sampling(self, monkeypatch):
+        # A pre-drawn magnetic_keep must act exactly like the module sampling
+        # the same mask itself (the shared-mask path is just mask injection).
+        p = 0.25
+        m = _magnetic_module(p_eig=p).train()
+        mag, nn_ = _magnetic_inputs(B=2, N=5)
+        mask = torch.ones(2, 5, dtype=torch.bool)
+        mask[:, 2] = False
+        out_injected = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_,
+                         magnetic_keep=mask)
+        monkeypatch.setattr(torch, "rand", _FixedRand({(2, 5): mask.float()}))
+        out_sampled = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        assert torch.equal(out_injected, out_sampled)
+
+    def test_mask_ignored_when_dropout_off(self):
+        m = _magnetic_module(p_eig=0.0).train()
+        mag, nn_ = _magnetic_inputs()
+        mask = torch.zeros(2, 5, dtype=torch.bool)     # would kill everything
+        out = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_,
+                magnetic_keep=mask)
+        ref = m(dtype=DTYPE, device=DEVICE, magnetic=mag, num_nodes=nn_)
+        assert torch.equal(out, ref), "p=0 must ignore any provided mask"
+
+
+class TestElementwiseBiasDropout:
+
+    def _gb(self, p, seed=0):
+        torch.manual_seed(seed)
+        gb = make_bias(k_hop=0, spd=True, max_spd=8, bias_dropout=p)
+        with torch.no_grad():
+            gb.bias_modules[0].weights.normal_(std=1.0)
+        return gb
+
+    def test_eval_mode_is_noop(self):
+        gb = self._gb(0.5).eval()
+        spd = torch.randint(0, 5, (2, 6, 6))
+        out = gb(dtype=DTYPE, device=DEVICE, spd=spd)
+        gb.bias_dropout = 0.0
+        assert torch.equal(out, gb(dtype=DTYPE, device=DEVICE, spd=spd))
+
+    def test_train_mode_element_semantics(self):
+        p = 0.3
+        gb = self._gb(p).train()
+        spd = torch.randint(0, 5, (2, 8, 8))
+        gb_ref = self._gb(0.0).train()
+        gb_ref.load_state_dict(gb.state_dict())
+        ref = gb_ref(dtype=DTYPE, device=DEVICE, spd=spd)
+        torch.manual_seed(11)
+        out = gb(dtype=DTYPE, device=DEVICE, spd=spd)
+        # Survivors are exactly ref/(1-p); the rest are exactly zero.
+        nz = out != 0.0
+        assert torch.allclose(out[nz], (ref / (1 - p))[nz])
+        # Dropped fraction over ref's nonzero entries is roughly p.
+        base = ref != 0.0
+        frac = 1.0 - (nz & base).sum().item() / base.sum().item()
+        assert abs(frac - p) < 0.05, f"dropped fraction {frac:.3f} vs p={p}"
 
 
 # ─── Collator backward-compatibility ─────────────────────────────────────────

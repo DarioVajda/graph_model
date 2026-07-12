@@ -298,7 +298,7 @@ def run_flat_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         "mode": "flat_train", "arm": "flat_text",
         **sweep_meta, "run_name": internal_run,
         "model_name": cfg.model_name, "prompt_style": cfg.resolved_prompt_style,
-        "lora_r": cfg.lora_r, "seq_len": cfg.seq_len,
+        "lora_r": cfg.lora_r, "lora_dropout": cfg.lora_dropout, "seq_len": cfg.seq_len,
         "lr": cfg.lr, "num_epochs": cfg.num_epochs,
         "batch_size": cfg.batch_size, "accumulation_steps": cfg.accumulation_steps,
         "max_steps": cfg.max_steps, "seed": cfg.seed,

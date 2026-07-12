@@ -1,0 +1,66 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Combo arm for the regularization probes (user question, 2026-07-11): the
+  // 015 arms are uncrossed, so they cannot distinguish "no lever exists" from
+  // "memorization relocates to the unregularized channel" (graph bias <-> LoRA
+  // compensation). This arm turns EVERY knob on at once — if no single arm
+  // moves test F1 but this does, synergy is confirmed (round 2 dissects which
+  // pair); if this also moves nothing (train-slice included), the lever is
+  // exhausted at these doses. Config = the smoke-validated all-on setting.
+  // Base recipe identical to 015 / 013_frozen_nmax50.
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/016_reg_combo.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "reg_combo",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+
+  "mode": "train",
+  "bias_weight_decay": 0.1,
+  "magnetic_eigvec_dropout": 0.1,
+  "magnetic_mlp_dropout": 0.1,
+  "bias_droppath": 0.1,
+  "lora_dropout": 0.15,
+
+  "lora_r": 64,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "k_hop": 0,
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "num_workers": 4,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "seq_len": 4096,
+
+  "data_format_version": 3,
+  "n_max": 50,
+  "gen_max_new_tokens": 256,
+  "max_nodes": 512,
+  "versions": 8,
+  "data_seed": 42,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+
+  "wandb_project": "GraphLLM"
+}

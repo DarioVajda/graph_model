@@ -127,6 +127,18 @@ class RunConfig:
                                               # tokens (covers 99.6%+; outliers drop trailing triples)
     boundary_loss_weight: float = 1.0         # D4: loss weight on the "\n" answer-boundary token
                                               # (1.0 = off; renormalized, see KGQAGraphTrainer)
+    # Regularization probes (TODO_reg, 2026-07-11). All defaults preserve the
+    # historical behavior exactly (graph-bias params were accidentally
+    # undecayed; the bias path had no dropout; LoRA dropout was hard-coded 0.05).
+    bias_weight_decay: float = 0.0            # AdamW decay on graph-bias MATRICES (see GraphTrainerV2)
+    magnetic_eigvec_dropout: float = 0.0      # drop whole magnetic eigenvectors (training-only)
+    magnetic_eigvec_shared_mask: bool = False # one eigvec keep-mask per forward (all layers), not per-layer
+    magnetic_mlp_dropout: float = 0.0         # dropout after MagneticBias' SiLUs (training-only)
+    bias_droppath: float = 0.0                # per-sample whole-bias drop per layer (training-only)
+    bias_dropout: float = 0.0                 # element-wise dropout on the summed bias (training-only)
+    lora_dropout: float = 0.05                # LoRA adapter-input dropout (both arms)
+    reg_onset_frac: float = 0.0               # keep bias dropouts at 0 for this fraction of training
+                                              # (0 = active from step 0; see RegOnsetCallback)
 
     # ── generative-eval keys ─────────────────────────────────────────────────
     gen_max_new_tokens: int = 128
@@ -203,6 +215,19 @@ class RunConfig:
             cfg.update(spd=True, max_spd=self.max_spd)
         if self.magnetic:
             cfg.update(magnetic=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+        # Model-side regularization knobs: only nonzero values contribute keys
+        # (matches the "only enabled features" convention above). Training-only
+        # — deliberately NOT in data_config_key (no dataset rebuild).
+        if self.magnetic_eigvec_dropout:
+            cfg.update(magnetic_eigvec_dropout=self.magnetic_eigvec_dropout)
+        if self.magnetic_eigvec_shared_mask:
+            cfg.update(magnetic_eigvec_shared_mask=True)
+        if self.magnetic_mlp_dropout:
+            cfg.update(magnetic_mlp_dropout=self.magnetic_mlp_dropout)
+        if self.bias_droppath:
+            cfg.update(bias_droppath=self.bias_droppath)
+        if self.bias_dropout:
+            cfg.update(bias_dropout=self.bias_dropout)
         return cfg
 
     def lora_config(self):
@@ -213,7 +238,7 @@ class RunConfig:
             "r": self.lora_r,
             "lora_alpha": self.lora_r * 2,
             "target_modules": list(LORA_TARGET_MODULES),
-            "lora_dropout": 0.05,
+            "lora_dropout": self.lora_dropout,
             "bias": "none",
         }
 
@@ -276,6 +301,17 @@ class RunConfig:
                 "(the boundary token is '\\n').")
         if self.versions < 1:
             raise ValueError(f"versions must be >= 1; got {self.versions}.")
+        if self.bias_weight_decay < 0:
+            raise ValueError(f"bias_weight_decay must be >= 0; got {self.bias_weight_decay}.")
+        for name in ("magnetic_eigvec_dropout", "magnetic_mlp_dropout",
+                     "bias_droppath", "bias_dropout", "lora_dropout",
+                     "reg_onset_frac"):
+            p = getattr(self, name)
+            if not (0 <= p < 1):
+                raise ValueError(f"{name} must be in [0, 1); got {p}.")
+        if self.magnetic_eigvec_shared_mask and not self.magnetic_eigvec_dropout:
+            raise ValueError(
+                "magnetic_eigvec_shared_mask requires magnetic_eigvec_dropout > 0.")
         if not (self.spd or self.magnetic):
             raise ValueError("At least one of spd / magnetic must be enabled.")
         return self
