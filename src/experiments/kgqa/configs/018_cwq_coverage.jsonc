@@ -1,0 +1,65 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // E1.1 (TODO_cwq, 2026-07-12): CWQ coverage-ceiling analysis at three caps.
+  //
+  // Builds the sr-cwq .gtds cache at max_nodes ∈ {512, 1024, 2048} with the
+  // frozen-recipe data knobs (n_max 50, versions 8, dfv3, Llama-3.2-1B) and
+  // runs the answer-coverage analysis alongside each build. Decision out:
+  // the final CWQ max_nodes (coverage-vs-cost knee; provisional 1024) and
+  // n_max — plus the built-split token lengths that set the flat arm's
+  // seq_len. The chosen cap's cache is the E4.1 artifact (idempotent).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/018_cwq_coverage.jsonc
+  //
+  // A100 (not B300; 80GB queue was full 2026-07-12, plain A100 suffices): feature building is GPU-light; keeps the training
+  // pool free.
+  //
+  // versions=1 for CWQ (2026-07-12): answer sets are near-singleton (median 1,
+  // mean 2.0), so the answer-ORDER augmentation that versions exists for is a
+  // no-op on most questions — while 8×-ing the train build (221k graph copies
+  // OOM-killed the ver8 build at 250G in compute_labels). CWQ is data-rich
+  // (27.6k questions); if the E4.2 probe shows augmentation is missed, rebuild
+  // ver8 (different cache key, this one stays valid).
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_coverage",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "A100:1",
+      "cpus": 16,
+      "mem": "250G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+  "dataset": "cwq",
+  "analyse_dataset": true,
+
+  "max_nodes": [512, 1024, 2048],
+
+  // Frozen-recipe data knobs (match 015/017 so the chosen cap's cache is the
+  // E4 training cache).
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "n_max": 50,
+  "versions": 1,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "max_length": 1024,
+  "rcm": true,
+
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_q": 0.25,
+  "magnetic_m": 128,
+
+  "use_gpu": true
+}

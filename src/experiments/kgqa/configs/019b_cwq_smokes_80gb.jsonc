@@ -1,0 +1,64 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // E3.5 rerun (2026-07-12): the two CWQ-touching graph smokes from 019, on
+  // A100_80GB. On A100-40GB the cwq-only smoke OOM'd during GENERATION
+  // prefill: the eager dense path materializes the token-level bias +
+  // attention weights at (H=32, q≈kv≈7k) fp32 ≈ 12+ GiB on top of ~28 GiB
+  // already held (flex shape-family buffers) — known constraint: CWQ cap1024
+  // generative eval needs an ≥80 GB GPU. Training itself was fine; the
+  // teacher-forced dev pass + prefixed metrics all ran.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/019b_cwq_smokes_80gb.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_smokes_80gb",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "A100_80GB:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "arm": [
+    { "dataset": "cwq",
+      "max_nodes": 1024, "versions": 1 },
+    { "train_datasets": ["webqsp", "cwq"], "eval_datasets": ["webqsp", "cwq"],
+      "max_nodes": "webqsp=512,cwq=1024", "versions": "webqsp=8,cwq=1" }
+  ],
+
+  "mode": "train",
+  "max_steps": 4,
+  "eval_steps": 2,
+  "num_epochs": 1,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "lora_r": 8,
+  "lora_dropout": 0.15,
+  "k_hop": 0,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "batch_size": 2,
+  "accumulation_steps": 1,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "gen_eval_samples": 8,
+  "gen_max_samples": 16,
+  "gen_max_new_tokens": 64,
+
+  "wandb_project": null
+}

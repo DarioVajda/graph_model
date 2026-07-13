@@ -1,0 +1,73 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // E3.5 (TODO_cwq, 2026-07-12): multi-dataset smoke runs, --max-steps 4.
+  //
+  // Verifies the E2/E3 surface end-to-end on real caches:
+  //   a) webqsp-only graph — the REGRESSION GUARD (same pipeline as all history,
+  //      now under dataset-prefixed metrics + eval_sel_f1 selection);
+  //   b) cwq-only graph — first-ever CWQ examples through the model;
+  //   c) mixed both+both graph — concat train loader + per-dataset knobs +
+  //      two-namespace eval + mean selection metric;
+  //   d) webqsp flat — the flat trainer's port of the same machinery.
+  // Expect in each record: eval_{ds}_f1 / test_{ds}_hits1 / eval_sel_f1, no
+  // _strict keys (log_strict_metrics defaults off).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/019_multidataset_smokes.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "multidataset_smokes",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "A100:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "02:00:00",     // CWQ dev is 3519 q: the teacher-forced eval pass alone is sizeable
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "arm": [
+    { "mode": "train", "dataset": "webqsp",
+      "max_nodes": 512,  "versions": 8, "num_workers": 4 },
+    { "mode": "train", "dataset": "cwq",
+      "max_nodes": 1024, "versions": 1, "num_workers": 4 },
+    { "mode": "train",
+      "train_datasets": ["webqsp", "cwq"], "eval_datasets": ["webqsp", "cwq"],
+      "max_nodes": "webqsp=512,cwq=1024", "versions": "webqsp=8,cwq=1",
+      "num_workers": 4 },
+    { "mode": "flat_train", "dataset": "webqsp",
+      "max_nodes": 512, "versions": 8, "num_workers": 2 }
+  ],
+
+  "max_steps": 4,
+  "eval_steps": 2,                    // two in-training evals inside the 4 steps
+  "num_epochs": 1,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "lora_r": 8,
+  "lora_dropout": 0.15,
+  "k_hop": 0,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "batch_size": 2,
+  "accumulation_steps": 1,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "seq_len": 4096,
+
+  "gen_eval_samples": 8,              // in-training generative eval: 8 fixed seeded samples
+  "gen_max_samples": 16,              // final dev/test scoring: 16 (smoke-sized)
+  "gen_max_new_tokens": 64,
+
+  "wandb_project": null
+}

@@ -1,0 +1,75 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // E4.4 (TODO_cwq): mixed-training arms — concat webqsp+cwq, evaluated on
+  // BOTH benchmarks separately. Fills the {mixed} row of the transfer matrix
+  // ({webqsp-only, cwq-only, mixed} × {eval webqsp, eval cwq}); the other
+  // rows come from 021_webqsp_recipe_refresh + 022_cwq_headline.
+  //
+  // Selection = mean of the two dev F1s (selection_dataset null — the locked
+  // 2026-07-11 default). Concat is CWQ-heavy ~9:1 (23,442 ver1-CWQ vs 2,607
+  // ver8-WebQSP questions); if eval_webqsp_* regresses vs 021, that reopens
+  // the balancing-knob decision.
+  //
+  // *** num_epochs IS A PLACEHOLDER — freeze from the E4.2 probe (the mixed
+  // *** schedule follows the CWQ one: CWQ dominates the concat).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/023_mixed_arms.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "mixed_arms",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "96G",
+      "time": "48:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "dry_run": true            // <- remove ONLY after freezing num_epochs from the probe
+    }
+  },
+
+  "seed": [0, 1, 2],
+  "arm": [
+    { "mode": "train",      "cvt_collapse": null },
+    { "mode": "flat_train", "cvt_collapse": true }   // D2b winner: collapsed serialization
+  ],
+
+  "train_datasets": [["webqsp", "cwq"]],
+  "eval_datasets": [["webqsp", "cwq"]],
+  "selection_dataset": null,
+  "max_nodes": "webqsp=512,cwq=1024",
+  "versions": "webqsp=8,cwq=1",
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 4,               // PLACEHOLDER — freeze from the E4.2 probe curve
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "seq_len": 8192,               // covers CWQ's serialization; WebQSP is far below it
+
+  "eval_steps": 1000,
+  "gen_eval_samples": 256,       // per-dataset fixed seeded dev subsamples (E3.3)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
