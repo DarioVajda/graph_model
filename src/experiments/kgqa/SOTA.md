@@ -32,7 +32,12 @@ high-scoring candidates are extracted, **verbalized**, and handed to a frozen/tu
 (Llama-2-7B) that produces the final answer. The GNN does the multi-hop structure work, the
 LLM does the language work. **+RA** (retrieval augmentation) unions the GNN-retrieved paths
 with RoG's LLM-generated paths. The **SR variant** consumes exactly our inputs (Zhang et al.'s
-subgraph retriever) — that variant (~78.9 WebQSP Hits@1) is our retrieval-matched baseline.
+subgraph retriever) — paper Table 15 row (d), our retrieval-matched baseline on both
+benchmarks: WebQSP **Hit 83.4 / Hits@1 78.9 / F1 69.8**, CWQ **Hit 60.6 / Hits@1 55.6 /
+F1 53.3**. (SR *hurts* GNN-RAG on CWQ vs its dense retriever — 61.3 → 55.6 Hits@1; the paper
+blames disconnected sparse subgraphs breaking its shortest-path extraction. We consume the
+same sparse subgraphs directly, so nothing shields us from the same coverage loss — but we
+have no path-extraction stage to break.)
 GTLM's claim is that one graph-native model can replace this entire two-model pipeline.
 
 ### SubgraphRAG (ICLR 2025, [arXiv:2410.20724](https://arxiv.org/abs/2410.20724))
@@ -173,7 +178,8 @@ point.
   regardless — see the README's Goal section for why we hold retrieval fixed anyway.
 - Within **Family 1** — our actual peer group — the published frontier at our model size is
   RPO-RAG's Llama-3.2-1B (69.8 F1 WebQSP vs our 66.9), and at 8B it's ~81 F1. Both use their
-  own retrievers, so the retrieval-matched target remains SR-GNN-RAG (~78.9 Hits@1).
+  own retrievers, so the retrieval-matched target remains SR-GNN-RAG (Table 15(d):
+  WebQSP 78.9 Hits@1 / 69.8 F1, CWQ 55.6 Hits@1 / 53.3 F1).
 - Recurring ingredients across families that are compatible with our architecture:
   **supervising intermediate structure, not just answers** (RPO-RAG's relation preferences,
   PathISE's path scoring), **synthetic graph-structure curricula** (GraphWalker), and

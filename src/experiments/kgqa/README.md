@@ -17,11 +17,13 @@ as serialized text.* Retrieval is deliberately held fixed — it is a confound, 
 contribution; every point gained by swapping retrievers would be unattributable to the
 graph architecture. Concretely, in order:
 
-1. **Beat retrieval-matched SR-GNN-RAG** (~78.9 WebQSP Hits@1 / 71.3 F1; we are at
-   78.8 / 72.5 after data-format v3 — **F1 already ahead, Hits@1 0.15 short**; and per
-   the A2 diagnostic, Hits@1 structurally under-credits a set generator: Hit/F1 are the
-   honest primary metrics). This is the apples-to-apples pipeline-vs-single-model
-   comparison the setup was designed for.
+1. **Beat retrieval-matched SR-GNN-RAG** (paper Table 15(d): WebQSP **78.9 Hits@1 /
+   69.8 F1**, CWQ **55.6 Hits@1 / 53.3 F1**; we are at 78.8 / 72.5 WebQSP after
+   data-format v3 — **F1 ahead by 2.7, Hits@1 0.15 short**; the 71.3 F1 cited here
+   previously is Table 2's *dense-retriever* GNN-RAG. Per the A2 diagnostic, Hits@1
+   structurally under-credits a set generator: Hit/F1 are the honest primary
+   metrics). This is the apples-to-apples pipeline-vs-single-model comparison the
+   setup was designed for.
 2. **Beat the text-serialization ablation**: same base LLM, same SR subgraph flattened to
    triples in the prompt, no structural biases. This isolates whether the graph attention
    biases do anything — the result that transfers to the rest of the repo. *(Not yet run.)*
@@ -55,9 +57,14 @@ higher = better); the last column is our best run to date.
   means are F1 71.1–71.5 / Hits@1 77.5 (±1.0 seed noise). WebQSP only — no CWQ runs yet.
   See [Results so far](#results-so-far).
 - **GNN-RAG / GNN-RAG+RA / RoG**: from GNN-RAG Table 2 (Mavromatis & Karypis, 2024). Those use
-  *combined* GNN retrievers; the **retrieval-matched** SR-only GNN-RAG is ~**78.9** WebQSP Hits@1
-  — the fairest single baseline given our SR inputs (0.15 above our best run, with our F1
-  ahead 72.5 vs 71.3).
+  *dense/combined* GNN retrievers; the **retrieval-matched** baseline is GNN-RAG reading the
+  SR sparse subgraph — paper **Table 15 row (d)** (verified against the PDF 2026-07-12):
+  WebQSP **Hit 83.4 / Hits@1 78.9 / F1 69.8**, CWQ **Hit 60.6 / Hits@1 55.6 / F1 53.3**.
+  These are the fairest single baselines given our SR inputs (our WebQSP F1 is ahead 72.5 vs
+  69.8; Hits@1 0.15 short). NB the 71.3 F1 this README previously paired with the 78.9 is
+  Table 2's dense-retriever figure, not the SR row — SR notably *hurts* GNN-RAG on CWQ
+  (61.3 → 55.6 Hits@1 vs dense; Table 15 attributes it to disconnected sparse subgraphs
+  breaking their shortest-path extraction).
 - **Best published (2026)**: WebQSP Hits@1 = TRACE (91.6, GPT-4.1 agentic); WebQSP F1 and both
   CWQ cells = GraphWalker (Qwen2.5-7B SFT+RL; reports EM, ≈Hits@1). Metric caveats and the full
   method list are in [Published SOTA landscape](#published-sota-landscape-as-of-2026-07) below.
@@ -182,6 +189,12 @@ curl -L -o "$KGQA/data/FB5M.name.txt.bz2" \
 python3 -m src.experiments.kgqa.build_entities_names_v2   # 560k -> 598.5k entries
 ```
 
+With the sr-cwq splits and the `data/cwq_ent_id2mid.txt` decode table also present
+(see `sr_records.py` — CWQ subgraphs are int-coded and need SR's `ent2id.pickle`
+vocabulary to name anything), the rebuild additionally names CWQ mids: → 840.2k
+entries. Rebuilds seed from the current file and are **append-only**, so existing
+naming-v2 node texts never change and every naming-v2 cache stays valid.
+
 Both dictionaries are kept, and which one a run reads is the explicit
 `naming_version` knob (`1` = `entities_names.v1.json`, `2` = `entities_names.json`),
 which is part of the dataset cache key. So the legacy-naming control arm rebuilds
@@ -276,27 +289,14 @@ Takeaways:
   sweep measured for the first time (±0.4 v2 / ±1.0 v3). The v2-control landing on
   the historical 66.5 plateau validates the comparison.
 - **Best run** (v3, n_max 20, seed 1): **72.50 F1 / 78.75 Hits@1 / 82.74 Hit** —
-  F1 above retrieval-matched SR-GNN-RAG (71.3), Hits@1 within 0.15 of it (78.9).
+  F1 above retrieval-matched SR-GNN-RAG (69.8, Table 15(d); the previously-cited 71.3
+  is their dense-retriever F1), Hits@1 within 0.15 of it (78.9).
 - **n_max=50** buys ~+0.35 mean F1 (within noise of n_max=20's spread), flat Hits@1 —
   the enumeration tail is not the binding constraint.
 - **LoRA capacity is monotone** (r8 69.4 < r16 70.3 < r64 71.9 at seed 0): +1.6 F1
   for r64 over control vs ±1.0 noise — suggestive; the miss_copied bucket diff
   (error analysis v3) is the deciding readout for the 3B/8B scale-run decision.
 
-### Data-format v2 sweeps (historical)
-
-All v2-era sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep
-reports live in `results/<sweep>/report.md`). Fixed across every run: Llama-3.2-1B,
-lora_r 16, max_nodes 512, n_max 20, versions 8, one B200. The sweeps also differ in
-seed (42 vs 0) and checkpoint selection (`baseline`: 128 dev samples; `relmode_khop`:
-full 246-graph dev split), so cross-sweep deltas under ~1 F1 are noise.
-
-| sweep | k_hop | rel_mode | lr | bias_lr | epochs | train time | test F1 | Hits@1 | Hit | F1 strict | dev F1 |
-|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| baseline | 0 | last_1 | 1e-4 | 5e-3 | 15 | 1h 49m | **66.90** | **75.43** | **80.41** | 65.27 | 66.58 |
-| relmode_khop | 0 | last_1 | 5e-5 | 1e-2 | 30 | 3h 25m | 66.45 | 73.03 | 79.73 | 64.85 | 67.32 |
-| baseline | 0 | last_1 | 3e-4 | 5e-3 | 15 | 2h 02m | 65.88 | 73.65 | 79.91 | 64.35 | 67.81 |
-| relmode_khop | 0 | last_2 | 5e-5 | 1e-2 | 30 | 3h 43m | 65.61 | 73.77 | 79.79 | 64.26 | 67.02 |
 ### Regularization probes (2026-07-11/12)
 
 32-run campaign (`reg_probes` / `reg_combo` / `reg_round2`) probing whether the
@@ -320,6 +320,20 @@ control (test F1 72.55 ± 0.22):
 The negative model-side mechanisms are removed from the codebase after this
 campaign; reproducing those arms = checkout tag `reg-probes-2026-07`.
 
+### Data-format v2 sweeps (historical)
+
+All v2-era sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep
+reports live in `results/<sweep>/report.md`). Fixed across every run: Llama-3.2-1B,
+lora_r 16, max_nodes 512, n_max 20, versions 8, one B200. The sweeps also differ in
+seed (42 vs 0) and checkpoint selection (`baseline`: 128 dev samples; `relmode_khop`:
+full 246-graph dev split), so cross-sweep deltas under ~1 F1 are noise.
+
+| sweep | k_hop | rel_mode | lr | bias_lr | epochs | train time | test F1 | Hits@1 | Hit | F1 strict | dev F1 |
+|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 0 | last_1 | 1e-4 | 5e-3 | 15 | 1h 49m | **66.90** | **75.43** | **80.41** | 65.27 | 66.58 |
+| relmode_khop | 0 | last_1 | 5e-5 | 1e-2 | 30 | 3h 25m | 66.45 | 73.03 | 79.73 | 64.85 | 67.32 |
+| baseline | 0 | last_1 | 3e-4 | 5e-3 | 15 | 2h 02m | 65.88 | 73.65 | 79.91 | 64.35 | 67.81 |
+| relmode_khop | 0 | last_2 | 5e-5 | 1e-2 | 30 | 3h 43m | 65.61 | 73.77 | 79.79 | 64.26 | 67.02 |
 | relmode_khop | 5 | last_2 | 5e-5 | 1e-2 | 30 | 3h 36m | 61.64 | 69.53 | 75.86 | 59.91 | 63.64 |
 | relmode_khop | 5 | last_1 | 5e-5 | 1e-2 | 30 | 3h 28m | 60.51 | 68.61 | 76.66 | 59.08 | 62.05 |
 | baseline | 2 | last_1 | 1e-4 | 5e-3 | 15 | 1h 45m | 48.76 | 58.17 | 65.72 | 47.63 | 48.02 |
@@ -439,6 +453,13 @@ Benchmark comparability is exact, not approximate:
   `rmanluo/RoG-webqsp` (their test split is exactly our 1628 answered questions).
   Like theirs, golds with no name anywhere stay as raw-mid placeholders that never
   match — deflating recall for us exactly as it does for them.
+- **CWQ parity** (2026-07-12, `check_rog_parity.py` — the now-scripted version of
+  the check above): all **3,531** RoG-cwq test questions are present in sr-cwq by id
+  (that count is the pinned eval denominator; every test record is answered). Gold
+  lists are identical on 3,471; the 60 diffs are benign — 57 differ only by
+  *duplicate* strings in RoG's lists (ours dedupe; marginally conservative for us,
+  since their recall denominator counts duplicates), 3 by a RoG-side `:m.0mmyl` vs
+  our `m.0mmyl` (identical after their `normalize`). No question is missing a gold.
 - `entities_names.json` (node naming) started as the file shipped in GNN-RAG's
   `llm/` folder (560k entries, preserved at `entities_names.v1.json`); naming v2
   extends it to 598.5k with Freebase-native aliases only (in-subgraph
@@ -460,3 +481,76 @@ Measured on the dfv2 build; v3 graphs are marginally larger (fewer collapses,
 | test (n=1628) | 353 | 179 | 393 | 1032 | 1324 | 1656 | 2259 | 3.01 |
 
 Answer-set sizes: median 1, mean 11.2; 52% single-answer, 31% 2–5, 10.5% 6–20, 6.8% >20.
+
+### CWQ answer-coverage ceilings (E1.1, 2026-07-12)
+
+Same methodology as the WebQSP tables above (uncapped = gold `kb_id` anywhere in the
+raw decoded `subgraph.tuples`; pipeline = survives `select_triples` → Levi → collapse
+with a scoreable text). Built at `n_max=50`, `versions=1` (CWQ answer sets are
+near-singleton — median 1, mean 2.0 — so answer-order augmentation is a no-op;
+`ver1` also keeps the 27.6k-question train build in memory).
+
+**Cap decision — the coverage-vs-cost knee is `max_nodes=1024`** (test-split
+pipeline ceilings; uncapped ceiling 80.7 Hits@1 / 79.8 F1):
+
+| `max_nodes` | Hits@1 ceiling | F1 ceiling | questions lost to cap | node count p95 (built) |
+|---|---:|---:|---:|---:|
+| 512 | 79.0 | 78.1 | 57 | 512 |
+| **1024** (chosen) | **79.9** | **79.0** | **24** | **1021** |
+| 2048 | 80.4 | 79.5 | 6 | 1754 |
+
+512→1024 buys +0.9/+0.9 ceiling; 1024→2048 buys only +0.5/+0.5 while p95 built
+node count grows 1.7× (quadratic SPD/magnetic + attention cost, ~3× at the tail).
+WebQSP stays at 512. `n_max=50` is moot on CWQ: capped ceilings equal uncapped on
+every split (no enumeration tail).
+
+Per-split ceilings at the chosen cap (uncapped / pipeline, `cap1024`):
+
+| Ceiling | test (n=3531) | train (n=27639) | dev (n=3519) |
+|---|---|---|---|
+| ≥1 gold present (bounds Hits@1) | 80.7% / 79.9% | 85.2% / 84.8% | 81.6% / 81.3% |
+| Recall — macro | 79.5% / 78.7% | 83.8% / 83.3% | 79.8% / 79.5% |
+| **F1 — macro, perfect precision** | **79.8% / 79.0%** | 84.1% / 83.7% | 80.2% / 79.9% |
+
+Drop decomposition (test, first failing gate): 2822 answerable, **682 not
+retrieved** (19.3% — SR retrieval failure dominates, exactly the mechanism GNN-RAG's
+paper blames for SR hurting them on CWQ), 24 lost to the cap, 2 no-text, 1 collapse.
+The retrieval-matched target (SR-only GNN-RAG, Table 15(d): 55.6 Hits@1 / 53.3 F1)
+sits ~24 pts under this ceiling — far more reasoning headroom than WebQSP offered.
+
+Built-split token lengths at `cap1024` (per stored example; `ver1`, so train has one
+row per question):
+
+| Split (examples) | mean | p50 | p75 | p90 | p95 | p99 | max | tokens/node |
+|---|---|---|---|---|---|---|---|---|
+| train (n=23442) | 1098 | 570 | 1655 | 2968 | 3521 | 4515 | 11146 | 3.23 |
+| dev (n=3519) | 1163 | 619 | 1908 | 2931 | 3404 | 4706 | 7312 | 3.20 |
+| test (n=3531) | 1086 | 596 | 1626 | 2928 | 3404 | 4268 | 7276 | 3.13 |
+
+**Flat-arm `seq_len` for CWQ = 8192.** Measured on the raw flat serialization at
+`cap1024` (prompt + triple lines + target, incl. EOS): test p50 1394 / p95 6597 /
+p99 7845 / max 25427; a 8192 cap covers 99.1–99.4% per split (matching WebQSP's
+"4096 covers 99.6%" standard), while WebQSP's 4096 would cover only ~76% of CWQ.
+Outliers drop trailing triple lines, as on WebQSP. The collapsed serialization
+(the D2b winner) is slightly shorter, so 8192 covers it a fortiori.
+
+### Entity-redundancy check: flat vs Levi-graph token cost (2026-07-13)
+
+Flat serialization repeats an entity's text once per triple it appears in; the
+Levi graph names each entity once regardless of degree — a candidate
+explanation for the flat-beats-graph result (D2/D2b) if SR's subgraphs simply
+lack the entity reuse needed for that dedup to pay off. Measured directly on
+the test split at each dataset's trained `max_nodes` cap (real
+`select_triples`/`resolve_entity_text`/`verbalize_relation`, Llama-3.2-1B
+tokenizer): the flat/graph entity-token redundancy ratio is **1.99× on WebQSP
+vs 2.07× on CWQ** (avg entity degree 2.34× vs 2.48×) — essentially flat despite
+CWQ's subgraphs being 3× bigger (67.6 vs 202.3 triples/question), since both
+flat and graph token counts scale up by the same factor. So **CWQ does not
+test the token-dedup hypothesis**: SR's retriever pulls near-shortest-paths,
+which structurally caps entity reuse regardless of hop count, so a real test
+needs a hub-heavy retrieval topology (e.g. PPR) instead of just more SR hops —
+untested here, and blocked on the O(N²) SPD/magnetic bias cost that already
+caps `max_nodes` today. CWQ remains a fair checkpoint for the *other* candidate
+mechanism (graph's explicit distance bias vs. flat's serial-position distance
+cues degrading over long context — "lost in the middle"), since its flat
+sequences are ~3× longer in absolute tokens (598 → 1849/q).
