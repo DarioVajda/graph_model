@@ -35,25 +35,32 @@ import os
 import re
 import shutil
 
+from .sr_records import CWQ_ID2MID_TABLE, SPLITS, load_sr_records, split_path
+
 EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
 NAMES_PATH = os.path.join(EXPERIMENT_DIR, "entities_names.json")
 V1_BACKUP = os.path.join(EXPERIMENT_DIR, "entities_names.v1.json")
 FB5M_BZ2 = os.path.join(EXPERIMENT_DIR, "data", "FB5M.name.txt.bz2")
 
-SR_SPLITS = [os.path.join(EXPERIMENT_DIR, "data", d, f"{s}.json")
-             for d in ("sr-webqsp", "sr-cwq") for s in ("train", "dev", "test")]
-
 _FB5M_LINE = re.compile(r'^<fb:([^>]+)>\t<fb:type\.object\.name>\t"(.*)"\t?\.$')
 
 
 def iter_sr_records():
-    for path in SR_SPLITS:
-        if not os.path.exists(path):
-            print(f"[names-v2] WARN: {path} missing, skipping")
+    """Normalized records of every available dataset/split (mids everywhere).
+
+    CWQ needs the int->mid decode table on top of its raw splits; without it the
+    dataset is skipped with a warning (a webqsp-only clone still reproduces —
+    it then just rebuilds the webqsp-restricted dictionary).
+    """
+    for dataset in ("webqsp", "cwq"):
+        missing = [p for s in SPLITS if not os.path.exists(p := split_path(dataset, s))]
+        if dataset == "cwq" and not missing and not os.path.exists(CWQ_ID2MID_TABLE):
+            missing = [CWQ_ID2MID_TABLE]
+        if missing:
+            print(f"[names-v2] WARN: {dataset} skipped ({missing[0]} missing)")
             continue
-        with open(path) as f:
-            for line in f:
-                yield json.loads(line)
+        for split in SPLITS:
+            yield from load_sr_records(dataset, split)
 
 
 def main():
@@ -61,9 +68,13 @@ def main():
         shutil.copy2(NAMES_PATH, V1_BACKUP)
         print(f"[names-v2] backed up v1 -> {V1_BACKUP}")
 
-    names = json.load(open(V1_BACKUP))
+    # Seed from the CURRENT file (the v1 seed on a fresh clone): rebuilds are
+    # append-only, so every already-assigned name — and with it the node text of
+    # every existing naming-v2 cache — stays bit-identical. Only never-named
+    # mids (e.g. CWQ's, once its splits + decode table are present) gain entries.
+    names = json.load(open(NAMES_PATH))
     n_v1 = len(names)
-    print(f"[names-v2] v1 entries: {n_v1}")
+    print(f"[names-v2] seed entries: {n_v1}")
 
     # pass 1: collect every mid in the SR subgraphs + harvest in-data name triples
     mids, harvest = set(), {}
