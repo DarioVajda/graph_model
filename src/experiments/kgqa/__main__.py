@@ -21,7 +21,7 @@ logs one record; ``data_prep`` just builds that config's ``.gtds`` datasets.
 import argparse
 import os
 
-from .config import RunConfig, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES, PROMPT_STYLES
+from .config import RunConfig, DATASETS, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES, PROMPT_STYLES
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
@@ -83,6 +83,15 @@ TEMPLATE = """\
     { "rel_mode": "last_2", "max_nodes": 512 }
   ],
 
+  // ── dataset roles (multi-benchmark; see TODO_cwq E2) ──────────────────────
+  // One dataset: a plain string. Both: the LIST-OF-LISTS form (a plain list of
+  // strings would be a sweep AXIS — one run per dataset — per the rules above).
+  "train_datasets": "webqsp",         // or [["webqsp", "cwq"]] = concat training
+  "eval_datasets": "webqsp",          // each eval dataset scored separately: eval_{ds}_f1, ...
+  "selection_dataset": null,          // null = select on the MEAN of per-dataset dev F1s
+  // max_nodes / n_max / versions accept a scalar or a per-dataset string:
+  // "max_nodes": "webqsp=512,cwq=1024"
+
   // ── fixed scalars ─────────────────────────────────────────────────────────
   "model_name": "meta-llama/Llama-3.2-1B",
   "graph_attn_impl": "flex",          // "flex" | "eager"
@@ -124,6 +133,19 @@ def _str_list(raw):
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def _per_dataset_int(raw):
+    """Type for dataset-resolvable int flags: "512" -> 512 (all datasets),
+    "webqsp=512,cwq=1024" -> {"webqsp": 512, "cwq": 1024} (per dataset;
+    the runner renders dict values back to exactly this form)."""
+    if "=" not in raw:
+        return int(raw)
+    out = {}
+    for part in _str_list(raw):
+        key, _, value = part.partition("=")
+        out[key.strip()] = int(value)
+    return out
+
+
 def build_parser():
     d = RunConfig()
     p = argparse.ArgumentParser(
@@ -141,12 +163,30 @@ def build_parser():
                         "are the D2 text-serialization control arm (same subgraph as triple "
                         "text, plain HF causal LM, no graph biases).")
 
+    # ── dataset roles (E2.1) ─────────────────────────────────────────────────
+    p.add_argument("--dataset", choices=DATASETS, default=None,
+                   help="single-benchmark alias: sets BOTH --train-datasets and "
+                        "--eval-datasets to this one dataset (error if combined "
+                        "with either explicit flag).")
+    p.add_argument("--train-datasets", type=_str_list, default=list(d.train_datasets),
+                   help="comma-separated benchmarks to train on (mixed = plain "
+                        "concat of the built train splits).")
+    p.add_argument("--eval-datasets", type=_str_list, default=list(d.eval_datasets),
+                   help="comma-separated benchmarks to evaluate on — each scored "
+                        "separately under its own metric namespace (eval_{ds}_f1, ...).")
+    p.add_argument("--selection-dataset", choices=DATASETS, default=d.selection_dataset,
+                   help="pin checkpoint selection to ONE eval dataset's dev F1 "
+                        "(omit = mean of the per-dataset dev F1s, eval_sel_f1).")
+
     # ── data-prep keys (determine the .gtds cache directory) ─────────────────
     p.add_argument("--rel-mode", choices=REL_MODES, default=d.rel_mode)
-    p.add_argument("--max-nodes", type=int, default=d.max_nodes)
-    p.add_argument("--n-max", type=int, default=d.n_max, help="max answers in the training target")
-    p.add_argument("--versions", type=int, default=d.versions,
-                   help="per-graph answer-order augmentations (train split only).")
+    p.add_argument("--max-nodes", type=_per_dataset_int, default=d.max_nodes,
+                   help="Levi node cap; scalar or per-dataset ('webqsp=512,cwq=1024').")
+    p.add_argument("--n-max", type=_per_dataset_int, default=d.n_max,
+                   help="max answers in the training target; scalar or per-dataset.")
+    p.add_argument("--versions", type=_per_dataset_int, default=d.versions,
+                   help="per-graph answer-order augmentations (train split only); "
+                        "scalar or per-dataset (CWQ uses 1: near-singleton answer sets).")
     p.add_argument("--max-length", type=int, default=d.max_length, help="per-node token cap (kept non-binding)")
     p.add_argument("--rcm", action=B, default=d.rcm, help="reverse-Cuthill-McKee node ordering.")
     p.add_argument("--data-seed", type=int, default=d.data_seed, help="augmentation RNG seed (in the cache key).")
@@ -217,7 +257,11 @@ def build_parser():
                    help="cap FINAL dev/test generative scoring (omit = full split).")
     p.add_argument("--gen-eval-samples", type=int, default=d.gen_eval_samples,
                    help="cap the in-training generative eval (checkpoint selection) "
-                        "only; omit = fall back to --gen-max-samples.")
+                        "only; omit = fall back to --gen-max-samples. Capped splits "
+                        "use a fixed seeded subsample (stable across checkpoints).")
+    p.add_argument("--log-strict-metrics", action=B, default=d.log_strict_metrics,
+                   help="also log the _strict exact-set metric variants "
+                        "(off by default; the GNN-RAG-verbatim metrics always log).")
 
     # ── tracking ─────────────────────────────────────────────────────────────
     p.add_argument("--wandb-project", default=d.wandb_project,
@@ -232,8 +276,18 @@ def build_parser():
 
 def config_from_args(args):
     """Build (and validate) a RunConfig from parsed args."""
+    train_datasets, eval_datasets = args.train_datasets, args.eval_datasets
+    if args.dataset is not None:
+        d = RunConfig()
+        if (train_datasets != list(d.train_datasets)
+                or eval_datasets != list(d.eval_datasets)):
+            raise SystemExit("--dataset is an alias for --train-datasets/--eval-datasets; "
+                             "pass either the alias or the explicit flags, not both.")
+        train_datasets = eval_datasets = [args.dataset]
     return RunConfig(
         mode=args.mode,
+        train_datasets=tuple(train_datasets), eval_datasets=tuple(eval_datasets),
+        selection_dataset=args.selection_dataset,
         rel_mode=args.rel_mode, max_nodes=args.max_nodes, n_max=args.n_max,
         versions=args.versions, max_length=args.max_length, rcm=args.rcm,
         data_seed=args.data_seed, data_format_version=args.data_format_version,
@@ -254,6 +308,7 @@ def config_from_args(args):
         bias_weight_decay=args.bias_weight_decay, lora_dropout=args.lora_dropout,
         gen_max_new_tokens=args.gen_max_new_tokens, gen_max_samples=args.gen_max_samples,
         gen_eval_samples=args.gen_eval_samples,
+        log_strict_metrics=args.log_strict_metrics,
         wandb_project=args.wandb_project,
     ).validate()
 

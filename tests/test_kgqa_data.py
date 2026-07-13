@@ -146,8 +146,8 @@ def test_answer_sep_tracks_data_format_version():
 
 
 def test_data_format_version_in_cache_key_and_validated():
-    assert RunConfig(data_format_version=2).data_config_key().endswith("_dfv2")
-    assert RunConfig(data_format_version=3).data_config_key().endswith("_dfv3")
+    assert RunConfig(data_format_version=2).data_config_key("webqsp").endswith("_dfv2")
+    assert RunConfig(data_format_version=3).data_config_key("webqsp").endswith("_dfv3")
     with pytest.raises(ValueError):
         RunConfig(data_format_version=1).validate()
 

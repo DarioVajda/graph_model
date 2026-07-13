@@ -54,12 +54,12 @@ def test_question_end_str_tracks_style():
 
 
 def test_data_config_key_suffix_only_for_chat():
-    plain_key = RunConfig(model_name=BASE).data_config_key()
+    plain_key = RunConfig(model_name=BASE).data_config_key("webqsp")
     assert "_ps" not in plain_key                             # old caches keep their names
-    chat_key = RunConfig(model_name=INSTRUCT).data_config_key()
+    chat_key = RunConfig(model_name=INSTRUCT).data_config_key("webqsp")
     assert chat_key.endswith("_pschat")
     # instruct+plain control: separate cache via model_name, no style suffix
-    ctrl_key = RunConfig(model_name=INSTRUCT, prompt_style="plain").data_config_key()
+    ctrl_key = RunConfig(model_name=INSTRUCT, prompt_style="plain").data_config_key("webqsp")
     assert "Instruct" in ctrl_key and "_ps" not in ctrl_key
 
 

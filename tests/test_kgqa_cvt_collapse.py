@@ -33,10 +33,10 @@ def test_resolution_and_cache_keys():
     d = RunConfig()
     assert d.resolved_cvt_collapse("graph") is True
     assert d.resolved_cvt_collapse("flat") is False
-    assert "_nocvt" not in d.data_config_key()
-    assert "_cvt" not in flat_data_config_key(d)
-    assert RunConfig(cvt_collapse=False).data_config_key().endswith("_nocvt")
-    assert flat_data_config_key(RunConfig(cvt_collapse=True)).endswith("_cvt")
+    assert "_nocvt" not in d.data_config_key("webqsp")
+    assert "_cvt" not in flat_data_config_key(d, "webqsp")
+    assert RunConfig(cvt_collapse=False).data_config_key("webqsp").endswith("_nocvt")
+    assert flat_data_config_key(RunConfig(cvt_collapse=True), "webqsp").endswith("_cvt")
 
 
 def test_uncollapsed_graph_keeps_mediator():

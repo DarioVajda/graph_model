@@ -46,9 +46,9 @@ from transformers import AutoTokenizer
 
 from ...utils import TextGraphDataset
 from .config import ASSISTANT_HEADER, PINNED_SYSTEM_PROMPT
+from .sr_records import SPLITS, load_sr_records
 
 EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SR_DIR = os.path.join(EXPERIMENT_DIR, "data", "sr-webqsp")
 OUTPUT_ROOT = os.path.join(EXPERIMENT_DIR, "processed_datasets")
 
 UNNAMED = "unnamed entity"
@@ -57,8 +57,6 @@ END_OF_HOP = "END OF HOP"
 # a fixed string; the answer separator is version-dependent (cfg.answer_sep:
 # dfv2 ", ", dfv3 "\n" — collision-free, single-token, GNN-RAG's own format).
 ANSWER_DELIM = "\nAnswer:"
-
-SPLITS = {"train": "train.json", "dev": "dev.json", "test": "test.json"}
 
 
 def entity_names_path(cfg):
@@ -427,7 +425,7 @@ def process_split(split, records, entity_names, tokenizer, question_end, cfg, ou
     return kept, len(graphs)
 
 
-def _build_split_if_missing(split, cfg, out_dir, entity_names, tokenizer, question_end):
+def _build_split_if_missing(split, dataset, cfg, out_dir, entity_names, tokenizer, question_end):
     """Build one split unless its `.gtds` already exists (idempotent).
 
     A flock around the build lets concurrent jobs (e.g. many ``per_config`` sbatch
@@ -446,31 +444,32 @@ def _build_split_if_missing(split, cfg, out_dir, entity_names, tokenizer, questi
         if os.path.isdir(built_dir):
             print(f"[data_prep] {split}: built by a concurrent job — skipping.")
             return
-        records = [json.loads(l) for l in open(os.path.join(SR_DIR, SPLITS[split]))]
+        records = load_sr_records(dataset, split)
         process_split(split, records, entity_names, tokenizer, question_end, cfg, out_dir)
 
 
-def run_data_prep_mode(cfg, splits=("train", "dev", "test")):
-    """Ensure this config's `.gtds` splits exist under ``OUTPUT_ROOT/data_config_key``.
+def role_splits(cfg, dataset):
+    """The splits a run actually needs for ``dataset``: train iff it trains on
+    it, dev+test iff it evaluates on it (a CWQ train build is expensive — don't
+    build it for an eval-only role)."""
+    splits = []
+    if dataset in cfg.train_datasets:
+        splits.append("train")
+    if dataset in cfg.eval_datasets:
+        splits += ["dev", "test"]
+    return tuple(splits)
+
+
+def run_data_prep_mode(cfg, splits=None):
+    """Ensure every (dataset × resolved data config) cache this run references
+    exists under ``OUTPUT_ROOT/<data_config_key(dataset)>``.
 
     Routed to from ``__main__`` when ``--mode data_prep``. For a multi-config
     sweep, run it once in ``data_prep`` mode (each config builds its own splits;
     the per-split flock makes parallel jobs build each artifact exactly once)
-    before running again in ``train`` mode.
+    before running again in ``train`` mode. ``splits=None`` builds what the
+    dataset's role requires (see ``role_splits``).
     """
-    out_dir = os.path.join(OUTPUT_ROOT, cfg.data_config_key())
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.json"), "w") as f:
-        json.dump({"data_config_key": cfg.data_config_key(),
-                   "data_format_version": cfg.data_format_version,
-                   "naming_version": cfg.naming_version,
-                   "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
-                   "versions": cfg.versions, "max_length": cfg.max_length, "rcm": cfg.rcm,
-                   "data_seed": cfg.data_seed, "model_name": cfg.model_name,
-                   "max_spd": cfg.max_spd, "magnetic_q": cfg.magnetic_q,
-                   "magnetic_m": cfg.magnetic_m}, f, indent=2)
-
-    print(f"[data_prep] out_dir={out_dir}")
     names_path = entity_names_path(cfg)
     if not os.path.exists(names_path):
         raise FileNotFoundError(
@@ -485,11 +484,31 @@ def run_data_prep_mode(cfg, splits=("train", "dev", "test")):
     # Style-dependent anchor: "Answer:" (plain) | assistant header (chat).
     question_end = tokenizer(cfg.question_end_str, add_special_tokens=False)["input_ids"]
 
-    for split in splits:
-        _build_split_if_missing(split, cfg, out_dir, entity_names, tokenizer, question_end)
+    for dataset in cfg.datasets:
+        view = cfg.for_dataset(dataset)      # per-dataset knobs resolved to scalars
+        out_dir = os.path.join(OUTPUT_ROOT, view.data_config_key(dataset))
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "config.json"), "w") as f:
+            json.dump({"data_config_key": view.data_config_key(dataset),
+                       "dataset": dataset,
+                       "data_format_version": view.data_format_version,
+                       "naming_version": view.naming_version,
+                       "rel_mode": view.rel_mode, "max_nodes": view.max_nodes,
+                       "n_max": view.n_max,
+                       "versions": view.versions, "max_length": view.max_length,
+                       "rcm": view.rcm,
+                       "data_seed": view.data_seed, "model_name": view.model_name,
+                       "max_spd": view.max_spd, "magnetic_q": view.magnetic_q,
+                       "magnetic_m": view.magnetic_m}, f, indent=2)
 
-    if cfg.analyse_dataset:
-        from .analyse_dataset import run_analysis
-        run_analysis(cfg, SR_DIR, {s: SPLITS[s] for s in splits}, out_dir)
+        ds_splits = splits if splits is not None else role_splits(cfg, dataset)
+        print(f"[data_prep] {dataset}: out_dir={out_dir} splits={ds_splits}")
+        for split in ds_splits:
+            _build_split_if_missing(split, dataset, view, out_dir,
+                                    entity_names, tokenizer, question_end)
 
-    print(f"\n[data_prep] done. Cached dataset at {out_dir}")
+        if cfg.analyse_dataset:
+            from .analyse_dataset import run_analysis
+            run_analysis(view, out_dir, ds_splits, dataset=dataset)
+
+        print(f"[data_prep] {dataset}: done. Cached dataset at {out_dir}\n")

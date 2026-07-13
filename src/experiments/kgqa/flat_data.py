@@ -35,21 +35,26 @@ from tqdm import tqdm
 
 from .config import NAMING_VERSION
 from .process_dataset import (
-    SR_DIR, SPLITS, entity_names_path, OUTPUT_ROOT,
+    entity_names_path, OUTPUT_ROOT,
     build_base_levi, present_answer_texts, full_gold_texts,
     resolve_entity_text, verbalize_relation, select_triples)
+from .sr_records import load_sr_records
 
 
-def flat_data_config_key(cfg):
-    """Cache dir for the flat serialization (only flat-relevant knobs).
+def flat_data_config_key(cfg, dataset):
+    """Cache dir for ONE dataset's flat serialization (only flat-relevant knobs).
 
     Graph-feature keys (spd/magnetic/rcm/max_length) are irrelevant here;
     ``max_nodes`` stays because it selects WHICH triples survive the cap.
+    Dataset-resolvable knobs embed their RESOLVED values (cf. data_config_key).
     """
     model = str(cfg.model_name).replace("/", "-")
     ps = cfg.resolved_prompt_style
-    return (f"sr-webqsp-flat_{model}_v{cfg.rel_mode}_cap{cfg.max_nodes}"
-            f"_nmax{cfg.n_max}_ver{cfg.versions}_seed{cfg.data_seed}"
+    # f"sr-{dataset}" keeps pre-existing keys identical (prefix was "sr-webqsp-flat_").
+    return (f"sr-{dataset}-flat_{model}_v{cfg.rel_mode}"
+            f"_cap{cfg.resolved_max_nodes(dataset)}"
+            f"_nmax{cfg.resolved_n_max(dataset)}"
+            f"_ver{cfg.resolved_versions(dataset)}_seed{cfg.data_seed}"
             f"_dfv{cfg.data_format_version}"
             + ("" if ps == "plain" else f"_ps{ps}")
             + ("" if cfg.naming_version == NAMING_VERSION else f"_nm{cfg.naming_version}")
@@ -126,54 +131,65 @@ def build_flat_rows(record, entity_names, cfg, versions, rng, keep_unanswerable)
     return rows
 
 
-def run_flat_data_prep_mode(cfg, splits=("train", "dev", "test")):
+def run_flat_data_prep_mode(cfg, splits=None):
+    """Serialize every (dataset × flat config) cache this run references.
+
+    ``splits=None`` builds what each dataset's role requires (train iff
+    trained on, dev+test iff evaluated on — see ``role_splits``).
+    """
+    from .process_dataset import role_splits
     if cfg.resolved_prompt_style != "plain":
         raise NotImplementedError(
             "flat + chat formatting is deliberately deferred until the scale "
             "run needs it (decision 2026-07-08).")
-    out_dir = os.path.join(OUTPUT_ROOT, flat_data_config_key(cfg))
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.json"), "w") as f:
-        json.dump({"flat_data_config_key": flat_data_config_key(cfg),
-                   "data_format_version": cfg.data_format_version,
-                   "naming_version": cfg.naming_version,
-                   "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes,
-                   "n_max": cfg.n_max, "versions": cfg.versions,
-                   "data_seed": cfg.data_seed, "model_name": cfg.model_name},
-                  f, indent=2)
-
-    print(f"[flat_data_prep] out_dir={out_dir}")
     entity_names = json.load(open(entity_names_path(cfg)))
 
-    for split in splits:
-        out_path = os.path.join(out_dir, f"{split}.jsonl")
-        if os.path.exists(out_path):
-            print(f"[flat_data_prep] {split}: already present — skipping.")
-            continue
-        records = [json.loads(l) for l in open(os.path.join(SR_DIR, SPLITS[split]))]
-        versions = cfg.versions if split == "train" else 1
-        keep_unanswerable = split != "train"
-        rng = random.Random(f"{cfg.data_seed}:{split}")
+    for dataset in cfg.datasets:
+        view = cfg.for_dataset(dataset)      # per-dataset knobs resolved to scalars
+        out_dir = os.path.join(OUTPUT_ROOT, flat_data_config_key(view, dataset))
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "config.json"), "w") as f:
+            json.dump({"flat_data_config_key": flat_data_config_key(view, dataset),
+                       "dataset": dataset,
+                       "data_format_version": view.data_format_version,
+                       "naming_version": view.naming_version,
+                       "rel_mode": view.rel_mode, "max_nodes": view.max_nodes,
+                       "n_max": view.n_max, "versions": view.versions,
+                       "data_seed": view.data_seed, "model_name": view.model_name},
+                      f, indent=2)
 
-        rows, kept, skipped = [], 0, 0
-        for rec in tqdm(records, desc=f"Serializing {split}"):
-            if not rec.get("answers"):
-                skipped += 1
-                continue
-            rs = build_flat_rows(rec, entity_names, cfg, versions, rng,
-                                 keep_unanswerable)
-            if not rs:
-                skipped += 1
-                continue
-            rows.extend(rs)
-            kept += 1
-        n_unans = sum(1 for r in rows if r["unanswerable"])
-        print(f"[{split}] kept {kept} questions ({len(rows)} rows, {versions}x; "
-              f"{n_unans} unanswerable empty-target rows), skipped {skipped}")
-        tmp = out_path + ".tmp"
-        with open(tmp, "w") as f:
-            for r in rows:
-                f.write(json.dumps(r) + "\n")
-        os.replace(tmp, out_path)
+        ds_splits = splits if splits is not None else role_splits(cfg, dataset)
+        print(f"[flat_data_prep] {dataset}: out_dir={out_dir} splits={ds_splits}")
 
-    print(f"[flat_data_prep] done. Cached dataset at {out_dir}")
+        for split in ds_splits:
+            out_path = os.path.join(out_dir, f"{split}.jsonl")
+            if os.path.exists(out_path):
+                print(f"[flat_data_prep] {split}: already present — skipping.")
+                continue
+            records = load_sr_records(dataset, split)
+            versions = view.versions if split == "train" else 1
+            keep_unanswerable = split != "train"
+            rng = random.Random(f"{view.data_seed}:{split}")
+
+            rows, kept, skipped = [], 0, 0
+            for rec in tqdm(records, desc=f"Serializing {split}"):
+                if not rec.get("answers"):
+                    skipped += 1
+                    continue
+                rs = build_flat_rows(rec, entity_names, view, versions, rng,
+                                     keep_unanswerable)
+                if not rs:
+                    skipped += 1
+                    continue
+                rows.extend(rs)
+                kept += 1
+            n_unans = sum(1 for r in rows if r["unanswerable"])
+            print(f"[{split}] kept {kept} questions ({len(rows)} rows, {versions}x; "
+                  f"{n_unans} unanswerable empty-target rows), skipped {skipped}")
+            tmp = out_path + ".tmp"
+            with open(tmp, "w") as f:
+                for r in rows:
+                    f.write(json.dumps(r) + "\n")
+            os.replace(tmp, out_path)
+
+        print(f"[flat_data_prep] {dataset}: done. Cached dataset at {out_dir}\n")

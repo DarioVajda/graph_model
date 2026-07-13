@@ -23,6 +23,7 @@ suffixed ``_strict``.
 ``evaluate`` so the generative metrics feed ``metric_for_best_model``.
 """
 
+import random
 import re
 import string
 
@@ -127,14 +128,27 @@ def _strict_set_f1(pred, gold):
 # --------------------------------------------------------------------------- #
 # Generation loop
 # --------------------------------------------------------------------------- #
+def eval_indices(n_total, max_samples):
+    """The example indices one generative eval scores.
+
+    When ``max_samples`` caps the split (the in-training ``gen_eval_samples``
+    path — E3.3: CWQ dev is 14× WebQSP's, full-dev per checkpoint is too slow),
+    the subsample is a FIXED seeded draw, not first-n: stable across checkpoints
+    (comparable selection curve within a run) and across runs (same constant
+    seed), and unbiased w.r.t. dataset order.
+    """
+    if max_samples is None or max_samples >= n_total:
+        return range(n_total)
+    return sorted(random.Random(f"gen-eval:{n_total}").sample(range(n_total), max_samples))
+
+
 @torch.no_grad()
 def generative_eval(model, dataset, tokenizer, collator, question_end,
                     max_new_tokens=128, device=None, max_samples=None, prefix="eval",
-                    answer_sep=","):
+                    answer_sep=",", include_strict=False):
     was_training = model.training
     model.eval()
     device = device or next(model.parameters()).device
-    n = len(dataset) if max_samples is None else min(max_samples, len(dataset))
 
     # Flex attention needs block-aligned lengths, but generation batches are
     # unbucketed (the prompt node must stay last, so we can't pad past it).
@@ -146,7 +160,7 @@ def generative_eval(model, dataset, tokenizer, collator, question_end,
 
     hits1, f1s, hitstar = [], [], []
     s_hits1, s_f1s, s_hitstar = [], [], []
-    for i in range(n):
+    for i in eval_indices(len(dataset), max_samples):
         item = dataset[i]
         pn = int(item["prompt_node"])
         ids = list(item["input_ids"][pn])
@@ -183,14 +197,16 @@ def generative_eval(model, dataset, tokenizer, collator, question_end,
             f1s.append(0.0)
 
         # ── secondary: strict exact-set-equality on normalized strings ──
-        pred_n, goldset = [], set(normalize(a) for a in gold)
-        for p in pred:
-            pn_ = normalize(p)
-            if pn_ and pn_ not in pred_n:
-                pred_n.append(pn_)
-        s_hits1.append(1.0 if pred_n and pred_n[0] in goldset else 0.0)
-        s_hitstar.append(1.0 if any(p in goldset for p in pred_n) else 0.0)
-        s_f1s.append(_strict_set_f1(pred_n, goldset))
+        # (opt-in via log_strict_metrics — E3.2; code path kept)
+        if include_strict:
+            pred_n, goldset = [], set(normalize(a) for a in gold)
+            for p in pred:
+                pn_ = normalize(p)
+                if pn_ and pn_ not in pred_n:
+                    pred_n.append(pn_)
+            s_hits1.append(1.0 if pred_n and pred_n[0] in goldset else 0.0)
+            s_hitstar.append(1.0 if any(p in goldset for p in pred_n) else 0.0)
+            s_f1s.append(_strict_set_f1(pred_n, goldset))
 
     if impl == "flex":
         model.config.graph_attn_impl = "flex"
@@ -198,17 +214,61 @@ def generative_eval(model, dataset, tokenizer, collator, question_end,
         model.train()
 
     m = lambda xs: float(np.mean(xs)) if xs else 0.0
-    return {
-        f"{prefix}_hits1": m(hits1), f"{prefix}_f1": m(f1s), f"{prefix}_hit_star": m(hitstar),
-        f"{prefix}_hits1_strict": m(s_hits1), f"{prefix}_f1_strict": m(s_f1s),
-        f"{prefix}_hit_star_strict": m(s_hitstar),
-    }
+    out = {f"{prefix}_hits1": m(hits1), f"{prefix}_f1": m(f1s),
+           f"{prefix}_hit_star": m(hitstar)}
+    if include_strict:
+        out.update({f"{prefix}_hits1_strict": m(s_hits1), f"{prefix}_f1_strict": m(s_f1s),
+                    f"{prefix}_hit_star_strict": m(s_hitstar)})
+    return out
 
 
 # --------------------------------------------------------------------------- #
 # Trainer that appends generative metrics to the eval schedule
 # --------------------------------------------------------------------------- #
-class KGQAGraphTrainer(GraphTrainerV2):
+class PerDatasetEvalMixin:
+    """``evaluate`` fan-out over a dict of eval datasets (E3.1, TODO_cwq).
+
+    Eval datasets are ALWAYS scored separately, each under its own namespace:
+    a ``{name: dataset}`` dict (the constructor ``eval_dataset`` or an explicit
+    ``evaluate(eval_dataset=...)`` argument) yields ``{prefix}_{name}_{metric}``
+    for every metric, plus the checkpoint-selection scalar
+    ``{prefix}_sel_f1`` = mean of the per-dataset F1s, or the single
+    ``selection_dataset`` one when set (``metric_for_best_model`` points at it).
+
+    The in-training path recurses with the dataset's *name* (a str), which HF's
+    ``get_eval_dataloader`` resolves through its keyed cache — persistent
+    dataloader workers stay alive per dataset. Subclasses implement
+    ``_generative_metrics(handle, prefix)`` for their arm's generation loop.
+    """
+
+    _selection_dataset = None
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        target = eval_dataset if eval_dataset is not None else self.eval_dataset
+        if isinstance(target, dict):
+            metrics = {}
+            for name in target:
+                # None-arg (in-training) recursion goes by NAME -> HF's keyed
+                # dataloader cache; explicit dicts (final scoring) pass objects.
+                handle = name if eval_dataset is None else target[name]
+                metrics.update(self.evaluate(handle, ignore_keys,
+                                             f"{metric_key_prefix}_{name}"))
+            key = f"{metric_key_prefix}_sel_f1"
+            sel = (metrics[f"{metric_key_prefix}_{self._selection_dataset}_f1"]
+                   if self._selection_dataset else
+                   float(np.mean([metrics[f"{metric_key_prefix}_{n}_f1"] for n in target])))
+            metrics[key] = sel
+            self.log({key: sel})
+            return metrics
+
+        metrics = super().evaluate(target, ignore_keys, metric_key_prefix)
+        gen = self._generative_metrics(target, metric_key_prefix)
+        metrics.update(gen)
+        self.log(gen)
+        return metrics
+
+
+class KGQAGraphTrainer(PerDatasetEvalMixin, GraphTrainerV2):
     """GraphTrainerV2 whose ``evaluate`` also runs generative set-level scoring.
 
     D4 (2026-07-08): optional boundary-token loss re-weighting — a strictly
@@ -225,6 +285,7 @@ class KGQAGraphTrainer(GraphTrainerV2):
     def __init__(self, *args, gen_tokenizer=None, gen_collator=None, question_end=None,
                  gen_max_new_tokens=128, gen_max_samples=None, gen_answer_sep=",",
                  boundary_loss_weight=1.0, boundary_token_id=None,
+                 selection_dataset=None, log_strict_metrics=False,
                  **kwargs):
         super().__init__(*args, **kwargs)
         self._gen_tokenizer = gen_tokenizer
@@ -233,6 +294,8 @@ class KGQAGraphTrainer(GraphTrainerV2):
         self._gen_max_new_tokens = gen_max_new_tokens
         self._gen_max_samples = gen_max_samples
         self._gen_answer_sep = gen_answer_sep
+        self._selection_dataset = selection_dataset
+        self._log_strict_metrics = log_strict_metrics
         self._boundary_loss_weight = boundary_loss_weight
         self._boundary_token_id = boundary_token_id
         if boundary_loss_weight != 1.0 and boundary_token_id is None:
@@ -253,18 +316,14 @@ class KGQAGraphTrainer(GraphTrainerV2):
         """Switch the generative-eval cap (cheap in-training cap -> full final scoring)."""
         self._gen_max_samples = n
 
-    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
-        metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
-        ds = eval_dataset if eval_dataset is not None else self.eval_dataset
-        gen = generative_eval(
+    def _generative_metrics(self, handle, prefix):
+        ds = self.eval_dataset[handle] if isinstance(handle, str) else handle
+        return generative_eval(
             self.model, ds, self._gen_tokenizer, self._gen_collator, self._question_end,
             max_new_tokens=self._gen_max_new_tokens, max_samples=self._gen_max_samples,
-            device=self.args.device, prefix=metric_key_prefix,
-            answer_sep=self._gen_answer_sep,
+            device=self.args.device, prefix=prefix,
+            answer_sep=self._gen_answer_sep, include_strict=self._log_strict_metrics,
         )
-        metrics.update(gen)
-        self.log(gen)
-        return metrics
 
 
 def boundary_weighted_loss(logits, labels, boundary_weight, boundary_token_id,

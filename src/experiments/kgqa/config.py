@@ -25,6 +25,7 @@ is baked into the cache key), so sweeping the training seed no longer forces a
 full dataset rebuild per seed.
 """
 
+import dataclasses
 from dataclasses import dataclass
 
 
@@ -53,6 +54,7 @@ DATA_FORMAT_VERSION = 3
 NAMING_VERSION = 2
 ENTITY_NAMES_FILES = {1: "entities_names.v1.json", 2: "entities_names.json"}
 
+DATASETS = ("webqsp", "cwq")   # mirrored in sr_records.DATASETS (no import: keep config dep-free)
 REL_MODES = ("last_1", "last_2", "full")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
@@ -79,11 +81,31 @@ class RunConfig:
     # ── what to run ──────────────────────────────────────────────────────────
     mode: str = "train"                       # "train" | "data_prep"
 
+    # ── dataset roles (E2.1, TODO_cwq) ────────────────────────────────────────
+    # Which benchmark(s) to train on and which to evaluate on — each a non-empty
+    # subset of DATASETS. Mixed training is a plain concat of the built train
+    # splits; eval datasets are ALWAYS scored separately (never pooled), each
+    # under its own metric namespace (eval_{ds}_f1, test_{ds}_hits1, ...).
+    # The `--dataset X` CLI alias sets both to (X,).
+    train_datasets: tuple = ("webqsp",)
+    eval_datasets: tuple = ("webqsp",)
+    # Checkpoint selection for multi-eval runs: None = mean of the per-dataset
+    # dev F1s (logged as eval_sel_f1); a dataset name pins selection to that
+    # benchmark alone (must be in eval_datasets).
+    selection_dataset: str = None
+
     # ── data-prep keys (these determine the .gtds cache directory) ───────────
     rel_mode: str = "last_1"                  # relation verbalization: last_1|last_2|full
-    max_nodes: int = 512                      # Levi-graph (+prompt) node cap
-    n_max: int = 20                           # max answers kept in the training target
-    versions: int = 8                         # per-graph answer-order augmentations (train only)
+    # max_nodes / n_max / versions are DATASET-RESOLVABLE (E2.2): a scalar
+    # applies to every dataset; a {"webqsp": 512, "cwq": 1024} mapping (CLI:
+    # --max-nodes webqsp=512,cwq=1024) resolves per dataset. Cache keys embed
+    # the RESOLVED values, so e.g. WebQSP keys are byte-stable regardless of
+    # CWQ settings. versions joined the set 2026-07-12: CWQ builds use 1
+    # (near-singleton answer sets make order augmentation a no-op) while
+    # WebQSP keeps 8.
+    max_nodes: "int | dict" = 512             # Levi-graph (+prompt) node cap
+    n_max: "int | dict" = 20                  # max answers kept in the training target
+    versions: "int | dict" = 8                # per-graph answer-order augmentations (train only)
     max_length: int = 1024                    # per-node token cap (kept non-binding)
     rcm: bool = True                          # reverse-Cuthill-McKee node ordering
     data_seed: int = 42                       # augmentation RNG seed (baked into cache key)
@@ -137,12 +159,56 @@ class RunConfig:
     gen_max_new_tokens: int = 128
     gen_max_samples: int = None               # final dev/test scoring cap; None = full split
     gen_eval_samples: int = None              # in-training eval cap (checkpoint selection only);
-                                              # None = fall back to gen_max_samples
+                                              # None = fall back to gen_max_samples. When it caps
+                                              # a split, the subsample is FIXED and seeded
+                                              # (comparable across checkpoints), not first-n.
+    log_strict_metrics: bool = False          # also compute/log the _strict exact-set variants
+                                              # (E3.2: opt-in; the GNN-RAG-verbatim metrics are
+                                              # always logged)
 
     # ── tracking ─────────────────────────────────────────────────────────────
     wandb_project: str = None                 # None = no tracking; a string = the wandb project
 
     # ── helpers ──────────────────────────────────────────────────────────────
+    @property
+    def datasets(self):
+        """Every dataset the run references (train ∪ eval), in DATASETS order."""
+        referenced = set(self.train_datasets) | set(self.eval_datasets)
+        return tuple(d for d in DATASETS if d in referenced)
+
+    def _per_dataset(self, name, dataset):
+        """Resolve a dataset-resolvable knob: scalar = every dataset, mapping = per key."""
+        value = getattr(self, name)
+        if isinstance(value, dict):
+            if dataset not in value:
+                raise ValueError(f"{name}={value} has no entry for dataset {dataset!r}.")
+            return int(value[dataset])
+        return value
+
+    def resolved_max_nodes(self, dataset):
+        return self._per_dataset("max_nodes", dataset)
+
+    def resolved_n_max(self, dataset):
+        return self._per_dataset("n_max", dataset)
+
+    def resolved_versions(self, dataset):
+        return self._per_dataset("versions", dataset)
+
+    def for_dataset(self, dataset):
+        """A single-dataset VIEW of this config: the dataset-resolvable knobs
+        collapsed to that dataset's scalars, roles narrowed to it. The data
+        pipeline (process_dataset / flat_data / analyse_dataset) always works on
+        one dataset at a time and reads plain-int ``max_nodes``/``n_max``/
+        ``versions`` off the view, exactly like the pre-multi-dataset code."""
+        if dataset not in DATASETS:
+            raise ValueError(f"dataset must be one of {DATASETS}; got {dataset!r}")
+        return dataclasses.replace(
+            self,
+            train_datasets=(dataset,), eval_datasets=(dataset,), selection_dataset=None,
+            max_nodes=self.resolved_max_nodes(dataset),
+            n_max=self.resolved_n_max(dataset),
+            versions=self.resolved_versions(dataset))
+
     @property
     def answer_sep(self):
         """Separator JOINING answers in the training target (v3: newline)."""
@@ -222,22 +288,30 @@ class RunConfig:
             "bias": "none",
         }
 
-    def data_config_key(self):
-        """Cache-directory name, built ONLY from data-affecting fields.
+    def data_config_key(self, dataset):
+        """Cache-directory name for ONE dataset, built ONLY from data-affecting fields.
 
         Training-only knobs (seed, lr, k_hop, …) are deliberately excluded so two
         runs differing only in training config share one built dataset. Uses
         ``data_seed`` (not the training ``seed``) and includes ``max_length``
         (which affects tokenization). Ends in the ``DATA_FORMAT_VERSION`` so
         semantic pipeline changes invalidate old caches.
+
+        Dataset-resolvable knobs are embedded as their RESOLVED values, so one
+        dataset's key never depends on another dataset's settings (WebQSP keys
+        stay byte-identical to their pre-multi-dataset names).
         """
         model = str(self.model_name).replace("/", "-")
         # prompt_style and naming_version are data-affecting, but each suffix is
         # only added for non-default values so every pre-existing cache keeps its
         # name (plain style, naming v2).
         ps = self.resolved_prompt_style
-        return (f"sr-webqsp_{model}_v{self.rel_mode}_cap{self.max_nodes}_nmax{self.n_max}"
-                f"_ver{self.versions}_spd{self.max_spd}_magq{self.magnetic_q}m{self.magnetic_m}"
+        # f"sr-{dataset}" keeps every pre-existing key byte-identical (the prefix
+        # was the literal "sr-webqsp_" before the dataset knob existed).
+        return (f"sr-{dataset}_{model}_v{self.rel_mode}"
+                f"_cap{self.resolved_max_nodes(dataset)}_nmax{self.resolved_n_max(dataset)}"
+                f"_ver{self.resolved_versions(dataset)}_spd{self.max_spd}"
+                f"_magq{self.magnetic_q}m{self.magnetic_m}"
                 f"_len{self.max_length}_rcm{int(self.rcm)}_seed{self.data_seed}"
                 f"_dfv{self.data_format_version}"
                 + ("" if ps == "plain" else f"_ps{ps}")
@@ -251,6 +325,22 @@ class RunConfig:
         the experiment draws its own line (unknown *flags* already fail-fast in
         argparse). Returns ``self`` so ``__main__`` can chain ``.validate()``.
         """
+        for role in ("train_datasets", "eval_datasets"):
+            names = getattr(self, role)
+            if not names or not set(names) <= set(DATASETS):
+                raise ValueError(f"{role}={names!r} must be a non-empty subset of {DATASETS}.")
+            if len(set(names)) != len(names):
+                raise ValueError(f"{role}={names!r} contains duplicates.")
+        if self.selection_dataset is not None and self.selection_dataset not in self.eval_datasets:
+            raise ValueError(
+                f"selection_dataset={self.selection_dataset!r} must be one of "
+                f"eval_datasets={self.eval_datasets!r} (or None = mean of their dev F1s).")
+        for name in ("max_nodes", "n_max", "versions"):
+            value = getattr(self, name)
+            if isinstance(value, dict) and not set(value) <= set(DATASETS):
+                raise ValueError(f"{name}={value} has keys outside {DATASETS}.")
+            for ds in self.datasets:
+                self._per_dataset(name, ds)   # raises if a referenced dataset is unresolvable
         if self.rel_mode not in REL_MODES:
             raise ValueError(f"rel_mode={self.rel_mode!r} not in {REL_MODES}.")
         if self.graph_attn_impl not in GRAPH_ATTN_IMPLS:
@@ -259,8 +349,11 @@ class RunConfig:
             raise ValueError(f"dtype={self.dtype!r} not in {DTYPES}.")
         if self.lora_r < 0:
             raise ValueError(f"lora_r must be >= 0 (0 disables LoRA); got {self.lora_r}.")
-        if self.n_max < 1:
-            raise ValueError(f"n_max must be >= 1; got {self.n_max}.")
+        for ds in self.datasets:
+            if self.resolved_n_max(ds) < 1:
+                raise ValueError(f"n_max must be >= 1; got {self.resolved_n_max(ds)} for {ds}.")
+            if self.resolved_versions(ds) < 1:
+                raise ValueError(f"versions must be >= 1; got {self.resolved_versions(ds)} for {ds}.")
         if self.data_format_version not in (2, 3):
             raise ValueError(
                 f"data_format_version must be 2 or 3; got {self.data_format_version}.")
@@ -279,8 +372,6 @@ class RunConfig:
             raise ValueError(
                 "boundary_loss_weight requires the dfv3 newline separator "
                 "(the boundary token is '\\n').")
-        if self.versions < 1:
-            raise ValueError(f"versions must be >= 1; got {self.versions}.")
         if self.bias_weight_decay < 0:
             raise ValueError(f"bias_weight_decay must be >= 0; got {self.bias_weight_decay}.")
         if not (0 <= self.lora_dropout < 1):

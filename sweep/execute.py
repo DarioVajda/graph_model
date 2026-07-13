@@ -76,12 +76,19 @@ def normalize_module(experiment):
 
 
 def render_flags(params):
-    """Render a resolved parameter dict to argparse flags (see module docstring)."""
+    """Render a resolved parameter dict to argparse flags (see module docstring).
+
+    dict values render as ``k=v`` pairs comma-joined (``--max-nodes
+    webqsp=512,cwq=1024``) — the per-dataset knob form; the experiment's
+    argparse type parses it back into a dict.
+    """
     argv = []
     for key, value in params.items():
         flag = "--" + key.replace("_", "-")
         if isinstance(value, bool):
             argv.append(flag if value else "--no-" + key.replace("_", "-"))
+        elif isinstance(value, dict):
+            argv += [flag, ",".join(f"{k}={v}" for k, v in value.items())]
         elif isinstance(value, (list, tuple)):
             argv += [flag, ",".join(str(v) for v in value)]
         elif value is None:

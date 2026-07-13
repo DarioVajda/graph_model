@@ -20,7 +20,12 @@ from src.experiments.kgqa.config import RunConfig
 # list flag, and None-valued knobs (rendered as omitted -> parser default None).
 REPRESENTATIVE = {
     "mode": "train",
-    "rel_mode": "last_2", "max_nodes": 256, "n_max": 15, "versions": 4,
+    # dataset roles + per-dataset knobs (E2): lists round-trip comma-joined,
+    # dict-valued knobs as "k=v" pairs.
+    "train_datasets": ["webqsp", "cwq"], "eval_datasets": ["webqsp", "cwq"],
+    "selection_dataset": "cwq", "log_strict_metrics": True,
+    "rel_mode": "last_2", "max_nodes": {"webqsp": 256, "cwq": 1024},
+    "n_max": 15, "versions": {"webqsp": 4, "cwq": 1},
     "max_length": 512, "rcm": False, "data_seed": 7, "use_gpu": False,
     "analyse_dataset": True,
     "model_name": "meta-llama/Llama-3.2-1B",

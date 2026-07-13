@@ -48,6 +48,26 @@ def _run_identity(cfg, run_name, sweep_id):
     return f"kgqa_lora{cfg.lora_r}_khop{cfg.k_hop}_{cfg.graph_attn_impl}_s{cfg.seed}"
 
 
+def result_block(cfg, dev, test):
+    """The per-dataset result keys of a run record (E3.4, TODO_cwq).
+
+    Every metric is dataset-prefixed (``eval_webqsp_f1``, ``test_cwq_hits1``,
+    …) — also for single-dataset runs. Records written before 2026-07-12 carry
+    the legacy unprefixed names, which read as ``X == webqsp_X`` (all history
+    to that date is WebQSP-only). ``eval_sel_f1`` is the checkpoint-selection
+    scalar (mean of per-dataset dev F1s, or the pinned ``selection_dataset``).
+    """
+    metrics = ("f1", "hits1", "hit_star", "em_accuracy")
+    if cfg.log_strict_metrics:
+        metrics += ("f1_strict",)
+    block = {"eval_sel_f1": dev.get("eval_sel_f1")}
+    for ds in cfg.eval_datasets:
+        for m in metrics:
+            block[f"eval_{ds}_{m}"] = dev.get(f"eval_{ds}_{m}")
+            block[f"test_{ds}_{m}"] = test.get(f"test_{ds}_{m}")
+    return block
+
+
 def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
                        runs_jsonl, sweep_meta=None):
     """Append this run's hyperparameters + dev/test results to its sweep's JSONL."""
@@ -57,6 +77,10 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         "mode": "train",
         **(sweep_meta or {}),
         "run_name": run_name,
+        # ── dataset roles ──
+        "train_datasets": list(cfg.train_datasets),
+        "eval_datasets": list(cfg.eval_datasets),
+        "selection_dataset": cfg.selection_dataset,
         # ── hyperparameters ──
         "model_name": cfg.model_name, "prompt_style": cfg.resolved_prompt_style,
         "lora_r": cfg.lora_r, "k_hop": cfg.k_hop, "k_hop_directed": cfg.k_hop_directed,
@@ -71,16 +95,8 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         "versions": cfg.versions, "magnetic_m": cfg.magnetic_m, "data_seed": cfg.data_seed,
         "data_format_version": cfg.data_format_version,
         "cvt_collapse": cfg.resolved_cvt_collapse("graph"),
-        # ── results: best-checkpoint dev metrics (GNN-RAG-comparable) ──
-        "eval_f1": dev.get("eval_f1"), "eval_hits1": dev.get("eval_hits1"),
-        "eval_hit_star": dev.get("eval_hit_star"),
-        "eval_f1_strict": dev.get("eval_f1_strict"),
-        "eval_em_accuracy": dev.get("eval_em_accuracy"),
-        # ── results: test metrics ──
-        "test_f1": test.get("test_f1"), "test_hits1": test.get("test_hits1"),
-        "test_hit_star": test.get("test_hit_star"),
-        "test_f1_strict": test.get("test_f1_strict"),
-        "test_em_accuracy": test.get("test_em_accuracy"),
+        # ── results: best-checkpoint dev + test metrics, dataset-prefixed ──
+        **result_block(cfg, dev, test),
     }
     append_jsonl(runs_jsonl, record)
     print(f"[results] appended training run to {runs_jsonl}")
@@ -132,8 +148,10 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     question_end = tokenizer(cfg.question_end_str, add_special_tokens=False)["input_ids"]
 
     print("Loading data...")
-    train_dataset, eval_dataset, test_dataset = load_data(cfg)
-    print(f"Train: {len(train_dataset)}  Eval: {len(eval_dataset)}  Test: {len(test_dataset)}")
+    train_dataset, eval_sets, test_sets = load_data(cfg)
+    print(f"Train: {len(train_dataset)} ({','.join(cfg.train_datasets)})  "
+          f"Eval: { {ds: len(d) for ds, d in eval_sets.items()} }  "
+          f"Test: { {ds: len(d) for ds, d in test_sets.items()} }")
 
     # magnetic_m is the eigenvector count for the collator — a data/collator knob,
     # NOT the model's magnetic_dim (the old code aliased the two; they only agreed
@@ -176,7 +194,10 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         eval_steps=cfg.eval_steps,
         save_strategy="steps",
         save_steps=cfg.eval_steps,
-        metric_for_best_model="eval_f1",       # generative macro-F1 (see KGQAGraphTrainer)
+        # Generative selection metric (see PerDatasetEvalMixin): the mean of the
+        # per-dataset dev F1s, or the selection_dataset one — eval_{ds}_f1 are
+        # logged alongside either way.
+        metric_for_best_model="eval_sel_f1",
         greater_is_better=True,
         save_total_limit=1,
         load_best_model_at_end=True,
@@ -195,12 +216,14 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
 
     trainer = KGQAGraphTrainer(
         model=model, args=training_args,
-        train_dataset=train_dataset, eval_dataset=eval_dataset,
+        train_dataset=train_dataset, eval_dataset=eval_sets,           # {name: dataset}
         data_collator=train_collator,
         compute_metrics=make_compute_metrics(include_f1=False),       # cheap teacher-forced EM (secondary)
         preprocess_logits_for_metrics=shift_logits_for_metrics,       # bound eval memory
         active_params=active_params, bias_lr=cfg.bias_lr,
         bias_weight_decay=cfg.bias_weight_decay,
+        selection_dataset=cfg.selection_dataset,
+        log_strict_metrics=cfg.log_strict_metrics,
         # generative (primary) eval — capped during training (checkpoint selection),
         # switched to gen_max_samples (usually the full split) for final scoring below:
         gen_tokenizer=tokenizer, gen_collator=gen_collator, question_end=question_end,
@@ -217,16 +240,17 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     trainer.train()
 
     # Best model is loaded (load_best_model_at_end); score it on dev + test so the
-    # run record carries both. Both evaluate() calls run the generative set eval.
+    # run record carries both — per dataset, full splits. Both evaluate() calls
+    # run the generative set eval.
     trainer.set_gen_max_samples(cfg.gen_max_samples)
-    print("\n" + "=" * 50 + "\nBest model — dev set (generative):\n" + "=" * 50)
-    dev_metrics = trainer.evaluate(eval_dataset=eval_dataset, metric_key_prefix="eval")
+    print("\n" + "=" * 50 + "\nBest model — dev set(s) (generative):\n" + "=" * 50)
+    dev_metrics = trainer.evaluate(eval_dataset=eval_sets, metric_key_prefix="eval")
     for k, v in dev_metrics.items():
         if any(t in k for t in _PRINT_KEYS):
             print(f"  {k}: {v:.4f}")
 
-    print("\n" + "=" * 50 + "\nBest model — test set (generative):\n" + "=" * 50)
-    test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
+    print("\n" + "=" * 50 + "\nBest model — test set(s) (generative):\n" + "=" * 50)
+    test_metrics = trainer.evaluate(eval_dataset=test_sets, metric_key_prefix="test")
     for k, v in test_metrics.items():
         if any(t in k for t in _PRINT_KEYS):
             print(f"  {k}: {v:.4f}")

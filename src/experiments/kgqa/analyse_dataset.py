@@ -226,18 +226,26 @@ def _format_token_table(built):
     return "\n".join(lines)
 
 
-def run_analysis(cfg, sr_dir, split_files, out_dir):
+def run_analysis(cfg, out_dir, splits=("train", "dev", "test"), dataset=None):
     """Analyse each split (raw + built), print README-style tables, save the JSON.
 
-    ``split_files`` maps split name -> filename under ``sr_dir`` (the driver
-    passes ``process_dataset.SPLITS``). Results land in
+    ``cfg`` is a single-dataset view (``RunConfig.for_dataset``): its
+    ``max_nodes``/``n_max`` are plain scalars. ``dataset=None`` falls back to
+    the config's own dataset (the legacy single-``dataset`` field if present —
+    keeps in-flight data-prep jobs launched pre-E2 working — else the view's
+    only referenced dataset). Records come normalized from
+    ``sr_records.load_sr_records(dataset, ...)`` (CWQ ints already decoded, so
+    "uncapped" means post-decode raw tuples). Results land in
     ``<out_dir>/coverage_analysis.json`` next to the built ``.gtds`` splits.
     """
+    from .sr_records import load_sr_records
+    if dataset is None:
+        dataset = getattr(cfg, "dataset", None) or cfg.datasets[0]
     entity_names = json.load(open(entity_names_path(cfg)))
 
     results, built = {}, {}
-    for split, fname in split_files.items():
-        records = [json.loads(l) for l in open(os.path.join(sr_dir, fname))]
+    for split in splits:
+        records = load_sr_records(dataset, split)
         print(f"[analyse_dataset] {split}: analysing {len(records)} records ...")
         results[split] = analyse_split(records, entity_names, cfg)
         built[split] = analyse_built_split(os.path.join(out_dir, f"{split}.gtds"))
@@ -251,7 +259,7 @@ def run_analysis(cfg, sr_dir, split_files, out_dir):
         print("\n[analyse_dataset] built-split token lengths (per stored example):")
         print(_format_token_table(built))
 
-    payload = {"n_max": cfg.n_max, "max_nodes": cfg.max_nodes,
+    payload = {"dataset": dataset, "n_max": cfg.n_max, "max_nodes": cfg.max_nodes,
                "splits": results, "built_splits": built}
     out_path = os.path.join(out_dir, "coverage_analysis.json")
     os.makedirs(out_dir, exist_ok=True)

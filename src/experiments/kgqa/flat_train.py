@@ -26,18 +26,18 @@ import random
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import ConcatDataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
 
 from ...train import select_active_params, print_trainable_parameters, get_device
 from ...utils import set_wandb_project
 from ._io import append_jsonl
 from .evaluate import (
-    _find_prefix_len, eval_f1, eval_hit, eval_hit1, normalize,
-    parse_answer_list, _strict_set_f1)
+    PerDatasetEvalMixin, _find_prefix_len, eval_f1, eval_hit, eval_hit1,
+    eval_indices, normalize, parse_answer_list, _strict_set_f1)
 from .flat_data import flat_data_config_key
 from .process_dataset import OUTPUT_ROOT
-from .train import EXPERIMENT_NAME, _DEFAULT_RUNS_JSONL, _PRINT_KEYS
+from .train import EXPERIMENT_NAME, _DEFAULT_RUNS_JSONL, _PRINT_KEYS, result_block
 
 
 # --------------------------------------------------------------------------- #
@@ -109,15 +109,15 @@ class PadCollator:
 # --------------------------------------------------------------------------- #
 @torch.no_grad()
 def flat_generative_eval(model, rows, tokenizer, max_new_tokens=128, device=None,
-                         max_samples=None, prefix="eval", answer_sep="\n"):
+                         max_samples=None, prefix="eval", answer_sep="\n",
+                         include_strict=False):
     was_training = model.training
     model.eval()
     device = device or next(model.parameters()).device
-    n = len(rows) if max_samples is None else min(max_samples, len(rows))
 
     hits1, f1s, hitstar = [], [], []
     s_hits1, s_f1s, s_hitstar = [], [], []
-    for i in range(n):
+    for i in eval_indices(len(rows), max_samples):
         row = rows[i]
         gold = [a for a in row["gold_answers"] if a]
         if not gold:
@@ -137,50 +137,51 @@ def flat_generative_eval(model, rows, tokenizer, max_new_tokens=128, device=None
         else:
             hits1.append(0.0); hitstar.append(0.0); f1s.append(0.0)
 
-        pred_n, goldset = [], set(normalize(a) for a in gold)
-        for p in pred:
-            pn_ = normalize(p)
-            if pn_ and pn_ not in pred_n:
-                pred_n.append(pn_)
-        s_hits1.append(1.0 if pred_n and pred_n[0] in goldset else 0.0)
-        s_hitstar.append(1.0 if any(p in goldset for p in pred_n) else 0.0)
-        s_f1s.append(_strict_set_f1(pred_n, goldset))
+        if include_strict:
+            pred_n, goldset = [], set(normalize(a) for a in gold)
+            for p in pred:
+                pn_ = normalize(p)
+                if pn_ and pn_ not in pred_n:
+                    pred_n.append(pn_)
+            s_hits1.append(1.0 if pred_n and pred_n[0] in goldset else 0.0)
+            s_hitstar.append(1.0 if any(p in goldset for p in pred_n) else 0.0)
+            s_f1s.append(_strict_set_f1(pred_n, goldset))
 
     if was_training:
         model.train()
     m = lambda xs: float(np.mean(xs)) if xs else 0.0
-    return {
-        f"{prefix}_hits1": m(hits1), f"{prefix}_f1": m(f1s), f"{prefix}_hit_star": m(hitstar),
-        f"{prefix}_hits1_strict": m(s_hits1), f"{prefix}_f1_strict": m(s_f1s),
-        f"{prefix}_hit_star_strict": m(s_hitstar),
-    }
+    out = {f"{prefix}_hits1": m(hits1), f"{prefix}_f1": m(f1s),
+           f"{prefix}_hit_star": m(hitstar)}
+    if include_strict:
+        out.update({f"{prefix}_hits1_strict": m(s_hits1), f"{prefix}_f1_strict": m(s_f1s),
+                    f"{prefix}_hit_star_strict": m(s_hitstar)})
+    return out
 
 
-class FlatKGQATrainer(Trainer):
-    """Plain HF Trainer whose ``evaluate`` adds the generative set metrics."""
+class FlatKGQATrainer(PerDatasetEvalMixin, Trainer):
+    """Plain HF Trainer with the per-dataset eval fan-out + generative metrics."""
 
     def __init__(self, *args, gen_tokenizer=None, gen_rows=None, gen_max_new_tokens=128,
-                 gen_max_samples=None, gen_answer_sep="\n", **kwargs):
+                 gen_max_samples=None, gen_answer_sep="\n",
+                 selection_dataset=None, log_strict_metrics=False, **kwargs):
         super().__init__(*args, **kwargs)
         self._gen_tokenizer = gen_tokenizer
-        self._gen_rows = gen_rows          # {"eval": rows, "test": rows}
+        self._gen_rows = gen_rows          # {"eval_<ds>": rows, "test_<ds>": rows}
         self._gen_max_new_tokens = gen_max_new_tokens
         self._gen_max_samples = gen_max_samples
         self._gen_answer_sep = gen_answer_sep
+        self._selection_dataset = selection_dataset
+        self._log_strict_metrics = log_strict_metrics
 
     def set_gen_max_samples(self, n):
         self._gen_max_samples = n
 
-    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
-        metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
-        gen = flat_generative_eval(
-            self.model, self._gen_rows[metric_key_prefix], self._gen_tokenizer,
+    def _generative_metrics(self, handle, prefix):
+        return flat_generative_eval(
+            self.model, self._gen_rows[prefix], self._gen_tokenizer,
             max_new_tokens=self._gen_max_new_tokens, max_samples=self._gen_max_samples,
-            device=self.args.device, prefix=metric_key_prefix,
-            answer_sep=self._gen_answer_sep)
-        metrics.update(gen)
-        self.log(gen)
-        return metrics
+            device=self.args.device, prefix=prefix,
+            answer_sep=self._gen_answer_sep, include_strict=self._log_strict_metrics)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,25 +203,33 @@ def run_flat_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
 
     device = get_device()
 
-    data_dir = os.path.join(OUTPUT_ROOT, flat_data_config_key(cfg))
-    if not os.path.isdir(data_dir):
-        raise FileNotFoundError(
-            f"No flat dataset at {data_dir} — build it first with --mode flat_data_prep.")
-
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     question_end = tokenizer(cfg.question_end_str, add_special_tokens=False)["input_ids"]
 
     print("Loading + tokenizing flat data...")
-    tok_rows = {}
-    for split in ("train", "dev", "test"):
-        raw = [json.loads(l) for l in open(os.path.join(data_dir, f"{split}.jsonl"))]
-        tok_rows[split] = [tokenize_row(r, tokenizer, question_end, cfg.seq_len)
-                           for r in raw]
-        print(f"  {split}: {len(raw)} rows")
 
-    train_dataset = FlatVersionedDataset(tok_rows["train"], versions=cfg.versions)
-    eval_dataset = FlatVersionedDataset(tok_rows["dev"], versions=1)
-    test_dataset = FlatVersionedDataset(tok_rows["test"], versions=1)
+    def load_rows(dataset, split):
+        view = cfg.for_dataset(dataset)
+        path = os.path.join(OUTPUT_ROOT, flat_data_config_key(view, dataset),
+                            f"{split}.jsonl")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"No flat dataset at {path} — build it first with --mode flat_data_prep.")
+        rows = [tokenize_row(json.loads(l), tokenizer, question_end, cfg.seq_len)
+                for l in open(path)]
+        print(f"  {dataset}/{split}: {len(rows)} rows")
+        return rows
+
+    trains = [FlatVersionedDataset(load_rows(ds, "train"),
+                                   versions=cfg.resolved_versions(ds))
+              for ds in cfg.train_datasets]
+    train_dataset = trains[0] if len(trains) == 1 else ConcatDataset(trains)
+    dev_rows = {ds: load_rows(ds, "dev") for ds in cfg.eval_datasets}
+    test_rows = {ds: load_rows(ds, "test") for ds in cfg.eval_datasets}
+    eval_sets = {ds: FlatVersionedDataset(rows, versions=1)
+                 for ds, rows in dev_rows.items()}
+    test_sets = {ds: FlatVersionedDataset(rows, versions=1)
+                 for ds, rows in test_rows.items()}
 
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model_name, torch_dtype=cfg.torch_dtype, attn_implementation="sdpa")
@@ -252,7 +261,7 @@ def run_flat_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         eval_steps=cfg.eval_steps,
         save_strategy="steps",
         save_steps=cfg.eval_steps,
-        metric_for_best_model="eval_f1",
+        metric_for_best_model="eval_sel_f1",   # see PerDatasetEvalMixin
         greater_is_better=True,
         save_total_limit=1,
         load_best_model_at_end=True,
@@ -267,29 +276,36 @@ def run_flat_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         data_seed=cfg.seed,
     )
 
+    gen_rows = {}
+    for ds in cfg.eval_datasets:
+        gen_rows[f"eval_{ds}"] = dev_rows[ds]
+        gen_rows[f"test_{ds}"] = test_rows[ds]
+
     trainer = FlatKGQATrainer(
         model=model, args=training_args,
-        train_dataset=train_dataset, eval_dataset=eval_dataset,
+        train_dataset=train_dataset, eval_dataset=eval_sets,   # {name: dataset}
         data_collator=PadCollator(tokenizer.eos_token_id),
         gen_tokenizer=tokenizer,
-        gen_rows={"eval": tok_rows["dev"], "test": tok_rows["test"]},
+        gen_rows=gen_rows,
         gen_max_new_tokens=cfg.gen_max_new_tokens,
         gen_max_samples=(cfg.gen_eval_samples if cfg.gen_eval_samples is not None
                          else cfg.gen_max_samples),
         gen_answer_sep=cfg.answer_parse_sep,
+        selection_dataset=cfg.selection_dataset,
+        log_strict_metrics=cfg.log_strict_metrics,
     )
 
     trainer.train()
 
     trainer.set_gen_max_samples(cfg.gen_max_samples)
-    print("\n" + "=" * 50 + "\nBest model — dev set (generative):\n" + "=" * 50)
-    dev_metrics = trainer.evaluate(eval_dataset=eval_dataset, metric_key_prefix="eval")
+    print("\n" + "=" * 50 + "\nBest model — dev set(s) (generative):\n" + "=" * 50)
+    dev_metrics = trainer.evaluate(eval_dataset=eval_sets, metric_key_prefix="eval")
     for k, v in dev_metrics.items():
         if any(t in k for t in _PRINT_KEYS):
             print(f"  {k}: {v:.4f}")
 
-    print("\n" + "=" * 50 + "\nBest model — test set (generative):\n" + "=" * 50)
-    test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
+    print("\n" + "=" * 50 + "\nBest model — test set(s) (generative):\n" + "=" * 50)
+    test_metrics = trainer.evaluate(eval_dataset=test_sets, metric_key_prefix="test")
     for k, v in test_metrics.items():
         if any(t in k for t in _PRINT_KEYS):
             print(f"  {k}: {v:.4f}")
@@ -297,6 +313,9 @@ def run_flat_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     record = {
         "mode": "flat_train", "arm": "flat_text",
         **sweep_meta, "run_name": internal_run,
+        "train_datasets": list(cfg.train_datasets),
+        "eval_datasets": list(cfg.eval_datasets),
+        "selection_dataset": cfg.selection_dataset,
         "model_name": cfg.model_name, "prompt_style": cfg.resolved_prompt_style,
         "lora_r": cfg.lora_r, "lora_dropout": cfg.lora_dropout, "seq_len": cfg.seq_len,
         "lr": cfg.lr, "num_epochs": cfg.num_epochs,
@@ -305,12 +324,7 @@ def run_flat_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
         "versions": cfg.versions, "data_seed": cfg.data_seed,
         "cvt_collapse": cfg.resolved_cvt_collapse("flat"),
-        "eval_f1": dev_metrics.get("eval_f1"), "eval_hits1": dev_metrics.get("eval_hits1"),
-        "eval_hit_star": dev_metrics.get("eval_hit_star"),
-        "eval_f1_strict": dev_metrics.get("eval_f1_strict"),
-        "test_f1": test_metrics.get("test_f1"), "test_hits1": test_metrics.get("test_hits1"),
-        "test_hit_star": test_metrics.get("test_hit_star"),
-        "test_f1_strict": test_metrics.get("test_f1_strict"),
+        **result_block(cfg, dev_metrics, test_metrics),
     }
     append_jsonl(runs_jsonl, record)
     print(f"[results] appended flat run to {runs_jsonl}")
