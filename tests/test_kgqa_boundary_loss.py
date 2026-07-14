@@ -81,8 +81,13 @@ def test_num_items_accounting():
 def test_trainer_class_keeps_its_methods():
     # regression: a module-level helper once landed mid-class and silently
     # detached evaluate/set_gen_max_samples (KeyError 'eval_f1' at selection)
-    from src.experiments.kgqa.evaluate import KGQAGraphTrainer
+    from src.experiments.kgqa.evaluate import KGQAGraphTrainer, PerDatasetEvalMixin
     for m in ("evaluate", "set_gen_max_samples", "compute_loss"):
+        assert callable(getattr(KGQAGraphTrainer, m, None)), m
+    # evaluate lives in the shared mixin since the multidataset refactor;
+    # pin it there so a mid-class helper can't detach it again unnoticed
+    assert "evaluate" in PerDatasetEvalMixin.__dict__
+    for m in ("set_gen_max_samples", "compute_loss"):
         assert m in KGQAGraphTrainer.__dict__, m
 
 
