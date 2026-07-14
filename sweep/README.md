@@ -60,6 +60,8 @@ absent).
     "max_concurrent": 4,          // omit for no cap
     "partition": "frida", "account": "povejmo",
     "gpus": "B200:1", "cpus": 16, "mem": "64G", "time": "24:00:00",
+    // or a list to accept any of several types (rendered as --gres gpu:N
+    // --constraint GPU_BRD:B200|GPU_BRD:B300): "gpus": ["B200:1", "B300:1"],
     "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
     "dry_run": false              // true: write sbatch_commands.sh + jobs/ without submitting
   }

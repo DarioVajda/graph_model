@@ -251,13 +251,36 @@ def _array_wrap(labels, scripts, sb):
     return "exec bash -c " + shlex.quote(body)
 
 
+def _gpu_args(gpus):
+    """Render ``gpus`` to sbatch args.
+
+    A string (``"B200:1"``) pins the type inside the gres request. A list
+    (``["B200:1", "B300:1"]``) means "any of these types": Slurm gres can't
+    express an OR, so it becomes a generic count plus a feature constraint —
+    ``--gres gpu:1 --constraint GPU_BRD:B200|GPU_BRD:B300`` (each node carries a
+    ``GPU_BRD:<type>`` feature). The per-type counts must agree.
+    """
+    if not isinstance(gpus, (list, tuple)):
+        return ["--gres", f"gpu:{gpus}"]
+    types, counts = [], set()
+    for entry in gpus:
+        gpu_type, _, count = str(entry).partition(":")
+        types.append(gpu_type)
+        counts.add(count or "1")
+    if len(counts) != 1:
+        raise expand_mod.SweepError(
+            f"execution.sbatch.gpus list must use one count across all types, got {gpus!r}.")
+    return ["--gres", f"gpu:{counts.pop()}",
+            "--constraint", "|".join(f"GPU_BRD:{t}" for t in types)]
+
+
 def _sbatch_argv(jobname, logpath, wrap, sb, array=None):
     """Assemble the ``sbatch`` argv from the resource block (missing -> defaults)."""
     if not sb.get("partition"):
         raise expand_mod.SweepError("execution.sbatch.partition is required for sbatch mode.")
     if not sb.get("gpus"):
         raise expand_mod.SweepError("execution.sbatch.gpus is required for sbatch mode (e.g. 'B200:1').")
-    argv = ["sbatch", "-p", str(sb["partition"]), "--gres", f"gpu:{sb['gpus']}",
+    argv = ["sbatch", "-p", str(sb["partition"]), *_gpu_args(sb["gpus"]),
             "-c", str(sb.get("cpus", _SBATCH_DEFAULTS["cpus"])),
             "--mem", str(sb.get("mem", _SBATCH_DEFAULTS["mem"])),
             "-t", str(sb.get("time", _SBATCH_DEFAULTS["time"])),
