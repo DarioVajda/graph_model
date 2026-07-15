@@ -1,0 +1,55 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Data-prep step for the magnetic_m ablation (2026-07-14): builds the .gtds
+  // caches for magnetic_m in {32, 64, 0} (0 = keep all eigenvectors, i.e. no
+  // truncation) on the frozen WebQSP data config (max_nodes 512, n_max 50,
+  // versions 8, dfv3 — matches 024_bias_ablation_webqsp.jsonc's data keys).
+  // magnetic_m is part of data_config_key(), so each value needs its own
+  // build; the existing m=128 cache (from 024) is reused as-is, no rebuild.
+  //
+  // compute_magnetic_lap always does a full dense eigh and only slices to m
+  // afterward, so build cost is expected to be ~flat across these values
+  // (~10 min/split, per the m=128 cache's build time) — this is NOT expected
+  // to be the expensive step; 027's training runs are.
+  //
+  // Run this first; the training sweep (027) requires these caches to exist.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/026_magnetic_m_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "magnetic_m_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "magnetic_m": [32, 64, 0],
+
+  // data-config keys — must match 024_bias_ablation_webqsp.jsonc exactly
+  // (aside from magnetic_m) so the training sweep's cache lookups hit these.
+  "dataset": "webqsp",
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 50,
+  "versions": 8,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_q": 0.25
+}
