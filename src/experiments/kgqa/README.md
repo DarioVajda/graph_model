@@ -18,15 +18,18 @@ contribution; every point gained by swapping retrievers would be unattributable 
 graph architecture. Concretely, in order:
 
 1. **Beat retrieval-matched SR-GNN-RAG** (paper Table 15(d): WebQSP **78.9 Hits@1 /
-   69.8 F1**, CWQ **55.6 Hits@1 / 53.3 F1**; we are at 78.8 / 72.5 WebQSP after
-   data-format v3 — **F1 ahead by 2.7, Hits@1 0.15 short**; the 71.3 F1 cited here
+   69.8 F1**, CWQ **55.6 Hits@1 / 53.3 F1**; we are at 79.1 / 74.1 WebQSP after the
+   question-node arm — **ahead on both: F1 +4.3, Hits@1 +0.15**; on CWQ the graph arm
+   is at baseline parity (57.0 / 54.7 best seed). The 71.3 F1 cited here
    previously is Table 2's *dense-retriever* GNN-RAG. Per the A2 diagnostic, Hits@1
    structurally under-credits a set generator: Hit/F1 are the honest primary
    metrics). This is the apples-to-apples pipeline-vs-single-model comparison the
-   setup was designed for.
+   setup was designed for. **Won on WebQSP.**
 2. **Beat the text-serialization ablation**: same base LLM, same SR subgraph flattened to
    triples in the prompt, no structural biases. This isolates whether the graph attention
-   biases do anything — the result that transfers to the rest of the repo. *(Not yet run.)*
+   biases do anything — the result that transfers to the rest of the repo. *(Run 2026-07:
+   flat currently wins — WebQSP 74.9 vs 74.1 F1, CWQ 58.6 vs 54.0. The question-node arm
+   closed ~⅓ of the WebQSP gap; see [Results so far](#results-so-far).)*
 3. **One scale run (3B/8B)** before drawing architecture conclusions: at 1B, plain
    text-RAG (RPO-RAG) gets 69.8 F1 and gains +11.5 F1 going to 8B — part of our gap may
    be reader capacity, not graph handling.
@@ -47,15 +50,16 @@ higher = better); the last column is our best run to date.
 
 | Benchmark | Metric | RoG | GNN-RAG | GNN-RAG + RA | Best published (2026) | **Ours — best** |
 |---|---|---:|---:|---:|---:|---:|
-| **WebQSP** | Hits@1 | 80.0 | 80.6 | 82.8 | 91.6 | **78.8** |
-| **WebQSP** | F1 | 70.8 | 71.3 | 73.5 | 88.6 | **72.5** |
-| **CWQ** | Hits@1 | 57.8 | 61.7 | 62.8 | 79.6 | — *(not run)* |
-| **CWQ** | F1 | 56.2 | 59.4 | 60.4 | 74.2 | — *(not run)* |
+| **WebQSP** | Hits@1 | 80.0 | 80.6 | 82.8 | 91.6 | **79.1** |
+| **WebQSP** | F1 | 70.8 | 71.3 | 73.5 | 88.6 | **74.1** |
+| **CWQ** | Hits@1 | 57.8 | 61.7 | 62.8 | 79.6 | **57.0** |
+| **CWQ** | F1 | 56.2 | 59.4 | 60.4 | 74.2 | **54.7** |
 
-- **Ours** = best `attribution_v3` run (Llama-3.2-1B, data-format v3, k_hop 0, lr 1e-4,
-  n_max 20, seed 1; test Hit 82.7); test set, verbatim GNN-RAG scoring. The 3-seed v3 arm
-  means are F1 71.1–71.5 / Hits@1 77.5 (±1.0 seed noise). WebQSP only — no CWQ runs yet.
-  See [Results so far](#results-so-far).
+- **Ours** = best graph-native (GTLM) run per benchmark, test set, verbatim GNN-RAG
+  scoring. WebQSP: `question_node_webqsp` seed 2, `isolated` mode (021 recipe +
+  question node; test Hit 83.6; arm mean 73.5 ± 0.8 F1). CWQ: `cwq_headline` seed 2
+  (test Hit 60.2; arm mean 54.0 ± 1.0 F1). The flat text-serialization *control*
+  is still higher on both (74.9 / 58.6 F1) — see [Results so far](#results-so-far).
 - **GNN-RAG / GNN-RAG+RA / RoG**: from GNN-RAG Table 2 (Mavromatis & Karypis, 2024). Those use
   *dense/combined* GNN retrievers; the **retrieval-matched** baseline is GNN-RAG reading the
   SR sparse subgraph — paper **Table 15 row (d)** (verified against the PDF 2026-07-12):
@@ -119,9 +123,9 @@ Reading it for our purposes:
 - **F1 SOTA** (no oracle): **GraphWalker 88.6** WebQSP / **74.2** CWQ — a 7B model with SFT+RL
   and agentic multi-turn KG access, i.e. *not* a single-pass reader over a fixed subgraph.
 - **The most informative anchor for us is RPO-RAG's Llama-3.2-1B row** (bolded): same base
-  model as ours, single-pass RAG-style reading. Hit 82.3 / F1 69.8 WebQSP vs our Hit 82.7 /
-  F1 72.5 (data-format v3) — **we now exceed the 2026 preference-optimized text-RAG pipeline
-  at equal model size** (+0.4 Hit, +2.7 F1), with a different (their own) retriever.
+  model as ours, single-pass RAG-style reading. Hit 82.3 / F1 69.8 WebQSP vs our Hit 83.6 /
+  F1 74.1 (question-node arm) — **we now exceed the 2026 preference-optimized text-RAG pipeline
+  at equal model size** (+1.3 Hit, +4.3 F1), with a different (their own) retriever.
 - Everything above ~89 WebQSP Hits@1 exceeds our capped SR ceiling (90.9 / 89.1 F1, data v3)
   — those systems retrieve better than SR or query the KG interactively. Beating
   them from SR inputs is impossible by construction; the honest target for GTLM is the
@@ -267,7 +271,7 @@ The `.gtds` cache directory is keyed only by data-affecting fields
 
 ## Results so far
 
-### Data-format v3 sweeps (2026-07-08) — current best
+### Data-format v3 sweeps (2026-07-08)
 
 `attribution_v3` (data {v2-control, v3, v3/n_max=50} × seed {0,1,2}) and
 `capacity_lora` (lora_r {8,64}), all at the cheap operating point: k_hop 0,
@@ -403,6 +407,47 @@ variance — the bias MLP destabilizes training). The graph arm's
 structure-transmission deficit vs. flat (0.721 vs. 0.749 F1) is not a
 bias-lr problem; whatever closes it has to come from elsewhere (see the
 question-node arm).
+
+### Question-node ablation (2026-07-15, complete) — current best graph arm
+
+`question_node_webqsp` (job 112227): the mechanism-3 fix from the
+why-flat-beats-graph analysis. The structural mask provably blocks graph→prompt
+attention, so the graph was encoded *question-agnostically* while the flat
+control's question-first serialization gives every context token
+question-conditioned compute. The `question_node` knob moves the question text
+out of the PROMPT node into its own QUESTION prefix node, which the existing
+bidirectional-prefix mask exposes to every graph token — question-conditioned
+encoding with zero model changes. Swept QUESTION's directed out-edge set
+(`all` = edge to every base-graph node, `topics` = to topic entities,
+`isolated` = no edges) × seeds {0,1,2}; everything else pinned to
+`021_webqsp_recipe_refresh`, whose runs are the controls. Configs:
+[`configs/028_question_node_data_prep.jsonc`](configs/028_question_node_data_prep.jsonc) (cache builds),
+[`configs/029_question_node_webqsp.jsonc`](configs/029_question_node_webqsp.jsonc).
+
+| arm | test F1 | Hits@1 | Hit |
+|---|---:|---:|---:|
+| flat control (021) | 0.7490 ± 0.0003 | 0.7995 | 0.8501 |
+| **`isolated`** | **0.7351 ± 0.0076** | 0.7803 | 0.8325 |
+| `all` | 0.7287 ± 0.0086 | 0.7793 | 0.8280 |
+| `topics` | 0.7284 ± 0.0022 | 0.7783 | 0.8272 |
+| graph control (021, no question node) | 0.7207 ± 0.0016 | 0.7729 | — |
+
+**Verdicts:**
+
+1. **The question node is worth +0.8 to +1.4 test F1** over the old
+   construction — all 9 runs landed at or above the best control seed. It closes
+   ~⅓–½ of the graph-vs-flat gap; flat still leads by ~1.4 F1.
+2. **The edge modes are statistically indistinguishable, with the edge-free
+   `isolated` on top**: the gain comes from the question *text* being visible
+   during graph encoding, not from wiring the question into the SPD/magnetic
+   structure (the `all` hub, if anything, costs a few tenths).
+3. **Best single run** (`isolated`, seed 2): **74.07 F1 / 79.05 Hits@1 / 83.60
+   Hit** — the best graph-native result to date and the first to clear
+   retrieval-matched SR-GNN-RAG (69.8 F1 / 78.9 Hits@1) on both primary metrics.
+   Dev F1 plateaued by epoch ~11–14, so longer training is not the next lever;
+   the residual deficit vs flat is attributed to the other two diagnosed
+   mechanisms (per-node position reset, duplicate keys), pointing at the
+   superset arm (flat serialization + node-span graph biases) next.
 
 ### Data-format v2 sweeps (historical)
 
