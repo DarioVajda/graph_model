@@ -1,0 +1,70 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // bias_lr bracket (2026-07-15, user call): does a hotter bias-group lr
+  // improve the graph-native arm? Motivated by the 024 ablation — the soft
+  // bias is the SOLE topology carrier in graph mode (none arm collapses to
+  // .479 vs .724) yet transmits structure slightly worse than flat text
+  // (.724 vs .749 on WebQSP; gap widens on CWQ) — and by the fact that 5e-3
+  // was inherited, never bracketed (007 tried 1e-2 once, single seed).
+  //
+  // Everything = 021_webqsp_recipe_refresh's graph arm verbatim; only
+  // bias_lr varies. NO 5e-3 arm here — 021's graph runs (test F1
+  // .7192/.7206/.7224, mean .7207) are the 5e-3 baseline under the
+  // identical recipe. Aggregate this sweep together with those.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/025_bias_lr_webqsp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "bias_lr_webqsp",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+  "bias_lr": [1e-2, 3e-2],
+
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "seq_len": 4096,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

@@ -381,6 +381,29 @@ unlike the first 3 which ran close to solo):
    peak-GPU-memory instrumentation exists in kgqa's `train.py` (unlike the
    probes' sweep), so the speed comparison above is wall-clock only.
 
+### bias_lr bracket (2026-07-15, complete)
+
+`bias_lr_webqsp` (job 112102): does a hotter bias-group lr improve the
+graph-native arm? Motivated by the 024 ablation — the soft bias is the sole
+topology carrier in graph mode, yet transmits structure slightly worse than
+flat text — and by 5e-3 being inherited, never bracketed. bias_lr ∈
+{1e-2, 3e-2} × seeds {0,1,2}, everything else pinned to
+`021_webqsp_recipe_refresh`'s graph arm; 021's graph runs are the 5e-3
+baseline. Config: [`configs/025_bias_lr_webqsp.jsonc`](configs/025_bias_lr_webqsp.jsonc).
+
+| bias_lr | test F1 | test Hits@1 |
+|---|---:|---:|
+| 5e-3 (021 baseline) | 0.7207 ± 0.0016 | — |
+| 1e-2 | 0.7229 ± 0.0081 | 0.7758 ± 0.0068 |
+| 3e-2 | 0.5596 ± 0.0381 | 0.6630 ± 0.0327 |
+
+**Verdict: bracket closed, keep 5e-3.** 1e-2 is a wash (+0.2 pp F1, within
+seed noise, with 5× the seed spread); 3e-2 is destructive (−16 pp F1, high
+variance — the bias MLP destabilizes training). The graph arm's
+structure-transmission deficit vs. flat (0.721 vs. 0.749 F1) is not a
+bias-lr problem; whatever closes it has to come from elsewhere (see the
+question-node arm).
+
 ### Data-format v2 sweeps (historical)
 
 All v2-era sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep
