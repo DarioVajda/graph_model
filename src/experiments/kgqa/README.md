@@ -320,6 +320,67 @@ control (test F1 72.55 ± 0.22):
 The negative model-side mechanisms are removed from the codebase after this
 campaign; reproducing those arms = checkout tag `reg-probes-2026-07`.
 
+### Bias ablation / `magnetic_shared` affordability (2026-07-13 → 2026-07-14, complete)
+
+`bias_ablation_webqsp` (job 111534, array `0-17%18`): the same 6 bias arms as
+the probe suite (`none`, `spd`, `magnetic`, `spd+magnetic`, `magnetic_shared`,
+`spd+magnetic_shared`) × seeds {0,1,2}, graph-native mode only, on the frozen
+WebQSP recipe (data-format v3, r64, lora_dropout 0.15, bias-wd fix, 15 ep,
+full-dev selection — everything else pinned to `021_webqsp_recipe_refresh.jsonc`).
+Config: [`configs/024_bias_ablation_webqsp.jsonc`](configs/024_bias_ablation_webqsp.jsonc).
+
+`magnetic_shared` and the bias-free `none` arm didn't exist as options in kgqa
+before this sweep — `RunConfig` only had independent `spd`/`magnetic` bools and
+`validate()` hard-required at least one on. Added `magnetic_shared` (wired into
+`bias_params()`; already a first-class field on the shared `GraphConfigMixin`
+model config, so no model-side change was needed) and relaxed `validate()` to
+reject only `magnetic`+`magnetic_shared` together, not all-off.
+
+**Accuracy** (test set, mean ± std over seeds {0,1,2}):
+
+| arm | F1 | Hits@1 | Hit* | EM |
+|---|---:|---:|---:|---:|
+| `none` | 0.4762 ± 0.0083 | 0.5604 ± 0.0076 | 0.6454 ± 0.0077 | 0.2189 ± 0.0038 |
+| `spd` | 0.6360 ± 0.0032 | 0.7099 ± 0.0010 | 0.7885 ± 0.0029 | 0.3081 ± 0.0053 |
+| `magnetic_shared` | 0.6971 ± 0.0047 | 0.7615 ± 0.0082 | 0.8077 ± 0.0048 | 0.3581 ± 0.0010 |
+| `magnetic` | 0.7066 ± 0.0022 | 0.7717 ± 0.0029 | 0.8186 ± 0.0014 | 0.3722 ± 0.0066 |
+| `spd+magnetic_shared` | 0.7175 ± 0.0047 | 0.7750 ± 0.0075 | 0.8225 ± 0.0048 | 0.3690 ± 0.0012 |
+| `spd+magnetic` | **0.7278 ± 0.0033** | **0.7819 ± 0.0022** | **0.8266 ± 0.0006** | **0.3855 ± 0.0040** |
+
+**Speed** (median steady-state train-step rate off the tqdm bars in the Slurm
+logs, converted to wall-clock s/it; three samples per arm, one per seed — noisy,
+since runs 3-17 shared nodes with 3-5 concurrent array tasks and each other,
+unlike the first 3 which ran close to solo):
+
+| arm | median s/it |
+|---|---:|
+| `none` | ~0.72 |
+| `magnetic_shared` | ~0.73 |
+| `spd` | ~0.82 |
+| `spd+magnetic_shared` | ~0.92 |
+| `spd+magnetic` | ~1.05 |
+| `magnetic` | ~1.17 |
+
+**Verdicts:**
+
+1. **Ablation** — every bias arm beats `none` by a wide margin (+0.16 to +0.25
+   F1); this is the dominant effect, dwarfing differences between bias types.
+   `magnetic` alone (0.707 F1) outperforms `spd` alone (0.636 F1) by ~7 pp —
+   the magnetic term carries more of the signal than SPD on this task. Combining
+   both gives the best result (`spd+magnetic`, 0.728 F1), but the marginal gain
+   over `magnetic` alone is small (+0.021 F1) — `spd` mostly reinforces
+   `magnetic` rather than adding an independent signal.
+2. **`magnetic_shared` affordability** — costs a small, consistent accuracy tax
+   vs. its per-layer counterpart (`magnetic_shared` 0.697 vs. `magnetic` 0.707 F1;
+   `spd+magnetic_shared` 0.718 vs. `spd+magnetic` 0.728 F1 — about 1 pp F1 in
+   both cases), in exchange for a real speed win: ~0.73 vs. ~1.17 s/it standalone
+   (~38% faster), consistent with the probe suite's finding that `magnetic_shared`
+   runs at roughly SPD cost. **Recommendation:** switch the frozen recipe to
+   `magnetic_shared` if throughput matters more than the last ~1 pp of F1;
+   keep per-layer `magnetic` if squeezing peak accuracy is the priority. No
+   peak-GPU-memory instrumentation exists in kgqa's `train.py` (unlike the
+   probes' sweep), so the speed comparison above is wall-clock only.
+
 ### Data-format v2 sweeps (historical)
 
 All v2-era sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep

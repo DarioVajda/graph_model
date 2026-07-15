@@ -124,6 +124,12 @@ class RunConfig:
     spd: bool = True
     max_spd: int = 64                         # data prep: SPD cutoff; model: bucket cap
     magnetic: bool = True
+    # Once-per-forward variant of magnetic (see MagneticSharedBias in
+    # src/models/bias.py): identical math/params, computed once per forward and
+    # shared across layers instead of once per layer. Mutually exclusive with
+    # `magnetic` in practice (both consume the same data; combining them just
+    # double-counts the term) — the bias ablation sweep never sets both True.
+    magnetic_shared: bool = False
     magnetic_dim: int = 128                   # magnetic-bias MLP hidden width (model architecture)
     magnetic_q: float = 0.25                  # magnetic-Laplacian charge
     magnetic_m: int = 128                     # # magnetic eigenvectors (data prep + collator; 0 = all N)
@@ -274,6 +280,8 @@ class RunConfig:
             cfg.update(spd=True, max_spd=self.max_spd)
         if self.magnetic:
             cfg.update(magnetic=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+        if self.magnetic_shared:
+            cfg.update(magnetic_shared=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
         return cfg
 
     def lora_config(self):
@@ -376,6 +384,10 @@ class RunConfig:
             raise ValueError(f"bias_weight_decay must be >= 0; got {self.bias_weight_decay}.")
         if not (0 <= self.lora_dropout < 1):
             raise ValueError(f"lora_dropout must be in [0, 1); got {self.lora_dropout}.")
-        if not (self.spd or self.magnetic):
-            raise ValueError("At least one of spd / magnetic must be enabled.")
+        if self.magnetic and self.magnetic_shared:
+            raise ValueError(
+                "spd/magnetic/magnetic_shared: magnetic and magnetic_shared are two "
+                "placements of the same term (per-layer vs. once-per-forward) — enable "
+                "at most one. `spd=magnetic=magnetic_shared=False` is the valid "
+                "no-graph-bias ('none') arm.")
         return self

@@ -113,6 +113,7 @@ TEMPLATE = """\
   // ── graph-bias features (spd + magnetic; both used by data prep and model) ─
   "spd": true,
   "magnetic": true,
+  "magnetic_shared": false,           // once-per-forward magnetic (mutually exclusive w/ magnetic)
   "max_spd": 64,
   "magnetic_dim": 128,                // model bias-MLP width
   "magnetic_m": 128,                  // # magnetic eigenvectors (data + collator; 0 = all N)
@@ -215,6 +216,9 @@ def build_parser():
     p.add_argument("--spd", action=B, default=d.spd)
     p.add_argument("--max-spd", type=int, default=d.max_spd)
     p.add_argument("--magnetic", action=B, default=d.magnetic)
+    p.add_argument("--magnetic-shared", action=B, default=d.magnetic_shared,
+                   help="once-per-forward magnetic variant, shared across layers "
+                        "(mutually exclusive with --magnetic).")
     p.add_argument("--magnetic-dim", type=int, default=d.magnetic_dim, help="model bias-MLP hidden width.")
     p.add_argument("--magnetic-q", type=float, default=d.magnetic_q)
     p.add_argument("--magnetic-m", type=int, default=d.magnetic_m,
@@ -296,6 +300,7 @@ def config_from_args(args):
         use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
         model_name=args.model_name,
         spd=args.spd, max_spd=args.max_spd, magnetic=args.magnetic,
+        magnetic_shared=args.magnetic_shared,
         magnetic_dim=args.magnetic_dim, magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
         num_epochs=args.num_epochs, batch_size=args.batch_size,
         accumulation_steps=args.accumulation_steps, lr=args.lr, bias_lr=args.bias_lr,
