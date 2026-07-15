@@ -186,7 +186,7 @@ Naming v2 extends it in place with Freebase-native aliases — in-subgraph
 curl -L -o "$KGQA/data/FB5M.name.txt.bz2" \
   https://raw.githubusercontent.com/castorini/BuboQA-data/master/FB5M.name.txt.bz2
 
-python3 -m src.experiments.kgqa.build_entities_names_v2   # 560k -> 598.5k entries
+python3 -m src.experiments.kgqa.analysis.build_entities_names_v2   # 560k -> 598.5k entries
 ```
 
 With the sr-cwq splits and the `data/cwq_ent_id2mid.txt` decode table also present

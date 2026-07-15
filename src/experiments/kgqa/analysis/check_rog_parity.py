@@ -20,8 +20,8 @@ every RoG question present / absent in the SR records, and vice versa.
 import argparse
 from collections import Counter
 
-from .process_dataset import full_gold_texts
-from .sr_records import load_sr_records
+from ..process_dataset import full_gold_texts
+from ..sr_records import load_sr_records
 
 ROG_DATASET = {"webqsp": "rmanluo/RoG-webqsp", "cwq": "rmanluo/RoG-cwq"}
 # RoG names HF splits train/validation/test; our SR splits are train/dev/test.

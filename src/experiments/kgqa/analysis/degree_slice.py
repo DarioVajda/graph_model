@@ -10,11 +10,11 @@ reruns generation per question from the surviving best checkpoints.
 
 Three subcommands (stats/report are CPU; eval needs a GPU):
 
-  python -m src.experiments.kgqa.degree_slice stats \
+  python -m src.experiments.kgqa.analysis.degree_slice stats \
       --resolved <resolved_cfg.json> --out <stats.jsonl>
-  python -m src.experiments.kgqa.degree_slice eval \
+  python -m src.experiments.kgqa.analysis.degree_slice eval \
       --resolved <resolved_cfg.json> --ckpt <checkpoint_dir> --out <preds.jsonl>
-  python -m src.experiments.kgqa.degree_slice report \
+  python -m src.experiments.kgqa.analysis.degree_slice report \
       --stats <stats.jsonl> --preds <preds.jsonl>... [--buckets q4]
 
 Per-question protocol, skip rules, decoding, and scoring are byte-identical to
@@ -32,8 +32,8 @@ from collections import defaultdict
 import numpy as np
 import torch
 
-from .config import RunConfig
-from .evaluate import (_find_prefix_len, eval_f1, eval_hit1, eval_hit,
+from ..config import RunConfig
+from ..evaluate import (_find_prefix_len, eval_f1, eval_hit1, eval_hit,
                        parse_answer_list)
 
 
@@ -41,7 +41,7 @@ from .evaluate import (_find_prefix_len, eval_f1, eval_hit1, eval_hit,
 # stats — per-question structural statistics (CPU)
 # --------------------------------------------------------------------------- #
 def run_stats(cfg, out_path):
-    from .load_data import load_data
+    from ..load_data import load_data
     _, _, test_sets = load_data(cfg)
     (ds_name, dataset), = test_sets.items()
     with open(out_path, "w") as f:
@@ -79,7 +79,7 @@ def run_eval_graph(cfg, ckpt, out_path, max_samples=None):
     from transformers import AutoTokenizer
     from src.models.modeling_gtlm_llama import GTLMLlamaForCausalLM
     from src.utils import GraphCollatorV2
-    from .load_data import load_data
+    from ..load_data import load_data
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # generative_eval always runs generation on the dense eager path
@@ -131,9 +131,9 @@ def run_eval_graph(cfg, ckpt, out_path, max_samples=None):
 def run_eval_flat(cfg, ckpt, out_path, max_samples=None):
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    from .flat_data import flat_data_config_key
-    from .flat_train import tokenize_row
-    from .process_dataset import OUTPUT_ROOT
+    from ..flat_data import flat_data_config_key
+    from ..flat_train import tokenize_row
+    from ..process_dataset import OUTPUT_ROOT
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     base = AutoModelForCausalLM.from_pretrained(

@@ -35,9 +35,10 @@ import os
 import re
 import shutil
 
-from .sr_records import CWQ_ID2MID_TABLE, SPLITS, load_sr_records, split_path
+from ..sr_records import CWQ_ID2MID_TABLE, SPLITS, load_sr_records, split_path
 
-EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# the kgqa experiment dir (one level up from analysis/): data files live there
+EXPERIMENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAMES_PATH = os.path.join(EXPERIMENT_DIR, "entities_names.json")
 V1_BACKUP = os.path.join(EXPERIMENT_DIR, "entities_names.v1.json")
 FB5M_BZ2 = os.path.join(EXPERIMENT_DIR, "data", "FB5M.name.txt.bz2")
