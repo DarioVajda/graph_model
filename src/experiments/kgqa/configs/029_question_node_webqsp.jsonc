@@ -1,0 +1,93 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Question-node ablation (2026-07-15): does question-conditioned graph
+  // encoding close the flat-beats-graph gap? Mechanism-3 diagnosis (analysis
+  // 2026-07-15): the structural mask blocks graph->prompt attention, so the
+  // graph prefix is encoded question-AGNOSTICALLY and all question-conditioned
+  // compute is squeezed into the ~30 prompt-node tokens — while the flat arm's
+  // question-first serialization gives every context token question-conditioned
+  // compute at every layer (and GNN-RAG's GNN reasoner is question-conditioned
+  // too). The fix moves the question into its own QUESTION prefix node: the
+  // existing bidirectional-prefix mask then exposes it to every graph token
+  // with ZERO model/mask changes.
+  //
+  // Three arms = QUESTION's directed out-edge set (feeds SPD/magnetic biases;
+  // token visibility is identical across arms):
+  //   all      — QUESTION -> every base-graph node (structural hub; flattens
+  //              SPD-from-question to 1 everywhere, perturbs the spectrum)
+  //   topics   — QUESTION -> topic entities (preserves the distance-to-topic
+  //              bias gradient; mirrors PROMPT's own edges)
+  //   isolated — no edges (pure text visibility, zero structural coupling)
+  //
+  // Everything else = 021_webqsp_recipe_refresh's graph arm verbatim (like
+  // 025). NO baseline arm here — 021's graph runs (test F1 .7192/.7206/.7224,
+  // mean .7207) are the no-question-node control under the identical recipe;
+  // aggregate this sweep together with those. Flat reference: 74.93 ± .23.
+  //
+  // 3 modes x 3 seeds = 9 runs, ~2-3 GPU-h each.
+  // Requires 028_question_node_data_prep.jsonc's caches to exist first.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/029_question_node_webqsp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "question_node_webqsp",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 9,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+  "question_node": ["all", "topics", "isolated"],
+
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

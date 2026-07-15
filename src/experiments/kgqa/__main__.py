@@ -21,7 +21,8 @@ logs one record; ``data_prep`` just builds that config's ``.gtds`` datasets.
 import argparse
 import os
 
-from .config import RunConfig, DATASETS, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES, PROMPT_STYLES
+from .config import (RunConfig, DATASETS, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES,
+                     PROMPT_STYLES, QUESTION_NODE_MODES)
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
@@ -206,6 +207,12 @@ def build_parser():
                         "(graph: collapse, flat: raw triples). Explicit values run the "
                         "2x2 collapse ablation (--no-cvt-collapse graph arm / "
                         "--cvt-collapse flat arm).")
+    p.add_argument("--question-node", choices=QUESTION_NODE_MODES, default=d.question_node,
+                   help="move the question into its own QUESTION prefix node (graph arm, "
+                        "plain style only); the value picks its directed out-edge set: "
+                        "'all' = every base-graph node, 'topics' = topic entities, "
+                        "'isolated' = no edges. Default 'off' = the historical "
+                        "single-prompt-node format. Part of the .gtds cache key.")
     p.add_argument("--use-gpu", action=B, default=d.use_gpu, help="build SPD/magnetic features on GPU (data prep).")
     p.add_argument("--analyse-dataset", action=B, default=d.analyse_dataset,
                    help="during data prep, also run the answer-coverage ceiling analysis "
@@ -296,7 +303,7 @@ def config_from_args(args):
         versions=args.versions, max_length=args.max_length, rcm=args.rcm,
         data_seed=args.data_seed, data_format_version=args.data_format_version,
         naming_version=args.naming_version, prompt_style=args.prompt_style,
-        cvt_collapse=args.cvt_collapse,
+        cvt_collapse=args.cvt_collapse, question_node=args.question_node,
         use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
         model_name=args.model_name,
         spd=args.spd, max_spd=args.max_spd, magnetic=args.magnetic,

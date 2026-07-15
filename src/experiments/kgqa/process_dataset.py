@@ -305,9 +305,28 @@ def chat_prompt_text(question):
             f"{question}<|eot_id|>" + ASSISTANT_HEADER)
 
 
-def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain"):
+def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain",
+                    question_node="off"):
+    """Attach the PROMPT node (and, unless ``question_node="off"``, a QUESTION node).
+
+    ``question_node`` ("off" | "all" | "topics" | "isolated") moves the question
+    text out of the PROMPT node into its own QUESTION *prefix* node: the model's
+    bidirectional-prefix mask then lets every graph token attend to the question
+    (question-conditioned graph encoding; the flat arm is question-first already).
+    The mode picks QUESTION's directed OUT-edges — they feed the SPD/magnetic
+    bias features, while token visibility comes from the mask regardless:
+      * "all"      — an edge to every base-graph node (pre-PROMPT);
+      * "topics"   — edges to the topic entities (mirrors PROMPT's own edges);
+      * "isolated" — no edges (disconnected components already occur in
+                     production — e.g. detached topic entities).
+    PROMPT keeps its historical topic edges in every mode, so the only delta
+    between modes is QUESTION's out-edge set. "off" = the historical
+    single-prompt-node format, byte-identical to pre-feature builds.
+    """
     g = G.copy()
     if prompt_style == "chat":
+        if question_node != "off":
+            raise ValueError("question_node + chat prompt style is unsupported (see validate()).")
         # Empty target (unanswerable eval row): the prompt ends exactly at the
         # assistant header ("...\n\n") and labels are the terminator only.
         text = chat_prompt_text(record["question"]) + answer_str
@@ -315,7 +334,23 @@ def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain"):
         # No trailing space when the target is empty (unanswerable eval row): the
         # prompt then ends exactly at the "Answer:" delimiter and labels are EOS only.
         suffix = f" {answer_str}" if answer_str else ""
-        text = f"{record['question']}{ANSWER_DELIM}{suffix}"
+        if question_node != "off":
+            # Question lives in the QUESTION node; the prompt node is target-only.
+            text = f"Answer:{suffix}"
+        else:
+            text = f"{record['question']}{ANSWER_DELIM}{suffix}"
+    if question_node != "off":
+        base_nodes = list(g.nodes())            # pre-PROMPT, pre-QUESTION
+        g.add_node("QUESTION", text=record["question"])
+        g.graph["question_node"] = "QUESTION"
+        if question_node == "all":
+            for n in base_nodes:
+                g.add_edge("QUESTION", n)
+        elif question_node == "topics":
+            for tp in record["entities"]:
+                if tp in g:
+                    g.add_edge("QUESTION", tp)
+        # "isolated": no edges.
     g.add_node("PROMPT", text=text)
     g.graph["prompt_node"] = "PROMPT"
     g.graph["gold_answers"] = gold_answers
@@ -336,21 +371,27 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
     denominators equal RoG/GNN-RAG's (all answered questions; such rows score
     ~0, like their retrieval failures).
     """
-    base = build_base_levi(record, entity_names, cfg.rel_mode, cfg.max_nodes,
+    # A QUESTION node consumes one slot of the Levi budget (select_triples
+    # reserves the PROMPT slot itself); shrink the cap so built graphs never
+    # exceed max_nodes (which would spill into the next flex node bucket).
+    budget = cfg.max_nodes - (0 if cfg.question_node == "off" else 1)
+    base = build_base_levi(record, entity_names, cfg.rel_mode, budget,
                            cvt_collapse=cfg.resolved_cvt_collapse("graph"))
     present = present_answer_texts(base, record)
     gold = full_gold_texts(record)
     style = cfg.resolved_prompt_style
     if not present:
         if keep_unanswerable and gold:
-            return [add_prompt_node(base, record, "", gold, prompt_style=style)]
+            return [add_prompt_node(base, record, "", gold, prompt_style=style,
+                                    question_node=cfg.question_node)]
         return []
     graphs = []
     for _ in range(versions):
         order = present[:]
         rng.shuffle(order)
         answer_str = cfg.answer_sep.join(order[: cfg.n_max])
-        graphs.append(add_prompt_node(base, record, answer_str, gold, prompt_style=style))
+        graphs.append(add_prompt_node(base, record, answer_str, gold, prompt_style=style,
+                                      question_node=cfg.question_node))
     return graphs
 
 
@@ -494,7 +535,7 @@ def run_data_prep_mode(cfg, splits=None):
                        "data_format_version": view.data_format_version,
                        "naming_version": view.naming_version,
                        "rel_mode": view.rel_mode, "max_nodes": view.max_nodes,
-                       "n_max": view.n_max,
+                       "n_max": view.n_max, "question_node": view.question_node,
                        "versions": view.versions, "max_length": view.max_length,
                        "rcm": view.rcm,
                        "data_seed": view.data_seed, "model_name": view.model_name,

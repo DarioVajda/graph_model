@@ -1,0 +1,64 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Data-prep step for the question-node ablation (2026-07-15): builds the
+  // .gtds caches for question_node in {all, topics, isolated} on the frozen
+  // WebQSP data config (max_nodes 512, n_max 50, versions 8, dfv3 — matches
+  // 024/026's data keys). question_node moves the question text out of the
+  // PROMPT node into its own QUESTION prefix node (bidirectionally visible
+  // to every graph token via the prefix mask — question-conditioned graph
+  // encoding, the mechanism-3 fix); the value picks QUESTION's directed
+  // out-edge set, which feeds the SPD/magnetic bias features:
+  //   all      — an edge QUESTION -> every base-graph node
+  //   topics   — edges QUESTION -> topic entities (mirrors PROMPT's own edges)
+  //   isolated — no edges (features handle disconnection)
+  // question_node is part of data_config_key(), so each value needs its own
+  // build. The baseline ("off", no question node) is the existing 021/024
+  // cache — no rebuild.
+  //
+  // NB: with a question node on, one Levi-budget slot is reserved for it, so
+  // triple selection can differ from the baseline cache on the handful of
+  // cap-hitting graphs (~3/1628 test) — negligible, and it keeps built node
+  // counts <= max_nodes (no flex node-bucket spill).
+  //
+  // Run this first; the training sweep (029) requires these caches to exist.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/028_question_node_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "question_node_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "question_node": ["all", "topics", "isolated"],
+
+  // data-config keys — must match 021/024's frozen WebQSP data config exactly
+  // (aside from question_node) so the training sweep's cache lookups hit these.
+  "dataset": "webqsp",
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 50,
+  "versions": 8,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

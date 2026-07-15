@@ -56,6 +56,19 @@ ENTITY_NAMES_FILES = {1: "entities_names.v1.json", 2: "entities_names.json"}
 
 DATASETS = ("webqsp", "cwq")   # mirrored in sr_records.DATASETS (no import: keep config dep-free)
 REL_MODES = ("last_1", "last_2", "full")
+# Question-node arm (mechanism-3 fix, 2026-07-15): move the question text out of
+# the PROMPT node into its own QUESTION prefix node, so the bidirectional-prefix
+# mask lets every graph token attend to the question (question-conditioned graph
+# encoding — the flat arm already has this, its serialization is question-first).
+# The value picks the QUESTION node's DIRECTED OUT-EDGE set (edges feed the
+# SPD/magnetic bias features; token-level visibility comes from the mask either
+# way): "all" = an edge to every base-graph node; "topics" = edges to the topic
+# entities (mirrors PROMPT's own edges); "isolated" = no edges (the pipeline
+# already handles disconnected graphs: isolated topic entities occur in
+# production). "off" = no QUESTION node at all — the historical
+# single-prompt-node format ("{q}\nAnswer:"). Always a string; None/null is
+# rejected so "off" is the single spelling of "disabled".
+QUESTION_NODE_MODES = ("off", "all", "topics", "isolated")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
 PROMPT_STYLES = ("plain", "chat")
@@ -116,6 +129,10 @@ class RunConfig:
                                               # True for the graph pipeline (its historical behavior),
                                               # False for the flat serialization (raw triples). The 2x2
                                               # collapse ablation (2026-07-09) sets it explicitly.
+    question_node: str = "off"                # QUESTION prefix node (see QUESTION_NODE_MODES above):
+                                              # "off" = historical "{q}\nAnswer:" prompt node;
+                                              # "all"|"topics"|"isolated" = its directed out-edge set.
+                                              # Graph arm + plain prompt style only; in the cache key.
     use_gpu: bool = True                      # data-prep only (SPD/magnetic on GPU); train ignores it
     analyse_dataset: bool = False             # data-prep only: coverage-ceiling analysis (not in cache key)
 
@@ -324,7 +341,8 @@ class RunConfig:
                 f"_dfv{self.data_format_version}"
                 + ("" if ps == "plain" else f"_ps{ps}")
                 + ("" if self.naming_version == NAMING_VERSION else f"_nm{self.naming_version}")
-                + ("" if self.resolved_cvt_collapse("graph") else "_nocvt"))
+                + ("" if self.resolved_cvt_collapse("graph") else "_nocvt")
+                + ("" if self.question_node == "off" else f"_qn{self.question_node}"))
 
     def validate(self):
         """Reject accepted-but-unsupported combinations with a clear message.
@@ -373,6 +391,21 @@ class RunConfig:
             raise ValueError(
                 f"prompt_style must be one of {PROMPT_STYLES} or None (auto); "
                 f"got {self.prompt_style!r}.")
+        if self.question_node not in QUESTION_NODE_MODES:
+            hint = ' (use "off", not None/null, to disable)' if self.question_node is None else ""
+            raise ValueError(
+                f"question_node must be one of {QUESTION_NODE_MODES}; "
+                f"got {self.question_node!r}{hint}.")
+        if self.question_node != "off":
+            if self.resolved_prompt_style != "plain":
+                raise ValueError(
+                    "question_node requires the plain prompt style (the chat template "
+                    "embeds the question in the prompt node; extending it is deferred "
+                    "until the scale run needs it, like flat+chat).")
+            if self.mode.startswith("flat"):
+                raise ValueError(
+                    "question_node is a graph-arm knob (the flat serialization is "
+                    "already question-first); remove it from flat_* runs.")
         if self.boundary_loss_weight <= 0:
             raise ValueError(
                 f"boundary_loss_weight must be > 0; got {self.boundary_loss_weight}.")
