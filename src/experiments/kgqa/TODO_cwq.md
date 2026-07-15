@@ -293,6 +293,16 @@ cells.*
   help, hurt, or wash per benchmark? (If WebQSP regresses under concat,
   revisit the balancing-knob decision.)
 - [ ] **E4.5 CWQ error analysis**: rerun the E2-style decomposition
+  **Degree slice DONE 2026-07-15** (`degree_slice.py`, per-question rerun of
+  all 6 headline ckpts, full test): flat−graph gap is +4.1–4.2 F1 across the
+  three lower max_ent_deg quartiles and +6.0 [4.3, 7.7] in the top quartile
+  (deg 170–632); same pattern by n_nodes (+3.8→+6.0). So hub-binding adds
+  ~2 pts in the hardest quartile (suggestive, ~1.6σ on the diff-of-diffs)
+  but the DOMINANT component is a ~4-pt uniform deficit present even on
+  tiny low-degree graphs. Per-question F1 corr .86; both-zero 27%, both-
+  perfect 36%; flat strictly better 21.8% vs graph 11.1%, flat's wins NOT
+  degree-concentrated (median deg 58 vs 61 overall). Hard zeros (all
+  seeds): graph 33.1% / flat 30.2%.
   (SR-ceiling floor / set-calibration / miss_copied) on the best CWQ run —
   CWQ is 1–4 hop, so the reasoning-error share is expected to grow; this is
   the number that frames the D5 scale hypothesis on CWQ.
