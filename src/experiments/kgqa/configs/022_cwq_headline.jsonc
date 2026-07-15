@@ -8,8 +8,10 @@
   // caps from E1.1 (max_nodes 1024, n_max 50, versions 1), flat seq_len 8192
   // (covers 99.1-99.4%).
   //
-  // *** num_epochs IS A PLACEHOLDER — set it from the 020_cwq_epoch_probe
-  // *** dev-F1 curve before submitting (dry_run stays true until then).
+  // num_epochs 8 (user call 2026-07-13): the 020 probe peaked at epoch 4.78
+  // (dev-256 F1 0.583) and read flat through 6, but the plateau was short and
+  // noisy — 8 buys headroom to confirm it. mem 200G: the probe hit host-RAM
+  // OOM (MaxRSS 100.6G vs 96G) mid full-split eval after 18h.
   //
   //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/022_cwq_headline.jsonc
   // ─────────────────────────────────────────────────────────────────────────
@@ -25,10 +27,9 @@
       "account": "povejmo",
       "gpus": "B300:1",
       "cpus": 8,
-      "mem": "96G",
+      "mem": "200G",
       "time": "48:00:00",
-      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
-      "dry_run": true            // <- remove ONLY after setting num_epochs from the probe
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
     }
   },
 
@@ -47,7 +48,7 @@
 
   "model_name": "meta-llama/Llama-3.2-1B",
   "rel_mode": "last_1",
-  "num_epochs": 4,               // PLACEHOLDER — freeze from the E4.2 probe curve
+  "num_epochs": 8,               // probe peaked 4.78, flat→6; +2 to test the plateau
   "batch_size": 2,
   "accumulation_steps": 4,
   "lr": 1e-4,

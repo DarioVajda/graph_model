@@ -250,17 +250,42 @@ a CWQ run at 15 epochs would be ~40–60 GPU-h. CWQ is data-rich — epochs come
 down. Plan single-seed exploratory runs first, 3 seeds only for headline
 cells.*
 
-- [ ] **E4.1 data prep** at the E1-chosen caps: CWQ graph + flat caches
-  (train/dev/test). One-off, idempotent, GPU for SPD/magnetic.
-- [ ] **E4.2 epoch/convergence probe** (1 seed, graph arm, CWQ-only): find
-  where dev F1 flattens (expect ≪15 epochs at 27.6k questions; check
-  `versions`=8 is even needed at this data volume — it exists to augment
-  answer *order*, and CWQ answer sets are near-singleton). Freeze the CWQ
-  schedule.
-- [ ] **E4.3 CWQ-only headline arms** (3 seeds each, frozen 1B recipe
+- [x] **E4.1 data prep** ✅ 2026-07-12 at the E1-chosen caps: CWQ graph + flat
+  caches (train/dev/test) built (the E3.5 smokes and the E4.2 probe ran off
+  them).
+- [x] **E4.2 epoch/convergence probe** ✅ 2026-07-13 (`020_cwq_epoch_probe`,
+  6 ep, graph arm): dev-256 F1 peaked **0.583 @ epoch 4.78**, flat through 6
+  (last three readings .565/.570/.567) — no extension warranted; already ~5
+  pts above the E1.3 baseline. Eval loss RISES from epoch ~2 while F1 climbs
+  (overconfidence on confidently-wrong answers): eval loss is not a selection
+  signal here — select on generative dev F1 (as the pipeline does). The
+  post-training full-split eval was host-RAM OOM-killed (MaxRSS 100.6G vs
+  96G; flex shape-buffer growth over full-split shapes suspected) → **CWQ
+  runs ask `mem: 200G`**; best ckpt survived
+  (`cwq_epoch_probe_0000/checkpoint-14000`), no rescoring needed — E4.3
+  supersedes. Schedule: probe validated 6; user call 2026-07-13 raised the
+  headline runs to **8 epochs** to stress the short/noisy plateau.
+- [x] **E4.3 CWQ-only headline arms** (3 seeds each, frozen 1B recipe
   adapted per E4.2): graph-native + flat (collapsed serialization — the D2b
   winner). Evaluate on CWQ. This is the retrieval-matched CWQ result vs
   E1.3's SR-only GNN-RAG baseline.
+  **SUBMITTED 2026-07-13: slurm array job 111530** (`022_cwq_headline`, 6
+  tasks, 8 ep, mem 200G, B300; ~24–28h/run). Aggregate:
+  `python3 -m sweep.report src/experiments/kgqa/results/cwq_headline`.
+  **DONE 2026-07-15** — all 6 runs clean (200G held; full-split test evals
+  completed). Test means ± sd over 3 seeds:
+  | arm | F1 | Hits@1 | Hit* |
+  |---|---|---|---|
+  | flat (collapsed) | **.5857 ± .0041** | **.6072 ± .0052** | **.6387 ± .0062** |
+  | graph-native | .5401 ± .0099 | .5605 ± .0100 | .5933 ± .0087 |
+  | SR-GNN-RAG (Table 15d) | .533 | .556 | .606 (Hit) |
+  Readout: flat clearly beats the retrieval-matched baseline (+5.3 F1);
+  graph-native is only at baseline parity (+0.7 F1, within seed noise; Hit*
+  .593 vs baseline Hit .606). Flat–graph gap **widened** vs WebQSP: 4.6 F1
+  (CWQ) vs 2.4 (WebQSP) — the flat-beats-graph dynamic did NOT flip on
+  3×-larger subgraphs; it strengthened. Dev-256 in-training bests for graph
+  (.580–.597) overstated final test by ~4–6 pts (selection-max inflation);
+  flat dev→test drop was ~3 pts. Graph seed spread ~2.4× flat's.
 - [ ] **E4.4 mixed-training arms** (concat webqsp+cwq; 3 seeds; both arms):
   evaluate on BOTH benchmarks separately. Fill the transfer matrix —
   {webqsp-only, cwq-only, mixed} × {eval webqsp, eval cwq} — from E4.3 +
