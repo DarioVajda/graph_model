@@ -11,9 +11,6 @@ Trainer-level tests for the graph-bias weight-decay fix (TODO_reg Part 1):
 Run with:  pytest tests/test_bias_regularization.py -v
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.dirname(__file__))   # sibling test modules (helpers)
 
 import torch
 from transformers import TrainingArguments
@@ -21,7 +18,7 @@ from transformers import TrainingArguments
 from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 from src.models.bias import MagneticBias, SPDBias, LaplacianBias, RWSEBias
 from src.utils import GraphTrainerV2
-from test_modeling_gtlm_llama_v2 import _BASE
+from tests.helpers.tiny_model import BASE_CONFIG
 
 _BIAS = dict(spd=True, max_spd=8, laplacian=True, rwse=True,
              magnetic=True, magnetic_dim=8)
@@ -29,7 +26,7 @@ _BIAS = dict(spd=True, max_spd=8, laplacian=True, rwse=True,
 
 def _tiny_model(**overrides):
     torch.manual_seed(0)
-    cfg = GTLMLlamaConfig(k_hop=0, graph_attn_impl="eager", **_BIAS, **_BASE, **overrides)
+    cfg = GTLMLlamaConfig(k_hop=0, graph_attn_impl="eager", **_BIAS, **BASE_CONFIG, **overrides)
     return GTLMLlamaForCausalLM(cfg)
 
 

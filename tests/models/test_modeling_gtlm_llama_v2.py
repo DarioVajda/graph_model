@@ -15,8 +15,6 @@ a ``LlamaAttention`` subclass), so weights transfer via a plain ``load_state_dic
 """
 
 import sys, os, tempfile
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.dirname(__file__))   # sibling test modules (helpers)
 
 import pytest
 import torch
@@ -29,15 +27,10 @@ from src.models.legacy.modeling_gtlm_llama_v1 import KHopGraphLlamaForCausalLM, 
 from src.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 from src.utils.text_graph_collator import GraphCollator
 from src.utils.text_graph_collator_v2 import GraphCollatorV2, _single_k_hop_mask
-from test_model_compatibility import iter_bias_param_pairs, _transfer_bias_weights
+from tests.helpers.bias_params import iter_bias_param_pairs, transfer_bias_weights
+from tests.helpers.tiny_model import BASE_CONFIG
 
 DEVICE = torch.device("cpu")
-
-_BASE = dict(
-    hidden_size=64, num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
-    intermediate_size=128, vocab_size=256, max_position_embeddings=256,
-    pad_token_id=0, _attn_implementation="eager",
-)
 
 # A spread of bias configurations to exercise every code path.
 _BIAS_CONFIGS = {
@@ -90,11 +83,11 @@ def _make_items(seed=0):
 def _build_pair(bias_name, k_hop, impl="eager"):
     bias = _bias_kwargs(bias_name)
     v1_cfg = KHopLlamaConfig(
-        graph_attn_bias=GraphAttnBiasConfig(**bias).to_dict(), k_hop=k_hop, **_BASE
+        graph_attn_bias=GraphAttnBiasConfig(**bias).to_dict(), k_hop=k_hop, **BASE_CONFIG
     )
     v1 = KHopGraphLlamaForCausalLM(v1_cfg).to(DEVICE).eval()
 
-    v2_cfg = GTLMLlamaConfig(k_hop=k_hop, graph_attn_impl=impl, **bias, **_BASE)
+    v2_cfg = GTLMLlamaConfig(k_hop=k_hop, graph_attn_impl=impl, **bias, **BASE_CONFIG)
     v2 = GTLMLlamaForCausalLM(v2_cfg).to(DEVICE).eval()
 
     missing, unexpected = v2.load_state_dict(v1.state_dict(), strict=False)
@@ -171,17 +164,17 @@ def _build_v0_v2(bias_name, dtype=torch.float32):
     bias_cfg = GraphAttnBiasConfig(**bias)
 
     v0 = GraphLlamaForCausalLM(
-        GraphLlamaConfig(graph_attn_bias=bias_cfg.to_dict(), **_BASE)
+        GraphLlamaConfig(graph_attn_bias=bias_cfg.to_dict(), **BASE_CONFIG)
     ).to(DEVICE, dtype).eval()
     v2 = GTLMLlamaForCausalLM(
-        GTLMLlamaConfig(k_hop=0, graph_attn_impl="eager", **bias, **_BASE)
+        GTLMLlamaConfig(k_hop=0, graph_attn_impl="eager", **bias, **BASE_CONFIG)
     ).to(DEVICE, dtype).eval()
 
     # Base llama weights share names (both subclass LlamaForCausalLM); the bias
     # params do not, so transfer them through the explicit name mapping.
     missing, _ = v2.load_state_dict(v0.state_dict(), strict=False)
     assert not [k for k in missing if "inv_freq" not in k and "graph_bias" not in k], missing
-    _transfer_bias_weights(v0, v2, bias_cfg)
+    transfer_bias_weights(v0, v2, bias_cfg)
     return v0, v2, bias_cfg
 
 
@@ -259,7 +252,7 @@ def test_directed_flag_changes_attention():
 def test_k_hop_directed_config_roundtrip():
     """The directed flag must survive save/load so a downloaded checkpoint is
     self-describing."""
-    cfg = GTLMLlamaConfig(k_hop=2, k_hop_directed=True, **_BASE)
+    cfg = GTLMLlamaConfig(k_hop=2, k_hop_directed=True, **BASE_CONFIG)
     with tempfile.TemporaryDirectory() as d:
         GTLMLlamaForCausalLM(cfg).save_pretrained(d)
         rt = GTLMLlamaConfig.from_pretrained(d)

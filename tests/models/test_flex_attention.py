@@ -19,8 +19,6 @@ Covers:
   * generation runs through the dense decode fallback (q_len < kv_len).
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import networkx as nx
 import pytest

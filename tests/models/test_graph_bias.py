@@ -8,7 +8,6 @@ from the repo root (graph_model/).
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest
 import torch

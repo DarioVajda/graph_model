@@ -11,8 +11,6 @@ CPU-safe tests for the flex integration that don't need the CUDA kernel:
     isolating the model+dataset from the flex kernel.
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import networkx as nx
 import pytest
