@@ -24,4 +24,12 @@ def load_bias_parameters(model, path):
     bias_path = os.path.join(path, "bias_parameters.pt")
     if os.path.exists(bias_path):
         state_dict = torch.load(bias_path, map_location="cpu", weights_only=True)
-        model.load_state_dict(state_dict, strict=False)
+        result = model.load_state_dict(state_dict, strict=False)
+        if result.unexpected_keys:
+            raise RuntimeError(
+                f"bias_parameters.pt at {path} holds {len(result.unexpected_keys)} tensors "
+                f"with no matching model parameter (e.g. {result.unexpected_keys[:3]}) — "
+                "the checkpoint and the model disagree on parameter names, so the graph-bias "
+                "weights were NOT restored.")
+        return result
+    return None

@@ -32,7 +32,7 @@ try:
 except Exception:  # pragma: no cover
     PeftModel = None
 
-from ..models.io import save_bias_parameters
+from ..models.io import save_bias_parameters, load_bias_parameters
 
 
 class GraphTrainerV2(Trainer):
@@ -167,6 +167,28 @@ class GraphTrainerV2(Trainer):
             json.dump({"base_model_name_or_path": base_model_name}, f, indent=4)
         self.model.config.save_pretrained(output_dir)
         save_bias_parameters(self.model, output_dir, params=self.active_params)
+
+    def _load_best_model(self):
+        """Restore the graph-bias tensors alongside the adapter.
+
+        HF's ``_load_best_model`` only knows about the checkpoint formats it
+        wrote itself — for a PEFT model it calls ``load_adapter`` and stops.
+        Our ``save_model`` stores the trainable graph-bias tensors separately
+        (``bias_parameters.pt``), so without this override the "best" model
+        after training is the best-step adapter paired with END-of-training
+        bias weights — a model that never existed, silently mis-scoring every
+        post-train ``evaluate()`` (found 2026-07-17; see reeval_bias_bug).
+        """
+        super()._load_best_model()
+        if self.active_params is None:
+            return  # pure-HF checkpoint (no separate bias file)
+        ckpt = self.state.best_model_checkpoint
+        if ckpt is None:
+            return
+        if load_bias_parameters(self.model, ckpt) is None:
+            raise FileNotFoundError(
+                f"active_params is set but {ckpt} has no bias_parameters.pt — "
+                "the best checkpoint cannot be fully restored.")
 
 
 # ── Evaluation helpers (prompt-only exact match, no prediction_step override) ───

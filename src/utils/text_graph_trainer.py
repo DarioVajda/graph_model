@@ -3,7 +3,7 @@ import torch
 from transformers import Trainer
 from peft import PeftModel
 
-from ..models.io import save_bias_parameters
+from ..models.io import save_bias_parameters, load_bias_parameters
 
 class GraphTrainer(Trainer):
     def __init__(self, *args, custom_prediction_step=None, active_params=None, bias_lr=None, **kwargs):
@@ -129,6 +129,28 @@ class GraphTrainer(Trainer):
 
         # In both cases: Extract and save the custom graph bias-related parameters
         save_bias_parameters(self.model, output_dir, params=self.active_params)
+
+    def _load_best_model(self):
+        """Restore the graph-bias tensors alongside the adapter.
+
+        HF's ``_load_best_model`` only reloads the formats it wrote itself (for
+        a PEFT model: ``load_adapter``, nothing else), but ``save_model`` above
+        stores the trainable graph-bias tensors separately in
+        ``bias_parameters.pt``. Without this override, ``load_best_model_at_end``
+        yields the best-step adapter combined with end-of-training bias weights,
+        and every post-train ``evaluate()`` scores that mismatched model
+        (found 2026-07-17; see kgqa/results/reeval_bias_bug).
+        """
+        super()._load_best_model()
+        if self.active_params is None:
+            return
+        ckpt = self.state.best_model_checkpoint
+        if ckpt is None:
+            return
+        if load_bias_parameters(self.model, ckpt) is None:
+            raise FileNotFoundError(
+                f"active_params is set but {ckpt} has no bias_parameters.pt — "
+                "the best checkpoint cannot be fully restored.")
 
     def create_optimizer(self):
         """
