@@ -213,6 +213,55 @@ def test_v2_eager_matches_v0_backward(bias_name):
         _close(g0[name].grad, g2[name].grad, name)
 
 
+# ── v0 + SDPA: the configuration the TAG benchmarks experiment actually ran ─────
+# Everything above pins v0-EAGER == v2-eager. But `src/experiments/tag_benchmarks`
+# historically built v0 with `attn_implementation="sdpa"`, and v0 honors that (it
+# dispatches through ALL_ATTENTION_FUNCTIONS on config._attn_implementation), so that
+# experiment's migration to v2 rested on a case no test covered. sdpa and eager compute
+# the same function in a different accumulation order; this pins that they agree here.
+
+def _build_v0_sdpa_v2(bias_name, dtype=torch.float32):
+    """A (v0-sdpa, v2-eager, bias_cfg) triple with identical weights, on CPU."""
+    bias = _bias_kwargs(bias_name)
+    bias_cfg = GraphAttnBiasConfig(**bias)
+
+    v0_config = {**BASE_CONFIG, "_attn_implementation": "sdpa"}
+    v0 = GraphLlamaForCausalLM(
+        GraphLlamaConfig(graph_attn_bias=bias_cfg.to_dict(), **v0_config)
+    ).to(DEVICE, dtype).eval()
+    assert v0.config._attn_implementation == "sdpa", "v0 did not take the sdpa backend"
+
+    v2 = GTLMLlamaForCausalLM(
+        GTLMLlamaConfig(k_hop=0, graph_attn_impl="eager", **bias, **BASE_CONFIG)
+    ).to(DEVICE, dtype).eval()
+
+    missing, _ = v2.load_state_dict(v0.state_dict(), strict=False)
+    assert not [k for k in missing if "inv_freq" not in k and "graph_bias" not in k], missing
+    transfer_bias_weights(v0, v2, bias_cfg)
+    return v0, v2, bias_cfg
+
+
+@pytest.mark.parametrize("bias_name", list(_BIAS_CONFIGS.keys()))
+def test_v2_eager_matches_v0_sdpa(bias_name):
+    """v2 (eager) logits/loss equal v0-SDPA's — the pre-refactor tag_benchmarks path."""
+    items = _make_items()
+    v0, v2, _ = _build_v0_sdpa_v2(bias_name)
+
+    old_batch = GraphCollator()([dict(it) for it in items])
+    new_batch = GraphCollatorV2(pad_token_id=0, k_hop=0)([dict(it) for it in items])
+    labels = [it["labels"] for it in items]
+
+    with torch.no_grad():
+        out0 = v0(input_graph_batch=old_batch, labels=labels)
+        out2 = v2(**new_batch)
+
+    mask = new_batch["attention_mask"].bool()
+    diff = (out0.logits[mask] - out2.logits[mask]).abs().max().item()
+    assert diff < 1e-4, f"[{bias_name}] max logit diff {diff:.2e}"
+    assert abs(out0.loss.item() - out2.loss.item()) < 1e-4, \
+        f"[{bias_name}] loss diff {abs(out0.loss.item()-out2.loss.item()):.2e}"
+
+
 # ── Directed K-hop gate ─────────────────────────────────────────────────────────
 
 def test_directed_k_hop_mask_chain():
