@@ -1,0 +1,37 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build the dataset cache for the nine reported tasks, both graph encodings.
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/001_data_prep.jsonc
+  //
+  // Cheap (CPU only) and idempotent: a split that is already built is skipped, so
+  // re-running this is safe and fast. In practice train/ and test/ were built by
+  // the original pipeline and only validation/ is missing — this fills it in.
+  //
+  // The bias flags are deliberately NOT here: every split carries spd + rrwp +
+  // magnetic features regardless of which arm consumes them, so all ablation arms
+  // share one built dataset.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "001_data_prep",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "local"                   // no GPU needed; runs here, sequentially
+  },
+
+  "mode": "data_prep",
+
+  // ── axes: every reported task x both encodings (9 x 2 = 18 configs) ───────
+  "task": ["node_count", "edge_count", "cycle_check", "triangle_counting",
+           "node_degree", "connected_nodes", "reachability", "edge_existence",
+           "shortest_path"],
+  "graph_type": ["standard", "incidence"],
+
+  // ── feature-generation knobs (these define the cache identity) ────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "max_length": 1024,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,                    // 0 = keep all N eigenvectors
+  "max_rw_steps": 16,
+  "use_gpu": false
+}

@@ -1,0 +1,251 @@
+"""
+Shared configuration for the GraphQA experiment.
+
+One ``RunConfig`` dataclass holds EVERY knob the entry points read; ``__main__.py``
+builds a ``RunConfig`` from argparse and stays a thin dispatcher, so a value lives
+in exactly one place.
+
+GraphQA (`baharef/GraphQA <https://huggingface.co/datasets/baharef/GraphQA>`_) poses
+one algorithmic question per graph (count the nodes, find a shortest path, ...). Each
+example becomes a text-attributed graph whose prompt node carries the question and
+answer; supervision is the answer span only, scored by exact match.
+
+Two graph encodings are compared (``graph_type``): ``standard`` (one node per graph
+vertex) and ``incidence`` (the bipartite Levi graph, one node per vertex AND per
+edge — hence ~5-10x the nodes). The ablation turns the three graph-bias features
+(``spd`` / ``rrwp`` / ``magnetic``) on and off independently.
+
+This experiment runs the **v2** model only (``GTLMLlamaForCausalLM``). The legacy v0
+path it used historically is pinned as numerically equivalent to v2-eager at fp32 by
+``tests/models/test_modeling_gtlm_llama_v2.py`` (loss + every bias gradient) and
+``tests/models/test_v2_ragged_magnetic_padding.py`` (the same, at the wide within-batch
+node spread this experiment's incidence graphs produce), so nothing is lost by dropping
+it — and k-hop masking is gained for free.
+"""
+
+import os
+from dataclasses import dataclass
+
+
+MODEL_NAME = "meta-llama/Llama-3.2-1B"
+EXPERIMENT_NAME = "graphqa"
+
+EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASETS_DIR = os.path.join(EXPERIMENT_DIR, "processed_datasets")
+RAW_DIR = os.path.join(EXPERIMENT_DIR, "hf_dataset")
+
+GRAPH_TYPES = ("standard", "incidence")
+IMPLS = ("v2-eager", "v2-flex")
+DTYPES = ("fp32", "bf16")
+
+# Every task `process_dataset` can build. (`maximum_flow` ships in the raw download
+# but is unbuildable — the released files omit the edge capacities the task needs.)
+TASKS = (
+    "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count",
+    "edge_existence", "node_classification", "node_count", "node_degree",
+    "reachability", "shortest_path", "triangle_counting",
+)
+
+# The nine tasks the paper table reports (`analysis/prep_table.py`). These are exactly
+# the tasks that ship an official validation split, so the reported protocol never
+# falls back to carving val out of train.
+REPORTED_TASKS = (
+    "node_count", "edge_count", "cycle_check", "triangle_counting", "node_degree",
+    "connected_nodes", "reachability", "edge_existence", "shortest_path",
+)
+
+# Tasks whose raw download has no `*_zero_shot_validation.json`; these fall back to
+# carving `val_fraction` off the end of train (see `data.py`). None are reported.
+TASKS_WITHOUT_OFFICIAL_VAL = ("disconnected_nodes", "node_classification")
+
+# Graph-bias features whose data + model modules are both wired here.
+WIRED_FEATURES = ("spd", "rrwp", "magnetic")
+# Exposed in the schema but not produced by data prep -> rejected by validate().
+UNWIRED_FEATURES = ("laplacian", "rwse")
+
+# The feature-generation settings the on-disk dataset cache was built with. A config
+# matching these resolves to the historical, untagged cache path (see `dataset_dir`).
+_CACHE_DEFAULTS = dict(
+    model_name=MODEL_NAME, max_length=1024,
+    magnetic_q=0.25, magnetic_m=0, max_rw_steps=16,
+)
+
+
+@dataclass
+class RunConfig:
+    """Every knob the train / data_prep entry points read (built from argparse)."""
+
+    # ── what to run ────────────────────────────────────────────────────────────
+    mode: str = "train"                         # "train" | "data_prep"
+    task: str = "shortest_path"                 # which GraphQA task (see TASKS)
+    graph_type: str = "standard"                # "standard" | "incidence"
+
+    # ── model ──────────────────────────────────────────────────────────────────
+    model_name: str = MODEL_NAME
+    # v2-eager is the default because it is the implementation pinned equivalent to
+    # the historical v0 runs, and because GraphQA sequences are short (~35 tokens
+    # standard / ~150 incidence) — far below the lengths where flex pays off.
+    impl: str = "v2-eager"
+    flex_compile_mode: str = "max-autotune-no-cudagraphs"
+    # fp32 is the dtype the v0<->v2 parity is proven at. bf16 halves memory and is
+    # what the flex benchmarks measured, but it is a real numerical change, not a
+    # free speedup — opt in deliberately.
+    dtype: str = "fp32"
+
+    # ── k-hop attention gate ───────────────────────────────────────────────────
+    k_hop: int = 0                              # 0 disables the mask (the historical setting)
+    k_hop_directed: bool = False                # GraphQA graphs are symmetric digraphs
+
+    # ── graph-bias features ────────────────────────────────────────────────────
+    # The ablation arms flip these; the dataset always carries all three (they are
+    # not part of the cache key), so arms share one built dataset.
+    spd: bool = True
+    max_spd: int = 8                            # model-side distance-bucket clamp
+    rrwp: bool = True
+    max_rw_steps: int = 16                      # random-walk steps (data + model)
+    magnetic: bool = True
+    magnetic_dim: int = 32                      # model bias-MLP hidden width
+    magnetic_q: float = 0.25                    # magnetic-Laplacian charge (data)
+    magnetic_m: int = 0                         # eigenvectors kept (0 -> all N)
+    laplacian: bool = False                     # unwired (see UNWIRED_FEATURES)
+    rwse: bool = False                          # unwired
+
+    # ── dataset ────────────────────────────────────────────────────────────────
+    max_length: int = 1024                      # per-node tokenization cap
+    # Fallback val size for the tasks with no official validation split; ignored for
+    # every reported task.
+    val_fraction: float = 0.15
+
+    # ── LoRA (alpha is always 2*r, derived — never an independent knob) ────────
+    lora: bool = True
+    lora_r: int = 16
+    lora_dropout: float = 0.05
+
+    # ── training schedule ──────────────────────────────────────────────────────
+    num_epochs: int = 20
+    batch_size: int = 4
+    accumulation_steps: int = 8
+    lr: float = 3e-5                            # base / LoRA learning rate
+    bias_lr: float = 5e-3                       # graph-bias learning rate
+    eval_steps: int = 20                        # val eval + checkpoint cadence
+    max_steps: int = -1                         # >0 caps optimizer steps (smoke tests)
+    seed: int = 42
+    num_workers: int = 0
+    gradient_checkpointing: bool = False
+    include_f1: bool = False                    # also log macro-F1 alongside exact match
+
+    # ── data prep ──────────────────────────────────────────────────────────────
+    use_gpu: bool = False                       # build SPD/RRWP/magnetic on GPU
+
+    # ── tracking ───────────────────────────────────────────────────────────────
+    wandb_project: str = None                   # None -> no tracking
+
+    # ── derived helpers ────────────────────────────────────────────────────────
+
+    def torch_dtype(self):
+        import torch
+        return {"fp32": torch.float32, "bf16": torch.bfloat16}[self.dtype]
+
+    def backend(self):
+        """The graph-attention backend ('eager' | 'flex') from ``impl``."""
+        return self.impl.split("-", 1)[1]
+
+    def lora_config(self):
+        """LoRA config dict for ``select_active_params`` (``None`` when disabled)."""
+        if not self.lora:
+            return None
+        return {"r": self.lora_r, "lora_alpha": self.lora_r * 2,
+                "lora_dropout": self.lora_dropout}
+
+    def bias_params(self):
+        """The graph-bias flag/architecture dict passed to the model config.
+
+        Only enabled, wired features contribute keys, so the model builds modules
+        exactly for the features an arm uses. ``magnetic_dim`` is the model's MLP
+        width — distinct from ``magnetic_m`` (the eigenvector count), which is a
+        data/collator knob and is NOT part of this dict. ``magnetic_q`` rides along
+        as provenance (no bias module reads it — the charge is consumed when the
+        eigenvectors are computed during data prep), so a saved checkpoint records
+        which charge its features were built with.
+        """
+        cfg = {}
+        if self.spd:
+            cfg.update(spd=True, max_spd=self.max_spd)
+        if self.rrwp:
+            cfg.update(rrwp=True, max_rw_steps=self.max_rw_steps)
+        if self.magnetic:
+            cfg.update(magnetic=True, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q)
+        return cfg
+
+    def arm(self):
+        """Short ablation-arm label ('base' | 'no-spd' | ...) for records + tables."""
+        off = [f for f in WIRED_FEATURES if not getattr(self, f)]
+        if not off:
+            return "base"
+        return "no-" + "+".join(off)
+
+    def uses_default_cache(self):
+        """True when this config's feature settings match the built-on-disk cache."""
+        return all(getattr(self, k) == v for k, v in _CACHE_DEFAULTS.items())
+
+    def dataset_dir(self):
+        """Directory holding this config's built splits.
+
+        Feature-generation knobs are part of the cache identity: changing
+        ``magnetic_q`` (say) must not silently reuse datasets built with the old
+        value. Configs matching ``_CACHE_DEFAULTS`` resolve to the historical
+        untagged path so the large existing cache (and ``graphqa_mag_khop``, which
+        hardcodes that layout) keeps working; anything else gets a tagged sibling.
+        """
+        base = f"{DATASETS_DIR}/{self.graph_type}/{self.task}"
+        if self.uses_default_cache():
+            return base
+        tags = [f"q{self.magnetic_q}", f"rw{self.max_rw_steps}", f"len{self.max_length}"]
+        if self.magnetic_m:
+            tags.append(f"m{self.magnetic_m}")
+        if self.model_name != MODEL_NAME:
+            tags.append(self.model_name.split("/")[-1])
+        return f"{base}__{'_'.join(tags)}"
+
+    def has_official_val(self):
+        return self.task not in TASKS_WITHOUT_OFFICIAL_VAL
+
+    def run_name(self):
+        """Default (standalone) run name; the sweep runner overrides this."""
+        lora_tag = f"_lora{self.lora_r}" if self.lora else ""
+        khop_tag = f"_k{self.k_hop}" if self.k_hop else ""
+        return (f"{EXPERIMENT_NAME}_{self.arm()}_{self.task}_{self.graph_type}"
+                f"{lora_tag}{khop_tag}_s{self.seed}")
+
+    def validate(self):
+        """Reject settings this experiment does not support, with a clear message.
+
+        The sweep runner is experiment-agnostic and passes any key through; this is
+        where the experiment draws its own line (fail fast, before any GPU work).
+        """
+        if self.mode not in ("train", "data_prep"):
+            raise ValueError(f"Unknown mode {self.mode!r} (expected 'train' or 'data_prep').")
+        if self.task not in TASKS:
+            raise ValueError(f"Unknown task {self.task!r} (expected one of {TASKS}).")
+        if self.graph_type not in GRAPH_TYPES:
+            raise ValueError(f"Unknown graph_type {self.graph_type!r} (expected one of {GRAPH_TYPES}).")
+        if self.impl not in IMPLS:
+            raise ValueError(f"Unknown impl {self.impl!r} (expected one of {IMPLS}).")
+        if self.dtype not in DTYPES:
+            raise ValueError(f"Unknown dtype {self.dtype!r} (expected one of {DTYPES}).")
+
+        enabled_unwired = [f for f in UNWIRED_FEATURES if getattr(self, f)]
+        if enabled_unwired:
+            raise ValueError(
+                f"Bias feature(s) {enabled_unwired} are exposed in the config but not "
+                f"wired in this experiment (data prep computes only {WIRED_FEATURES}). "
+                f"Disable them or extend process_dataset.py to produce their features.")
+
+        if self.lora_r < 0:
+            raise ValueError("lora_r must be >= 0.")
+        if self.k_hop < 0:
+            raise ValueError("k_hop must be >= 0 (0 disables the mask).")
+        if not (0.0 < self.val_fraction < 1.0):
+            raise ValueError("val_fraction must be in (0, 1).")
+        return self

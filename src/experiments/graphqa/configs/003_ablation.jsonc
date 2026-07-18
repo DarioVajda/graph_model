@@ -1,0 +1,79 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // The GraphQA study: both graph encodings + the three-feature ablation, over
+  // the nine reported tasks and three seeds (5 arms x 9 tasks x 3 seeds = 135).
+  //
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/001_data_prep.jsonc   # once
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/003_ablation.jsonc
+  //   python3 -m sweep.report src/experiments/graphqa/results/003_ablation                           # when jobs finish
+  //   python3 -m src.experiments.graphqa.analysis.prep_table src/experiments/graphqa/results/003_ablation
+  //
+  // The arm bundle pairs graph_type with the bias flags because the two are not a
+  // free cross: the ablation is a study of the STANDARD encoding, and incidence is
+  // only run with every bias on. A plain cartesian product would spend 3/8 of the
+  // jobs on incidence-ablation cells that were never part of the study.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "003_ablation",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 16,           // 135 jobs; bound the concurrent load
+      "partition": "frida",
+      "account": "povejmo",
+      // Pinned to B300 for this run. train_runtime_s is comparable within a brand.
+      "gpus": ["B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+      // "dry_run": true             // write sbatch_commands.sh without submitting
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "task": ["node_count", "edge_count", "cycle_check", "triangle_counting",
+           "node_degree", "connected_nodes", "reachability", "edge_existence",
+           "shortest_path"],
+  "seed": [42, 43, 44],
+
+  // ── the arms (graph encoding + which biases are active, varying together) ──
+  "arm": [
+    { "graph_type": "standard",  "spd": true,  "rrwp": true,  "magnetic": true  },
+    { "graph_type": "incidence", "spd": true,  "rrwp": true,  "magnetic": true  },
+    { "graph_type": "standard",  "spd": false, "rrwp": true,  "magnetic": true  },
+    { "graph_type": "standard",  "spd": true,  "rrwp": false, "magnetic": true  },
+    { "graph_type": "standard",  "spd": true,  "rrwp": true,  "magnetic": false }
+  ],
+
+  // ── the recipe (the historical GraphQA settings) ──────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+
+  // ── bias architecture ─────────────────────────────────────────────────────
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

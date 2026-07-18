@@ -1,0 +1,62 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Fast end-to-end smoke test: does a run train, evaluate, and log a record?
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/002_smoke.jsonc
+  //
+  // Four optimizer steps per config on one small task — this checks the plumbing
+  // (data -> collator -> model -> trainer -> best-val -> test -> runs.jsonl), not
+  // the science. Two arms so the bias-flag wiring is exercised in both directions.
+  //
+  // EXPECT test_accuracy = 0.0 here; that is a pass, not a failure. The metric is
+  // exact match over the whole answer span (all-or-nothing), and at 4 steps warmup
+  // has barely lifted the LR off zero — there is no way for it to be non-zero yet.
+  // What this config proves is that a run completes and logs a well-formed record;
+  // read `eval_loss` (finite, ~4.3 at init) as the signal that labels line up.
+  // For a run that should actually LEARN, see 004_canary.jsonc.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "002_smoke",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",        // both configs in one sequential GPU job
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],   // either brand — a smoke test should take whatever is free
+      "cpus": 8,
+      "mem": "64G",
+      "time": "01:00:00",             // smoke: minutes of work, not the 12h budget
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "task": "node_count",
+  "graph_type": "standard",
+
+  // ── two arms: all biases on, and magnetic off ────────────────────────────
+  "arm": [
+    { "spd": true, "rrwp": true, "magnetic": true  },
+    { "spd": true, "rrwp": true, "magnetic": false }
+  ],
+
+  "seed": 42,
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+
+  // ── capped for speed ─────────────────────────────────────────────────────
+  "max_steps": 4,
+  "num_epochs": 1,
+  "eval_steps": 2,
+  "batch_size": 2,
+  "accumulation_steps": 2,
+
+  "lora": true,
+  "lora_r": 16,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "wandb_project": null
+}

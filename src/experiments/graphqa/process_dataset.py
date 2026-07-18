@@ -1,3 +1,13 @@
+"""
+Turning raw GraphQA json into text-attributed graphs.
+
+Each raw example carries a question ("The edges in G are: (0, 1), ...") and an answer;
+this module parses the edge list back out of that text, rebuilds the graph (optionally
+as its bipartite Levi/incidence form), attaches the question+answer as a prompt node
+wired to the nodes the question mentions, and computes the graph features the model's
+biases consume. `data.py` drives it; `RunConfig` supplies the knobs.
+"""
+
 import os
 import json
 import networkx as nx
@@ -5,6 +15,7 @@ import re
 from tqdm import tqdm
 
 from ...utils import TextGraphDataset
+from .config import RAW_DIR
 
 def load_json_dataset(path):
     with open(path, 'r') as f:
@@ -233,94 +244,42 @@ def example_to_graph(example, graph_type="standard", problem_type=None):
     return graph
 
 
-def process_dataset(dataset_dir, output_dir, graph_type="standard", problem_type=None, tokenizer=None, spectral_params=None):
+# Every `task_description` ends with "...\nA: " and the answer follows it, so the
+# supervised span starts just past this marker (see GetGraphLabels). Derived from the
+# tokenizer rather than hardcoded as token ids: the ids are model-specific, and a
+# silently wrong literal would mask the wrong span rather than fail.
+ANSWER_PREFIX = "A:"
+
+
+def raw_split_file(task, split):
+    """Path to a raw GraphQA json ('train' | 'validation' | 'test')."""
+    return os.path.join(RAW_DIR, task, f"{task}_zero_shot_{split}.json")
+
+
+def has_raw_split(task, split):
+    return os.path.exists(raw_split_file(task, split))
+
+
+def build_split(cfg, split, tokenizer):
+    """Build one split into a fully-featured TextGraphDataset (not saved).
+
+    Computes exactly the features the collator can consume: shortest-path distances,
+    RRWP and the magnetic Laplacian. All three are always computed regardless of which
+    bias arm will *use* them, so every arm shares one built dataset — the bias flags
+    are deliberately not part of the cache identity (see RunConfig.dataset_dir).
     """
-    This function saves the processed dataset.
+    examples = load_json_dataset(raw_split_file(cfg.task, split))
+    graphs = [
+        example_to_graph(example, graph_type=cfg.graph_type, problem_type=cfg.task)
+        for example in tqdm(examples, desc=f"{cfg.graph_type}/{cfg.task}/{split}: building graphs")
+    ]
+    ds = TextGraphDataset(graphs, dataset_label=f"{cfg.graph_type}/{cfg.task}")
 
-    Arguments:
-        dataset_dir: Directory containing the input JSON files for training and testing.
-        output_dir: Directory where the processed graph datasets will be saved (if needed).
-        graph_type: Type of graph to create ("standard" or "incidence")
-        problem_type: Type of problem to solve
-        tokenizer: Tokenizer for processing text data
-        spectral_params: Parameters for computing spectral features
-    """
-    print('=' * 100)
-    print(f"Processing dataset for problem type: {problem_type}, graph type: {graph_type}")
-    print('=' * 100)
+    ds.tokenize(tokenizer, max_length=cfg.max_length, add_eos=True)
+    question_end = tokenizer.encode(ANSWER_PREFIX, add_special_tokens=False)
+    ds.compute_labels(GetGraphLabels(question_end=question_end))
 
-    train_data = load_json_dataset(os.path.join(dataset_dir, problem_type, f"{problem_type}_zero_shot_train.json"))
-    test_data = load_json_dataset(os.path.join(dataset_dir, problem_type, f"{problem_type}_zero_shot_test.json"))
-
-    train_graphs = []
-    for example in tqdm(train_data, desc=f"Processing training examples (graph_type={graph_type}, problem={problem_type})"): 
-        train_graphs.append(example_to_graph(example, graph_type=graph_type, problem_type=problem_type))    
-    test_graphs = []
-    for example in tqdm(test_data, desc=f"Processing testing examples (graph_type={graph_type}, problem={problem_type})"): 
-        test_graphs.append(example_to_graph(example, graph_type=graph_type, problem_type=problem_type))
-
-    # Initialize TextGraphDataset instances for training and testing datasets
-    train_ds = TextGraphDataset(train_graphs, dataset_label=f"{graph_type}/{problem_type}")
-    test_ds = TextGraphDataset(test_graphs, dataset_label=f"{graph_type}/{problem_type}")
-
-    # This represents --> "A:"
-    question_end = [ 32, 25 ] 
-    
-    def dataset_post_processing(ds, question_end, params):
-        # Tokenize all text data in each graph in the dataset 
-        ds.tokenize(tokenizer, max_length=1024, add_eos=True)
-
-        # Compute the labels for each graph in the dataset
-        get_graph_labels = GetGraphLabels(question_end=question_end)
-        ds.compute_labels(get_graph_labels)
-
-        # Compute other spectral features for each graph in the dataset
-        # ds.compute_laplacian_coordinates(params.get("laplacian_embedding_dim", 16))
-        ds.compute_shortest_path_distances(use_gpu=False)
-        # ds.compute_rwse(params.get("max_rwse_steps", 16))
-        ds.compute_rrwp(params.get("max_rrwp_steps", 16), use_gpu=False)
-        ds.compute_magnetic_lap(params.get("magnetic_laplacian_q", 0.25), use_gpu=False)
-
-    dataset_post_processing(train_ds, question_end, spectral_params)
-    dataset_post_processing(test_ds, question_end, spectral_params)
-
-    # create output directory if it doesn't exist
-    if output_dir is not None:
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(os.path.join(output_dir, graph_type), exist_ok=True)
-        os.makedirs(os.path.join(output_dir, graph_type, problem_type), exist_ok=True)
-
-        train_ds.save(os.path.join(output_dir, graph_type, problem_type, "train"))
-        test_ds.save(os.path.join(output_dir, graph_type, problem_type, "test"))
-
-    print(f"Finished processing dataset for problem type: {problem_type}, graph type: {graph_type}, saved to {output_dir}/{graph_type}/{problem_type}.\n\n")
-
-
-if __name__ == "__main__":
-    base_llama_model = "meta-llama/Llama-3.2-1B"
-
-    dataset_dir = "./src/experiments/graphqa/hf_dataset"
-    output_dir = "./src/experiments/graphqa/processed_datasets"
-
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(base_llama_model)
-
-    spectral_params = {
-        "laplacian_embedding_dim": 16,
-        "max_rwse_steps": 16,
-        "max_rrwp_steps": 16,
-        "magnetic_laplacian_q": 0.25,
-    }
-    
-    # Problem type options:
-    problem_types = [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ] # (maximum_flow is excluded because the dataset does not contain edge capacities)
-
-
-    # Process the dataset and generate both "standard" and "incidence" graph versions for each problem type
-    for problem_type in problem_types:
-        for graph_type in ["standard", "incidence"]:
-            process_dataset(dataset_dir, output_dir, graph_type=graph_type, problem_type=problem_type, tokenizer=tokenizer, spectral_params=spectral_params)
-
-
-
-
+    ds.compute_shortest_path_distances(use_gpu=cfg.use_gpu)
+    ds.compute_rrwp(cfg.max_rw_steps, use_gpu=cfg.use_gpu)
+    ds.compute_magnetic_lap(q=cfg.magnetic_q, use_gpu=cfg.use_gpu, m=cfg.magnetic_m)
+    return ds

@@ -1,2 +1,7 @@
+__pycache__/
 hf_dataset/
 processed_datasets/
+results/
+logs/
+*.gtds
+*.gtds.lock

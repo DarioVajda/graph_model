@@ -1,0 +1,67 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // ONE real run at the full recipe, on the easiest task — the check that the
+  // pipeline produces science, not just a well-formed record.
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/004_canary.jsonc
+  //
+  // 002_smoke can only prove a run completes: exact match over the whole answer
+  // span is all-or-nothing, so a 4-step run reports 0.0 whether the pipeline is
+  // perfect or subtly broken. This config trains node_count (the easiest task —
+  // published baselines reach 99.6) for the real 20 epochs. A healthy pipeline
+  // lands high; a labels/collator/bias bug that 002_smoke cannot see shows up
+  // here as an accuracy that never leaves 0.
+  //
+  // Run this before committing to the 135-run 003_ablation sweep.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "004_canary",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "task": "node_count",
+  "graph_type": "standard",
+  "seed": 42,
+
+  // ── all biases on: the base arm ──────────────────────────────────────────
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  // ── the real recipe (identical to 003_ablation) ──────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": null
+}

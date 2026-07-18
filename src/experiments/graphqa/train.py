@@ -1,436 +1,194 @@
-from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
+"""
+Train ONE GraphQA configuration and log ONE record.
 
-from .load_dataset import load_graphqa_datasets
+Protocol: train on the train split, evaluate + checkpoint every ``eval_steps``,
+reload the best-validation checkpoint at the end (HF ``load_best_model_at_end``),
+and report that checkpoint's **test** exact match. Selection is on validation
+accuracy — the metric the experiment actually reports — rather than validation
+loss, so the chosen checkpoint is the most accurate one rather than the most
+confident one.
+
+The model is the v2 GTLM stack (``GTLMLlamaForCausalLM``), built directly as in the
+kgqa experiment. See ``config.py`` for why the legacy v0 path was dropped.
+"""
+
+import os
 
 import torch
-import os, json
-import datetime
-import random
-from transformers import TrainingArguments, AutoTokenizer, TrainerCallback
-from peft import LoraConfig, get_peft_model
-import numpy as np
-import wandb
+from transformers import AutoTokenizer, TrainingArguments, set_seed
 
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from ...models import GTLMLlamaConfig, GTLMLlamaForCausalLM
+from ...utils import GraphCollatorV2, GraphTrainerV2, set_wandb_project
+from ...utils.text_graph_trainer_v2 import make_compute_metrics, shift_logits_for_metrics
+from ...train import select_active_params, print_trainable_parameters, get_device
+from .config import EXPERIMENT_NAME, EXPERIMENT_DIR
+from .data import load_data
+from ._io import append_jsonl
 
-#region -------- Code for model intialization and parameter selection --------
-def init_model(model_name, device, bias_params):
-    # model = GraphLlamaForCausalLM.from_pretrained(model_name, bias_type=bias_type, max_spd=max_spd, attn_implementation="eager")
-    config = GraphLlamaConfig.from_pretrained(model_name, **bias_params)
-    model = GraphLlamaForCausalLM.from_pretrained(model_name, config=config, attn_implementation="eager")
+# Fallback results path for standalone runs (no --runs-jsonl from the sweep runner).
+_DEFAULT_RUNS_JSONL = os.path.join(EXPERIMENT_DIR, "results", "train_runs.jsonl")
+
+# v2 names every graph-bias module under one umbrella prefix.
+ACTIVE_PARAMS = ["graph_bias"]
+METRIC = "eval_em_accuracy"     # exact match over the answer span
+
+
+def _save_train_record(cfg, run_name, sizes, results, runs_jsonl, sweep_meta=None):
+    """Append this run's axes, hyperparameters and metrics as one JSONL line."""
+    record = {
+        "mode": "train",
+        **(sweep_meta or {}),
+        "run_name": run_name,
+        # ── the experiment's axes (analysis/prep_table.py groups on these) ──
+        "task": cfg.task, "graph_type": cfg.graph_type, "arm": cfg.arm(),
+        "spd": cfg.spd, "rrwp": cfg.rrwp, "magnetic": cfg.magnetic,
+        "seed": cfg.seed,
+        # ── hyperparameters ──
+        "model_name": cfg.model_name, "impl": cfg.impl, "dtype": cfg.dtype,
+        "k_hop": cfg.k_hop, "k_hop_directed": cfg.k_hop_directed,
+        "max_spd": cfg.max_spd, "max_rw_steps": cfg.max_rw_steps,
+        "magnetic_dim": cfg.magnetic_dim, "magnetic_q": cfg.magnetic_q,
+        "magnetic_m": cfg.magnetic_m,
+        "lora": cfg.lora, "lora_r": cfg.lora_r,
+        "lora_alpha": cfg.lora_r * 2 if cfg.lora else None,
+        "lora_dropout": cfg.lora_dropout,
+        "lr": cfg.lr, "bias_lr": cfg.bias_lr, "num_epochs": cfg.num_epochs,
+        "batch_size": cfg.batch_size, "accumulation_steps": cfg.accumulation_steps,
+        "eval_steps": cfg.eval_steps, "max_steps": cfg.max_steps,
+        "max_length": cfg.max_length,
+        # ── data provenance ──
+        "val_source": "official" if cfg.has_official_val() else "carved_from_train",
+        "train_size": sizes[0], "val_size": sizes[1], "test_size": sizes[2],
+        # ── results ──
+        **(results or {}),
+    }
+    append_jsonl(runs_jsonl, record)
+    print(f"[results] appended training run to {runs_jsonl}")
+
+
+def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
+    """Train this config; log one record (the best-val checkpoint's test accuracy)."""
+    runs_jsonl = runs_jsonl or _DEFAULT_RUNS_JSONL
+    sweep_meta = {}
+    if sweep_id:
+        sweep_meta["sweep_id"] = sweep_id
+    if run_name:
+        sweep_meta["sweep_run"] = run_name
+    internal_run = f"{sweep_id}_{run_name}" if (sweep_id and run_name) else cfg.run_name()
+
+    report_to = "wandb" if cfg.wandb_project else "none"
+    # Set the project BEFORE the trainer is built: its WandbCallback initializes
+    # lazily, so setting it afterwards only works by accident of that lazy init.
+    if cfg.wandb_project:
+        set_wandb_project(cfg.wandb_project)
+
+    device = get_device()
+    train_dataset, val_dataset, test_dataset = load_data(cfg)
+    sizes = (len(train_dataset), len(val_dataset), len(test_dataset))
+
+    # Seed before the build so the graph-bias parameter init is determined by
+    # `seed` too, not just the data order — this pairs arms within a seed. (HF's
+    # Trainer seeds itself, but only once the model already exists.)
+    set_seed(cfg.seed)
+
+    config = GTLMLlamaConfig.from_pretrained(
+        cfg.model_name, **cfg.bias_params(),
+        k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
+        graph_attn_impl=cfg.backend(),
+        **({"flex_compile_mode": cfg.flex_compile_mode} if cfg.backend() == "flex" else {}),
+    )
+    model = GTLMLlamaForCausalLM.from_pretrained(
+        cfg.model_name, config=config, graph_attn_impl=cfg.backend(),
+        torch_dtype=cfg.torch_dtype())
     model.to(device)
     for param in model.parameters():
         param.requires_grad = False
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
+    model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=cfg.lora_config())
+    print_trainable_parameters(model)
 
-    return model, tokenizer
+    # magnetic_m is the collator's eigenvector cap (0 -> keep all, which is what the
+    # cached datasets store); it is NOT the model's magnetic_dim.
+    collator = GraphCollatorV2(
+        tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
+        magnetic_m=cfg.magnetic_m if cfg.magnetic else 0,
+        pad_to_block=(cfg.backend() == "flex"), max_spd=cfg.max_spd)
 
-def select_active_params(model, active_params=None, lora=None):
-    """
-    Applies LoRA if a configuration dictionary is provided.
-    Sets requires_grad=True for parameters whose names contain any of the substrings in active_params.
-    If active_params is None, no additional parameters are unfrozen.
-    If active_params is "all", all parameters are set to requires_grad=True.
-    """
-    # apply LoRA if configuration is provided
-    if lora is not None:
-        print("Applying LoRA with config:", lora)
-        lora_config = LoraConfig(
-            r=lora.get("r", 8),
-            lora_alpha=lora.get("lora_alpha", 16),
-            target_modules=lora.get("target_modules", ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]),
-            lora_dropout=lora.get("lora_dropout", 0.05),
-            bias=lora.get("bias", "none"),
-            task_type="CAUSAL_LM",
-        )
-        # wrap the model with Low-Rank Adapters
-        model = get_peft_model(model, lora_config)
-
-    # handle custom active paramters (usually those used for computing the graph-based attention biases)
-    if active_params == "all":
-        for param in model.parameters():
-            param.requires_grad = True
-    elif active_params is not None:
-        for name, param in model.named_parameters():
-            if any(active_param in name for active_param in active_params):
-                param.requires_grad = True
-
-    return model
-
-def print_trainable_parameters(model):
-    """
-    Prints the number of trainable parameters in the model, 
-    differentiating between LoRA adapters and custom active parameters.
-    """
-    trainable_lora_params = 0
-    trainable_custom_params = 0
-    all_param = 0
-    
-    print("List of custom active parameters (requires_grad=True):")
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        all_param += num_params
-        
-        if param.requires_grad:
-            # PEFT always includes 'lora' in the adapter weight names
-            if "lora" in name.lower():
-                trainable_lora_params += num_params
-                print(f" - {name} ({num_params:,} params) [LoRA Adapter]")
-            else:
-                trainable_custom_params += num_params
-                print(f" - {name} ({num_params:,} params)")
-                
-    total_trainable = trainable_lora_params + trainable_custom_params
-    
-    print("\n" + "="*50)
-    print("TRAINABLE PARAMETER SUMMARY")
-    print("="*50)
-    print(f"LoRA Adapters:       {trainable_lora_params:>15,}")
-    print(f"Custom Graph Biases: {trainable_custom_params:>15,}")
-    print("-" * 50)
-    print(f"Total Trainable:     {total_trainable:>15,}")
-    print(f"Total Model Params:  {all_param:>15,}")
-    print(f"Trainable %:         {100 * total_trainable / all_param:>14.4f}%")
-    print("="*50 + "\n")
-#endregion
-
-#region -------- Code for custom evaluation --------
-class PreprocessLogitsEM:
-    def __call__(self, logits, labels):
-        # 1. Unpack logits if the model returns a tuple (common in HF models)
-        if isinstance(logits, tuple):
-            logits = logits[0]
-            
-        # 2. Get the predicted token IDs via argmax
-        preds = torch.argmax(logits, dim=-1)
-        
-        # 3. Shift predictions to align with labels
-        # The logit at sequence index 't' predicts the label at 't+1'
-        shifted_preds = torch.full_like(preds, fill_value=-100)
-        shifted_preds[:, 1:] = preds[:, :-1]
-        
-        return shifted_preds
-
-def compute_exact_match(eval_preds):
-    preds, labels = eval_preds
-    
-    exact_matches = 0
-    total = len(labels)
-    
-    for i in range(total):
-        # Find the valid label tokens (ignoring -100 padding)
-        valid_indices = labels[i] != -100
-        
-        if not np.any(valid_indices):
-            continue
-            
-        example_preds = preds[i][valid_indices]
-        example_labels = labels[i][valid_indices]
-        
-        # Exact Match: ALL predicted tokens must match the ground truth
-        if np.array_equal(example_preds, example_labels):
-            exact_matches += 1
-            
-    return {
-        "em_accuracy": float(exact_matches) / total if total > 0 else 0.0,
-    }
-#endregion
-
-def training_run(
-    model, 
-    train_dataset, 
-    eval_dataset, 
-    test_dataset,
-    collator, 
-    run_name, 
-    num_epochs=3, 
-    batch_size=8, 
-    learning_rate=5e-5, 
-    bias_learning_rate=1e-3,
-    accumulation_steps=4, 
-    pad_token_id=None,
-    active_params=None,
-    seed=42,
-    use_wandb=True,
-):
-    # if label_options is None or pad_token_id is None:
-    #     raise ValueError("Label options and pad token ID must be provided for the training run.")
-
-    STEPS_PER_EPOCH = len(train_dataset) // batch_size // accumulation_steps
-    EVAL_EVERY = 20
-
+    steps_per_epoch = max(1, len(train_dataset) // cfg.batch_size // cfg.accumulation_steps)
+    gc = cfg.gradient_checkpointing
     training_args = TrainingArguments(
-        # Basic training arguments:
-        num_train_epochs=num_epochs,                            # Total number of training epochs to perform
-        output_dir=f"./checkpoints/{run_name}",                 # Directory to save checkpoints and logs
-        logging_steps=1,                                        # Log training metrics every 5 steps
-        per_device_train_batch_size=batch_size,                 # Batch size per device during training
-        gradient_accumulation_steps=accumulation_steps,         # Number of steps to accumulate gradients before performing an optimizer step
-        gradient_checkpointing=False,                           # Gradient checkpointing to save memory
+        num_train_epochs=cfg.num_epochs,
+        max_steps=cfg.max_steps,
+        output_dir=f"./checkpoints/{EXPERIMENT_NAME}/{internal_run}",
+        logging_steps=1,
+        per_device_train_batch_size=cfg.batch_size,
+        # Match eval batch to train batch: flex compiles per (B, L, N) shape family,
+        # so HF's default eval batch of 8 would mint a second kernel set.
+        per_device_eval_batch_size=cfg.batch_size,
+        gradient_accumulation_steps=cfg.accumulation_steps,
+        gradient_checkpointing=gc,
+        gradient_checkpointing_kwargs={"use_reentrant": False} if gc else None,
+        dataloader_num_workers=cfg.num_workers,
+        dataloader_persistent_workers=(cfg.num_workers > 0),
 
-        # Evaluation arguments:
-        eval_strategy="steps",                                  # Evaluate every eval_steps during training
-        eval_steps=EVAL_EVERY,                                  # Number of steps between evaluations
-        save_strategy="steps",                                  # Save a checkpoint based on save_steps
-        save_steps=EVAL_EVERY,                                  # Number of steps between saving checkpoints
-        metric_for_best_model="eval_loss",                      # Metric to use for determining the best model
-        greater_is_better=False,                                # Lower loss is better
-        save_total_limit=1,                                     # Maximum number of checkpoints to store
-        load_best_model_at_end=True,                            # Load the best model at the end of training
+        report_to=report_to,
+        run_name=internal_run,
 
-        # WandB logging:
-        report_to="wandb" if use_wandb else None,              # Report training metrics to Weights & Biases
-        run_name=run_name,                                      # Name of the WandB run for better organization
-        
-        # Learning rate scheduler:
-        learning_rate=learning_rate,                            # The initial learning rate for Adam
-        lr_scheduler_type="cosine_with_min_lr",                 # Type of learning rate scheduler to use
-        lr_scheduler_kwargs={"min_lr": learning_rate/10},       # Additional arguments for the learning rate scheduler
-        warmup_steps=STEPS_PER_EPOCH*2,                           # Number of steps for the warmup phase (when the learning rate is increasing linearly)
-        weight_decay=0.1,                                       # Weight decay to apply (if not zero)
+        learning_rate=cfg.lr,
+        lr_scheduler_type="cosine_with_min_lr",
+        lr_scheduler_kwargs={"min_lr": cfg.lr / 10},
+        warmup_steps=steps_per_epoch * 2,
+        weight_decay=0.1,
 
-        seed=seed,
-        data_seed=seed,
+        # Best-val-checkpoint protocol: eval + save every eval_steps, keep the best,
+        # reload it at the end for the single test pass.
+        eval_strategy="steps", eval_steps=cfg.eval_steps,
+        save_strategy="steps", save_steps=cfg.eval_steps,
+        metric_for_best_model=METRIC, greater_is_better=True,
+        save_total_limit=1, load_best_model_at_end=True,
+
+        seed=cfg.seed,
+        data_seed=cfg.seed,
     )
 
-    preprocess_logits = PreprocessLogitsEM()
-
-    # initialize using the custom class
-    trainer = GraphTrainer(
+    trainer = GraphTrainerV2(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=val_dataset,
         data_collator=collator,
-
-        # Evaluation parameters
-        compute_metrics=compute_exact_match,
-        # preprocess_logits_for_metrics=preprocess_logits,
-
-        # set the active parameters for bias saving in the trainer callback
-        active_params=active_params,
-
-        # set the custom bias learning rate to create two distinct parameter groups
-        bias_lr=bias_learning_rate,
-    )
-
-    trainer.train()
-
-    # Evaluate on the test dataset and log them to WandB
-    test_results = trainer.evaluate(test_dataset, metric_key_prefix="test")
-    em_acc_key = [key for key in test_results.keys() if "em_accuracy" in key][0]
-    test_accuracy = test_results[em_acc_key]
-    print(f"Test results: {test_accuracy}")
-
-    # Save the test results to a JSON file in the run directory
-    results_path = "./src/experiments/graphqa/results.json"
-    if not os.path.exists(results_path):
-        with open(results_path, "w") as f:
-            json.dump({}, f)
-    with open(results_path, "r") as f:
-        all_results = json.load(f)
-
-    all_results = {
-        run_name: test_accuracy,
-        **all_results,
-    }
-    with open(results_path, "w") as f:
-        json.dump(all_results, f, indent=4)
-
-    print("!"*100)
-    print(f"Final test accuracy for run {run_name}: {test_accuracy}")
-    print("!"*100)
-
-    wandb.finish()
-
-    return test_accuracy
-
-def save_run_metadata(run_name, bias_params, graph_type, train_dataset, eval_dataset, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
-    """
-    Save the metadata of the training run to the run_metadata.json file with the run_name being the key (if there are multiple runs with the same base name, append "_v2", "_v3", etc. to the run name).
-
-    Returns:
-    run_name --> The final run name used for this training run (which may have a version suffix if there were duplicate names).
-    """
-    metadata_path = "./src/experiments/graphqa/run_metadata.json"
-    if not os.path.exists(metadata_path):
-        with open(metadata_path, "w") as f:
-            json.dump({}, f)
-    with open(metadata_path, "r") as f:
-        run_metadata = json.load(f)
-    
-    if run_name in run_metadata:
-        version = 2
-        new_run_name = f"{run_name}_v{version}"
-        while new_run_name in run_metadata:
-            version += 1
-            new_run_name = f"{run_name}_v{version}"
-        run_name = new_run_name
-
-    # determine what is the exact time of the run
-    date_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # 1. Create a dictionary specifically for the new entry
-    new_entry = {
-        run_name: {
-            "date_time": date_time,
-            "bias_params": bias_params,
-            "graph_type": graph_type,
-            "train_dataset": train_dataset,
-            "eval_dataset": eval_dataset,
-            "base_model": base_model,
-            "active_params": active_params,
-            "num_epochs": num_epochs,
-            "learning_rate": lr,
-            "bias_learning_rate": bias_lr,
-            "lora_config": lora_config,
-        }
-    }
-
-    # 2. Prepend the new entry to the existing metadata by unpacking both
-    # The new_entry comes first, so it stays at the top!
-    run_metadata = {**new_entry, **run_metadata}
-
-    with open(metadata_path, "w") as f:
-        json.dump(run_metadata, f, indent=4)
-    
-    return run_name
-
-def parse_args():
-    import argparse
-    parser = argparse.ArgumentParser(description="Train a graph-based LLM on the GraphQA dataset with configurable options.")
-    parser.add_argument("--without", type=str, default=None, help="Which bias to exclude from the model. Options: None, 'spd', 'rrwp', 'magnetic'")
-    parser.add_argument("--graph_type", type=str, default="standard", help="Type of graph representation to use. Options: 'standard' or 'incidence'")
-    parser.add_argument("--task", type=str, default="shortest_path", help="Which GraphQA task to train on. Options: node_count, edge_count, cycle_check, triangle_counting, node_degree, connected_nodes, reachability, edge_existence, shortest_path")
-    parser.add_argument("--lora_r", type=int, default=16, help="The rank for LoRA adapters. If 0 or None, LoRA will not be applied.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility (used for both the global seed and data seed).")
-
-    args = parser.parse_args()
-
-    return args
-
-def run_training(without, graph_type, task, lora_r, seed, run_name=None, use_wandb=True):
-    # --------------------------------------------------------------------------
-    #region ----------------------- CONFIGURATION ------------------------------
-    # --------------------------------------------------------------------------
-    WITHOUT, GRAPH_TYPE, TASK, LORA_R, SEED = without, graph_type, task, lora_r, seed
-    BIAS_PARAMS = { 
-        "spd": WITHOUT!='spd', 
-        "max_spd": 8, 
-        "laplacian": False, 
-        "rwse": False, 
-        "rrwp": WITHOUT!='rrwp', 
-        "max_rw_steps": 16,
-        "magnetic": WITHOUT!='magnetic',
-        "magnetic_dim": 32,
-        "magnetic_q": 0.25
-    }
-    # Options: [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ]
-    # Options in order: node_count, edge_count, cycle_check, triangle_counting, node_degree, connected_nodes, reachability, edge_existence, shortest_path
-    TRAIN_DATASET_TASKS =   [ TASK ]
-    EVAL_DATASET_TASKS  =   [ TASK ]
-    MODEL_NAME = "meta-llama/Llama-3.2-1B"
-    ACTIVE_PARAMS = ["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"] # options: list of parameter name substrings to activate, or "all" to activate all parameters, or None to freeze all parameters
-    LR = 3e-5
-    BIAS_LR=5e-3
-    NUM_EPOCHS = 20
-
-    LORA_CONFIG = {
-        "r": LORA_R,
-        "lora_alpha": LORA_R*2,
-        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        "lora_dropout": 0.05,
-        "bias": "none",
-    }
-    # LORA_CONFIG = None
-
-    # run_suffix = "+".join([ 
-    #     bias_type
-    #     for bias_type 
-    #     in [f"spd({BIAS_PARAMS['max_spd']})", "laplacian", "rwse", f"rrwp({BIAS_PARAMS['max_rw_steps']})", f"magnetic(dim={BIAS_PARAMS['magnetic_dim']},q={BIAS_PARAMS['magnetic_q']})"]
-    #     if BIAS_PARAMS[bias_type.split('(')[0]]
-    # ])
-    run_suffix = "+".join(TRAIN_DATASET_TASKS) + (f"_no_{WITHOUT}" if WITHOUT else "")
-    
-    # Create a unique run name and save the run metadata
-    RUN_NAME = f"GraphQA_{GRAPH_TYPE}{'_lora' if LORA_CONFIG else ''}_{run_suffix}" if run_name is None else run_name
-    RUN_NAME = save_run_metadata(
-        run_name=RUN_NAME,
-        bias_params=BIAS_PARAMS,
-        graph_type=GRAPH_TYPE,
-        train_dataset=TRAIN_DATASET_TASKS,
-        eval_dataset=EVAL_DATASET_TASKS,
-        base_model=MODEL_NAME,
+        compute_metrics=make_compute_metrics(include_f1=cfg.include_f1),
+        preprocess_logits_for_metrics=shift_logits_for_metrics,
         active_params=ACTIVE_PARAMS,
-        lr=LR,
-        bias_lr=BIAS_LR,
-        lora_config=LORA_CONFIG,
-        num_epochs=NUM_EPOCHS,
-    )
-    #endregion
-    # --------------------------------------------------------------------------
-
-    set_wandb_project("GraphLLM")
-    device = get_device()
-
-    model, tokenizer = init_model(model_name=MODEL_NAME, device=device, bias_params=BIAS_PARAMS)
-
-    # --------------------------------------------------------------------------
-    #region ----------------------- LOAD DATASETS ------------------------------
-    # --------------------------------------------------------------------------
-    datasets_dir = "./src/experiments/graphqa/processed_datasets"
-    train_dataset, test_dataset = load_graphqa_datasets(datasets_dir, TRAIN_DATASET_TASKS, EVAL_DATASET_TASKS, graph_type=GRAPH_TYPE)
-    train_ds_size = len(train_dataset)
-    eval_dataset = train_dataset[int(0.85*train_ds_size):]  # use the last 15% of the training dataset as the evaluation dataset
-    train_dataset = train_dataset[:int(0.85*train_ds_size)]  # use the first 85% of the training dataset for training
-
-
-    collator = GraphCollator()
-
-    print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Eval dataset size: {len(eval_dataset)}")
-    print(f"Test dataset size: {len(test_dataset)}")
-
-    #endregion
-    # --------------------------------------------------------------------------
-
-
-    # --------------------------------------------------------------------------
-    #region ---------------- FINE TUNE SELECTED PARAMETERS ---------------------
-    # --------------------------------------------------------------------------
-    print("Fine-tuning these parameters: ", ACTIVE_PARAMS)
-    model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=LORA_CONFIG)
-    print_trainable_parameters(model)
-
-    return training_run(
-        model=model,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        test_dataset=test_dataset,
-        collator=collator,
-        run_name=RUN_NAME,
-        num_epochs=NUM_EPOCHS,
-        batch_size=4,
-        learning_rate=LR,
-        bias_learning_rate=BIAS_LR,
-        accumulation_steps=8,
-        active_params=ACTIVE_PARAMS,
-        seed=SEED,
-        use_wandb=use_wandb,
+        bias_lr=cfg.bias_lr,
     )
 
-    #endregion
-    # --------------------------------------------------------------------------
+    train_output = trainer.train()
+    # The best checkpoint is loaded now: score it on val (sanity) and on test (the
+    # reported metric). GraphTrainerV2.get_eval_dataloader invalidates HF's
+    # constant-"eval"-key dataloader cache when a different split is passed, so
+    # these two calls really do evaluate val and then test.
+    val_metrics = trainer.evaluate(eval_dataset=val_dataset, metric_key_prefix="eval")
+    test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
 
-if __name__ == "__main__":
-    args = parse_args()
-    run_training(
-        without=args.without,
-        graph_type=args.graph_type,
-        task=args.task,
-        lora_r=args.lora_r,
-        seed=args.seed,
-    )
+    results = {
+        "test_accuracy": test_metrics.get("test_em_accuracy"),
+        "best_val_accuracy": val_metrics.get(METRIC),
+        "test_loss": test_metrics.get("test_loss"),
+        "train_runtime_s": train_output.metrics.get("train_runtime"),
+        "train_steps_per_second": train_output.metrics.get("train_steps_per_second"),
+    }
+    if cfg.include_f1:
+        results["test_f1"] = test_metrics.get("test_em_f1")
+    print(f"[results] {cfg.task}/{cfg.graph_type} [{cfg.arm()}] "
+          f"test_accuracy={results['test_accuracy']} "
+          f"(best-val={results['best_val_accuracy']}) "
+          f"runtime={results['train_runtime_s']}s")
+
+    _save_train_record(cfg, internal_run, sizes, results, runs_jsonl=runs_jsonl,
+                       sweep_meta=sweep_meta)
+    del model
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    return results

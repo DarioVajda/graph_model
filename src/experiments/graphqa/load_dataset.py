@@ -1,3 +1,13 @@
+"""
+Multi-task loading of built GraphQA datasets.
+
+`data.py` is what this experiment's own runs use (one task per run, three splits).
+This module survives for the *merged multi-task* case — several tasks concatenated
+into one dataset — which `graphqa_mag_khop` depends on.
+
+For reference, average total tokens per example: ~35 (standard) / ~150 (incidence).
+"""
+
 from ...utils import TextGraphDataset
 
 from tqdm import tqdm
@@ -42,26 +52,3 @@ def load_graphqa_datasets(dataset_dir, train_tasks, test_tasks, graph_type):
         datasets[split] = combined_ds
         
     return datasets["train"], datasets["test"]
-    
-
-
-if __name__ == "__main__":
-    dataset_dir = "./src/experiments/graphqa/processed_datasets"
-    train_problem_types = [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ]
-    test_problem_types = [ "connected_nodes", "disconnected_nodes", "cycle_check", "edge_count", "edge_existence", "node_classification", "node_count", "node_degree", "reachability", "shortest_path", "triangle_counting" ]
-    standard_train_dataset, standard_test_dataset = load_graphqa_datasets(dataset_dir, train_problem_types, test_problem_types, "standard")
-    incidence_train_dataset, incidence_test_dataset = load_graphqa_datasets(dataset_dir, train_problem_types, test_problem_types, "incidence")
-
-    # compute the average total number of tokens in both the standard and incidence test datasets
-    def compute_avg_tokens(dataset):
-        total_tokens = 0
-        for item in dataset:
-            for node in range(len(item['input_ids'])):
-                total_tokens += len(item['input_ids'][node])
-        return total_tokens / len(dataset)
-
-    # avg_tokens_standard = compute_avg_tokens(standard_test_dataset)
-    # avg_tokens_incidence = compute_avg_tokens(incidence_test_dataset)
-    # print(f"Average total number of tokens in standard test dataset: {avg_tokens_standard}")    # ~35  tokens
-    # print(f"Average total number of tokens in incidence test dataset: {avg_tokens_incidence}")  # ~150 tokens
-    
