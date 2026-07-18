@@ -1,0 +1,7 @@
+__pycache__/
+raw_data/
+processed_data/
+results/
+logs/
+*.gtds
+*.gtds.lock
