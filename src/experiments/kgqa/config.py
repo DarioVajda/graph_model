@@ -69,6 +69,17 @@ REL_MODES = ("last_1", "last_2", "full")
 # single-prompt-node format ("{q}\nAnswer:"). Always a string; None/null is
 # rejected so "off" is the single spelling of "disabled".
 QUESTION_NODE_MODES = ("off", "all", "topics", "isolated")
+# E3 (TODO.md, 2026-07-16): how GraphCollatorV2 assigns each node's starting
+# RoPE position. "reset" = historical behavior, every node's tokens start at
+# local position 0 (zero inter-node relative-position signal survives RoPE —
+# see TODO.md's mechanism-1 writeup). "spd_depth" = a node's tokens start at
+# STRIDE * depth(node), depth = shortest-path distance from the prompt node
+# (clamped to max_spd, the same far/unreachable bucket SPDBias itself clamps
+# into); the prompt node's own depth is one past the deepest prefix node, so
+# generation-time query positions stay strictly larger than any prefix node's.
+# A TRAIN-TIME collator knob only — not in the .gtds cache key (doesn't touch
+# cached graph features) — so both modes reuse the same built dataset.
+NODE_POSITION_MODES = ("reset", "spd_depth")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
 PROMPT_STYLES = ("plain", "chat")
@@ -170,6 +181,10 @@ class RunConfig:
     lora_r: int = 16                          # LoRA rank (0 disables LoRA)
     k_hop: int = 2                            # k-hop attention gate (0 disables)
     k_hop_directed: bool = False
+    node_position_mode: str = "reset"         # E3 (see NODE_POSITION_MODES above): "reset" (historical)
+                                              # | "spd_depth". Graph arm only; requires spd=True when
+                                              # "spd_depth"; NOT in the .gtds cache key (train-time
+                                              # collator behavior only).
     graph_attn_impl: str = "flex"             # "flex" | "eager"
     dtype: str = "bf16"                       # "bf16" | "fp32"
     gradient_checkpointing: bool = True
@@ -418,6 +433,20 @@ class RunConfig:
                 "flat_shuffle_lines is a flat-arm-only diagnostic (it scrambles the "
                 "flat serialization's triple-line order; the graph arm has no "
                 "equivalent linear order to scramble) — remove it from graph runs.")
+        if self.node_position_mode not in NODE_POSITION_MODES:
+            raise ValueError(
+                f"node_position_mode must be one of {NODE_POSITION_MODES}; "
+                f"got {self.node_position_mode!r}.")
+        if self.node_position_mode == "spd_depth":
+            if not self.spd:
+                raise ValueError(
+                    "node_position_mode='spd_depth' requires spd=True (it derives each "
+                    "node's position from shortest_path_dists, the same feature SPDBias "
+                    "consumes).")
+            if self.mode.startswith("flat"):
+                raise ValueError(
+                    "node_position_mode is a graph-arm knob (the flat serialization has "
+                    "no per-node RoPE reset to fix); remove it from flat_* runs.")
         if self.boundary_loss_weight <= 0:
             raise ValueError(
                 f"boundary_loss_weight must be > 0; got {self.boundary_loss_weight}.")

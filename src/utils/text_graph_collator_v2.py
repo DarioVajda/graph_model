@@ -108,7 +108,8 @@ class GraphCollatorV2:
     def __init__(self, tokenizer=None, pad_token_id: int = None, k_hop: int = 0,
                  k_hop_directed: bool = False, magnetic_m: int = 0,
                  pad_to_block: bool = False, block_size: int = 128,
-                 len_buckets=None, node_buckets=None):
+                 len_buckets=None, node_buckets=None,
+                 node_position_mode: str = "reset", max_spd: int = 64):
         """
         Args:
             tokenizer:   Optional tokenizer; used only to source ``pad_token_id``.
@@ -146,6 +147,24 @@ class GraphCollatorV2:
                          power-of-two-floored-at-32 ladder), a callable
                          ``f(N)->N``, or a sorted list of allowed node counts. No
                          alignment constraint (N is not a kernel tile dimension).
+            node_position_mode: How each node's tokens' ``position_ids`` start
+                         (E3, TODO.md). ``"reset"`` (default) — every node
+                         restarts at local position 0, the historical behavior;
+                         RoPE then carries zero inter-node relative-position
+                         signal. ``"spd_depth"`` — a node's tokens start at
+                         ``STRIDE * depth(node)``, where ``depth`` is its
+                         shortest-path distance from the prompt node (clamped to
+                         ``max_spd``, requires ``shortest_path_dists`` on every
+                         item) and the prompt node's own depth is one past the
+                         deepest prefix node. With a single-node (prompt-only)
+                         graph both modes are identical to plain ``arange(len)``
+                         (backward compatible); depth is a pure function of
+                         graph structure, invariant to input node-listing order
+                         (permutation equivariant). See ``_node_base_offsets``.
+            max_spd:     Depth clamp for ``"spd_depth"`` (ignored otherwise) —
+                         the same far/unreachable bucket cap ``SPDBias`` itself
+                         clamps into; construct from the model's config
+                         (``GraphCollatorV2(..., max_spd=cfg.max_spd)``).
         """
         self.tokenizer      = tokenizer
         self.k_hop          = k_hop
@@ -155,6 +174,8 @@ class GraphCollatorV2:
         self.block_size     = block_size
         self.len_buckets    = len_buckets  if len_buckets  is not None else default_len_buckets
         self.node_buckets   = node_buckets if node_buckets is not None else default_node_buckets
+        self.node_position_mode = node_position_mode
+        self.max_spd        = max_spd
 
         if pad_token_id is not None:
             self.pad_token_id = pad_token_id
@@ -247,8 +268,11 @@ class GraphCollatorV2:
         prompt_idx = int(item['prompt_node'])
         order = [j for j in range(len(graph_input_ids)) if j != prompt_idx] + [prompt_idx]
 
+        base_offset = self._node_base_offsets(item, graph_input_ids, prompt_idx)
+
         tokens    = torch.cat([graph_input_ids[j] for j in order])
-        positions = torch.cat([torch.arange(graph_input_ids[j].shape[0]) for j in order])
+        positions = torch.cat([base_offset[j] + torch.arange(graph_input_ids[j].shape[0])
+                               for j in order])
         nodes     = torch.cat([
             torch.full((graph_input_ids[j].shape[0],), j, dtype=torch.long) for j in order
         ])
@@ -263,6 +287,51 @@ class GraphCollatorV2:
             'prefix_len': prefix_len,
             'prompt_len': prompt_len,
         }
+
+    def _node_base_offsets(self, item: TextGraph, graph_input_ids: list, prompt_idx: int) -> dict:
+        """Per-node starting position for this graph's tokens (E3, TODO.md) —
+        ``{node_idx: int}``, added to each node's local ``arange(len)``.
+
+        ``"reset"``: every node starts at 0 — byte-identical to the
+        pre-E3 code (pinned by ``test_reset_mode_is_a_noop`` in
+        ``tests/test_node_position_encoding.py``).
+
+        ``"spd_depth"``: node ``j``'s offset is ``STRIDE * depth(j)``, where
+        ``depth(j)`` is ``shortest_path_dists[prompt_idx, j]`` clamped to
+        ``self.max_spd`` (the same far/unreachable bucket ``SPDBias`` itself
+        clamps into — see ``src/models/bias.py``'s ``SPDBias.forward``), and
+        ``depth(prompt_idx)`` is defined as one past the deepest prefix node
+        so the prompt's tokens (the generation query) sit at strictly larger
+        RoPE positions than any prefix node — generalizing "prompt packed
+        last" into position space. ``STRIDE`` is computed per-graph as the
+        longest node's token count, so no node's local ``arange`` can ever
+        spill into the next depth band.
+
+        With no prefix nodes (single-node, prompt-only graph) ``depth`` is
+        vacuously 0 for the prompt and every offset is 0 regardless of mode —
+        this is *why* single-node graphs collapse to plain ``arange(len)``
+        (backward compatible). ``depth`` is a pure function of graph
+        structure (shortest-path distance), not of input node-listing order,
+        so it is unchanged by how the caller orders/labels nodes on input
+        (permutation equivariant).
+        """
+        n = len(graph_input_ids)
+        if self.node_position_mode == "reset":
+            return {j: 0 for j in range(n)}
+
+        spd = item.get('shortest_path_dists')
+        if spd is None:
+            raise ValueError(
+                "node_position_mode='spd_depth' requires 'shortest_path_dists' on "
+                "every item (build the dataset with spd=True) — got an item without it."
+            )
+        spd_row = spd[prompt_idx]
+        prefix = [j for j in range(n) if j != prompt_idx]
+        depth = {j: min(int(spd_row[j].item()), self.max_spd) for j in prefix}
+        depth[prompt_idx] = (max(depth.values()) + 1) if prefix else 0
+
+        stride = max(int(t.shape[0]) for t in graph_input_ids)
+        return {j: stride * depth[j] for j in range(n)}
 
     def _collate_features(self, batch: list[TextGraph], B: int, n_pad: int) -> dict:
         """Pad the per-graph structural features into dense (B, n_pad, …) tensors.

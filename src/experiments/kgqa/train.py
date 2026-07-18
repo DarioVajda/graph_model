@@ -160,11 +160,13 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     magnetic_m = cfg.magnetic_m if (cfg.magnetic or cfg.magnetic_shared) else 0
     train_collator = GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
-        magnetic_m=magnetic_m, pad_to_block=(cfg.graph_attn_impl == "flex"))
+        magnetic_m=magnetic_m, pad_to_block=(cfg.graph_attn_impl == "flex"),
+        node_position_mode=cfg.node_position_mode, max_spd=cfg.max_spd)
     # Generation runs the dense decode path; keep its collator unbucketed.
     gen_collator = GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
-        magnetic_m=magnetic_m, pad_to_block=False)
+        magnetic_m=magnetic_m, pad_to_block=False,
+        node_position_mode=cfg.node_position_mode, max_spd=cfg.max_spd)
 
     active_params = list(cfg.active_params)
     model = select_active_params(model, active_params=active_params, lora=cfg.lora_config())

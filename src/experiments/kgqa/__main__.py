@@ -22,7 +22,7 @@ import argparse
 import os
 
 from .config import (RunConfig, DATASETS, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES,
-                     PROMPT_STYLES, QUESTION_NODE_MODES)
+                     PROMPT_STYLES, QUESTION_NODE_MODES, NODE_POSITION_MODES)
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
@@ -247,6 +247,11 @@ def build_parser():
     p.add_argument("--lora-r", type=int, default=d.lora_r, help="LoRA rank (0 disables LoRA).")
     p.add_argument("--k-hop", type=int, default=d.k_hop, help="k-hop attention gate (0 disables).")
     p.add_argument("--k-hop-directed", action=B, default=d.k_hop_directed)
+    p.add_argument("--node-position-mode", choices=NODE_POSITION_MODES, default=d.node_position_mode,
+                   help="E3: per-node RoPE position assignment. 'reset' = historical (every node's "
+                        "tokens start at local position 0); 'spd_depth' = STRIDE * shortest-path-"
+                        "distance-from-prompt (clamped to --max-spd). Graph arm + spd=True only; "
+                        "NOT in the .gtds cache key.")
     p.add_argument("--graph-attn-impl", choices=GRAPH_ATTN_IMPLS, default=d.graph_attn_impl)
     p.add_argument("--dtype", choices=DTYPES, default=d.dtype)
     p.add_argument("--gradient-checkpointing", action=B, default=d.gradient_checkpointing)
@@ -318,6 +323,7 @@ def config_from_args(args):
         accumulation_steps=args.accumulation_steps, lr=args.lr, bias_lr=args.bias_lr,
         eval_steps=args.eval_steps, max_steps=args.max_steps, seed=args.seed,
         lora_r=args.lora_r, k_hop=args.k_hop, k_hop_directed=args.k_hop_directed,
+        node_position_mode=args.node_position_mode,
         graph_attn_impl=args.graph_attn_impl, dtype=args.dtype,
         gradient_checkpointing=args.gradient_checkpointing,
         active_params=tuple(args.active_params), num_workers=args.num_workers,

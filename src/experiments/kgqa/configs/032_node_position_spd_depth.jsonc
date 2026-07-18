@@ -1,0 +1,97 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // E3 — SPD-depth structural position encoding, the main bet (TODO.md, 2026-07-16).
+  //
+  // GraphCollatorV2 has always reset every node's RoPE position_ids to 0 at
+  // each node boundary (see text_graph_collator_v2.py::_pack_one) — meaning
+  // ZERO inter-node relative-position signal survives RoPE; every bit of "how
+  // far apart are these two things" has to come from the SPD/magnetic bias
+  // MLPs alone. Flat gets a real distance cue for free via retrieval-order
+  // position. node_position_mode="spd_depth" (new) instead starts each
+  // prefix node's tokens at STRIDE * shortest-path-distance-from-prompt
+  // (clamped to max_spd) and the prompt node one band past the deepest
+  // prefix node — a RoPE-visible, graph-structure-derived distance signal
+  // that collapses to the old behavior exactly for single-node graphs
+  // (backward compatible) and is provably permutation-equivariant (depth is
+  // a pure function of graph structure, not input node order — see the two
+  // new tests in tests/test_node_position_encoding.py).
+  //
+  // This is a TRAIN-TIME collator knob only (not in the .gtds cache key) —
+  // reuses 028's question_node=isolated cache directly, no data prep needed.
+  //
+  // Everything else = 029_question_node_webqsp's `isolated` arm verbatim (the
+  // current best graph arm: question_node isolated, r64, bias_lr 5e-3,
+  // lora_dropout 0.15, k_hop 0). NO node_position_mode=reset control arm here
+  // — 029's isolated runs (mean 0.7351 ± 0.0076 test F1) ARE that control
+  // under the identical recipe (licensed by test_reset_mode_is_a_noop: the
+  // "reset" code path is unchanged, byte-for-bit); aggregate this sweep
+  // together with those, do not re-run them. Flat reference: 0.7490 ± 0.0003
+  // (021_webqsp_recipe_refresh).
+  //
+  // node_position_mode=spd_depth x seed {0,1,2} = 3 runs, ~2-3 GPU-h each.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/032_node_position_spd_depth.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "node_position_spd_depth",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+
+  "mode": "train",
+  "cvt_collapse": null,
+  "question_node": "isolated",
+  "node_position_mode": "spd_depth",
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
