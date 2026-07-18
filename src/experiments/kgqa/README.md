@@ -449,6 +449,53 @@ encoding with zero model changes. Swept QUESTION's directed out-edge set
    mechanisms (per-node position reset, duplicate keys), pointing at the
    superset arm (flat serialization + node-span graph biases) next.
 
+### Position/order + capacity probes (2026-07-16, complete) — three negative results
+
+Follow-up to the question-node ablation's closing note, which attributed the
+residual flat-vs-graph deficit to "the other two diagnosed mechanisms
+(per-node position reset, duplicate keys)." Three independent probes, each
+reusing an existing run as its control (no re-runs of settings already on
+record), 3 seeds per new arm, all WebQSP. Full per-seed data, reasoning, and
+the mechanism writeup that motivated these arms: `TODO.md`.
+
+| probe | question | control | new-arm result | verdict |
+|---|---|---:|---:|---|
+| **Flat-order shuffle** (`configs/030_flat_shuffle_diag.jsonc`) | does flat's edge come from a retrieval-order → RoPE-position signal? | 0.7490 ± 0.0003 (021 flat) | **0.7525 ± 0.0035** (`flat_shuffle_lines=true`) | premise falsified — scrambling the order cost nothing |
+| **`magnetic_dim` capacity** (`configs/031_magnetic_dim_sweep.jsonc`) | is the bias MLP's width a binding constraint? | 0.7351 ± 0.0076 (dim 128) | 0.7382 / 0.7347 / 0.7300 (dims 32/64/256) | capacity ruled out — flat, no trend |
+| **SPD-depth position encoding** (`configs/032_node_position_spd_depth.jsonc`) | does a RoPE-visible, graph-structure-derived position (replacing the per-node reset-to-0) close the gap? | 0.7351 ± 0.0076 (`reset`, isolated arm) | **0.6412 ± 0.0037** (`node_position_mode=spd_depth`) | fix rejected — clear −9.4 F1 regression |
+
+**Verdicts:**
+
+1. **The retrieval-order hypothesis is dead.** Destroying flat's triple order
+   (a deterministic per-question shuffle, independent RNG stream from the
+   answer-order augmentation so targets stay byte-identical) left F1
+   unchanged, if anything marginally higher. Whatever flat is doing better
+   than graph, it isn't leaning on serial position as a distance proxy.
+2. **Capacity isn't the lever.** All four `magnetic_dim` widths land in a
+   tight 0.730–0.738 band with no monotonic trend — consistent with the
+   graph-bias weights already converging well (message-passing-like attention
+   patterns observed in other benchmarks).
+3. **The position-encoding fix (`node_position_mode="spd_depth"`) is a clear
+   regression, not a fix** — `STRIDE × shortest-path-distance-from-prompt`
+   offsets, tested end-to-end with new backward-compatibility and
+   permutation-equivariance proofs (`tests/test_node_position_encoding.py`;
+   both invariants hold to float64 numerical precision). The revealing detail:
+   **Hits@1 barely moved** (0.7827 vs. 0.7803 control) while **F1 collapsed**
+   — top-1 answer selection stayed intact, multi-answer recall broke. Likely
+   mechanism: pushing prefix nodes to large, STRIDE-scaled RoPE distances from
+   the query weakens the model's ability to aggregate the *full* answer set,
+   not its ability to find *one* good answer.
+
+**Net effect: RoPE-visible relative position was not the missing
+ingredient.** The "per-node position reset" mechanism from the question-node
+write-up above is now a *narrowed*, not confirmed, hypothesis — the bias
+channel may still be undersized/underdriven relative to what it's replacing
+(per `TODO_reg.md`'s finding that it already carries real, generalizing
+signal), but "give it a RoPE-shaped distance signal" was the wrong lever.
+Both new knobs (`flat_shuffle_lines`, `node_position_mode`) stay in the
+codebase as tested, reversible, documented negative results; defaults are
+unchanged (`False` / `"reset"`).
+
 ### Data-format v2 sweeps (historical)
 
 All v2-era sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep

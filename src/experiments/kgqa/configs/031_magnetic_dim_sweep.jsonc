@@ -1,0 +1,86 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // E2 — magnetic_dim capacity sweep (TODO.md, 2026-07-16).
+  //
+  // Is the bias channel's WIDTH a binding constraint on the graph arm's
+  // accuracy? Lower prior than E1/E3 (the graph-bias weights already converge
+  // well and show message-passing-like attention patterns in other
+  // benchmarks) but it's a pure hyperparameter sweep on existing code, so it's
+  // nearly free to rule in/out. `magnetic_dim` (the magnetic-bias MLP hidden
+  // width) is a model-architecture key, NOT part of the .gtds cache key —
+  // this sweep reuses 028's question_node=isolated cache directly, no data
+  // prep needed.
+  //
+  // Everything else = 029_question_node_webqsp's `isolated` arm verbatim
+  // (question_node fixed to "isolated", the current best graph arm; r64,
+  // bias_lr 5e-3, lora_dropout 0.15, k_hop 0). NO magnetic_dim=128 control
+  // arm here — 029's isolated runs (test F1 seeds tbd, mean 0.7351 ± 0.0076)
+  // ARE that control under the identical recipe; aggregate this sweep
+  // together with those, do not re-run them.
+  //
+  // magnetic_dim {32,64,256} x seed {0,1,2} = 9 runs, ~2-3 GPU-h each.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/031_magnetic_dim_sweep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "magnetic_dim_sweep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 9,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+  "magnetic_dim": [32, 64, 256],
+
+  "mode": "train",
+  "cvt_collapse": null,
+  "question_node": "isolated",
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
