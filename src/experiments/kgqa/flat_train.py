@@ -324,6 +324,7 @@ def run_flat_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
         "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
         "versions": cfg.versions, "data_seed": cfg.data_seed,
         "cvt_collapse": cfg.resolved_cvt_collapse("flat"),
+        "flat_shuffle_lines": cfg.flat_shuffle_lines,
         **result_block(cfg, dev_metrics, test_metrics),
     }
     append_jsonl(runs_jsonl, record)

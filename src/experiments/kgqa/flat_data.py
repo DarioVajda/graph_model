@@ -58,7 +58,8 @@ def flat_data_config_key(cfg, dataset):
             f"_dfv{cfg.data_format_version}"
             + ("" if ps == "plain" else f"_ps{ps}")
             + ("" if cfg.naming_version == NAMING_VERSION else f"_nm{cfg.naming_version}")
-            + ("_cvt" if cfg.resolved_cvt_collapse("flat") else ""))
+            + ("_cvt" if cfg.resolved_cvt_collapse("flat") else "")
+            + ("_shuf" if cfg.flat_shuffle_lines else ""))
 
 
 def triple_lines(record, entity_names, cfg):
@@ -104,23 +105,41 @@ def collapsed_triple_lines(record, entity_names, cfg):
     return lines
 
 
-def build_flat_rows(record, entity_names, cfg, versions, rng, keep_unanswerable):
+def build_flat_rows(record, entity_names, cfg, versions, rng, keep_unanswerable, line_rng=None):
     """Mirror ``build_question_graphs`` exactly (skip rules + RNG consumption),
     emitting flat rows instead of graphs. ``present`` always comes from the
     COLLAPSED base graph (like the graph arm's targets — collapse never removes
-    a nameable answer node, so the target sets are identical either way)."""
+    a nameable answer node, so the target sets are identical either way).
+
+    ``line_rng`` (E1 diagnostic) is a SEPARATE RNG stream from ``rng``,
+    deliberately: consuming the shuffle from the shared ``rng`` would shift
+    every subsequent answer-order draw, changing ``target`` between the
+    shuffled and unshuffled arms and confounding the diagnostic (which must
+    isolate the triple-line order as the only difference). Required when
+    ``cfg.flat_shuffle_lines`` is set; unused otherwise.
+    """
     base = build_base_levi(record, entity_names, cfg.rel_mode, cfg.max_nodes)
     present = present_answer_texts(base, record)
     gold = full_gold_texts(record)
     lines_fn = (collapsed_triple_lines if cfg.resolved_cvt_collapse("flat")
                 else triple_lines)
+
+    def _lines():
+        """The serialized lines, once per question — shuffled in place (E1
+        diagnostic) when ``flat_shuffle_lines`` is set, via the independent
+        ``line_rng`` stream (see docstring above)."""
+        ls = lines_fn(record, entity_names, cfg)
+        if cfg.flat_shuffle_lines:
+            line_rng.shuffle(ls)
+        return ls
+
     if not present:
         if keep_unanswerable and gold:
-            lines = lines_fn(record, entity_names, cfg)
+            lines = _lines()
             return [{"question": record["question"], "lines": lines,
                      "target": "", "gold_answers": gold, "unanswerable": True}]
         return []
-    lines = lines_fn(record, entity_names, cfg)
+    lines = _lines()
     rows = []
     for _ in range(versions):
         order = present[:]
@@ -155,7 +174,8 @@ def run_flat_data_prep_mode(cfg, splits=None):
                        "naming_version": view.naming_version,
                        "rel_mode": view.rel_mode, "max_nodes": view.max_nodes,
                        "n_max": view.n_max, "versions": view.versions,
-                       "data_seed": view.data_seed, "model_name": view.model_name},
+                       "data_seed": view.data_seed, "model_name": view.model_name,
+                       "flat_shuffle_lines": view.flat_shuffle_lines},
                       f, indent=2)
 
         ds_splits = splits if splits is not None else role_splits(cfg, dataset)
@@ -170,6 +190,9 @@ def run_flat_data_prep_mode(cfg, splits=None):
             versions = view.versions if split == "train" else 1
             keep_unanswerable = split != "train"
             rng = random.Random(f"{view.data_seed}:{split}")
+            # Independent stream (E1 diagnostic) — see build_flat_rows' docstring
+            # for why this must NOT share `rng`.
+            line_rng = random.Random(f"{view.data_seed}:{split}:lines")
 
             rows, kept, skipped = [], 0, 0
             for rec in tqdm(records, desc=f"Serializing {split}"):
@@ -177,7 +200,7 @@ def run_flat_data_prep_mode(cfg, splits=None):
                     skipped += 1
                     continue
                 rs = build_flat_rows(rec, entity_names, view, versions, rng,
-                                     keep_unanswerable)
+                                     keep_unanswerable, line_rng=line_rng)
                 if not rs:
                     skipped += 1
                     continue

@@ -213,6 +213,10 @@ def build_parser():
                         "'all' = every base-graph node, 'topics' = topic entities, "
                         "'isolated' = no edges. Default 'off' = the historical "
                         "single-prompt-node format. Part of the .gtds cache key.")
+    p.add_argument("--flat-shuffle-lines", action=B, default=d.flat_shuffle_lines,
+                   help="E1 diagnostic: scramble each question's triple-line order once "
+                        "(flat arm only, in the flat cache key) to test whether flat's edge "
+                        "comes from the retrieval-order -> RoPE-position correlation.")
     p.add_argument("--use-gpu", action=B, default=d.use_gpu, help="build SPD/magnetic features on GPU (data prep).")
     p.add_argument("--analyse-dataset", action=B, default=d.analyse_dataset,
                    help="during data prep, also run the answer-coverage ceiling analysis "
@@ -304,6 +308,7 @@ def config_from_args(args):
         data_seed=args.data_seed, data_format_version=args.data_format_version,
         naming_version=args.naming_version, prompt_style=args.prompt_style,
         cvt_collapse=args.cvt_collapse, question_node=args.question_node,
+        flat_shuffle_lines=args.flat_shuffle_lines,
         use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
         model_name=args.model_name,
         spd=args.spd, max_spd=args.max_spd, magnetic=args.magnetic,

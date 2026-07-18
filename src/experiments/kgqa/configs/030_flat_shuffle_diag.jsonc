@@ -1,0 +1,79 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // E1 — flat context-order shuffle diagnostic (TODO.md, 2026-07-16).
+  //
+  // Does flat's edge over the graph arm come (partly) from the retrieval-order
+  // -> RoPE-position correlation, or is it purely a content/representation
+  // effect? Scrambles each question's triple-line order once (data-prep time,
+  // seeded, shared across that question's `versions` rows — see
+  // flat_data.py::build_flat_rows / _lines()) and retrains the identical
+  // frozen flat recipe. This doesn't fix anything — it's a cheap sanity check
+  // that derisks E3 (SPD-depth position encoding) before investing in the
+  // collator rewrite.
+  //
+  // Everything else = 021_webqsp_recipe_refresh's flat arm verbatim (mode
+  // flat_train, cvt_collapse true, lora_dropout 0.15 — the post-regularization-
+  // campaign frozen recipe, same lineage E2/E3's graph control reads off).
+  // NO control arm here — 021's flat runs (test F1 .74937/.74875/.74895, mean
+  // .7490 ± .0003) are the unshuffled control; aggregate this sweep together
+  // with those, do not re-run them.
+  //
+  // 1 arm x 3 seeds = 3 runs, ~2h each (flat is the fast arm).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/030_flat_shuffle_diag.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "flat_shuffle_diag",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+
+  "mode": "flat_train",
+  "cvt_collapse": true,
+  "flat_shuffle_lines": true,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "seq_len": 4096,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

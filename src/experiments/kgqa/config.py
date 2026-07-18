@@ -133,6 +133,13 @@ class RunConfig:
                                               # "off" = historical "{q}\nAnswer:" prompt node;
                                               # "all"|"topics"|"isolated" = its directed out-edge set.
                                               # Graph arm + plain prompt style only; in the cache key.
+    flat_shuffle_lines: bool = False          # E1 diagnostic (2026-07-16): scramble each question's
+                                              # triple-line order (once per question, RNG-seeded,
+                                              # shared across that question's `versions` rows — mirrors
+                                              # how the answer-order augmentation is scoped) to test
+                                              # whether flat's edge over the graph arm comes from the
+                                              # retrieval-order -> RoPE-position correlation. Flat-only
+                                              # (`flat_data_prep`/`flat_train`); in the flat cache key.
     use_gpu: bool = True                      # data-prep only (SPD/magnetic on GPU); train ignores it
     analyse_dataset: bool = False             # data-prep only: coverage-ceiling analysis (not in cache key)
 
@@ -406,6 +413,11 @@ class RunConfig:
                 raise ValueError(
                     "question_node is a graph-arm knob (the flat serialization is "
                     "already question-first); remove it from flat_* runs.")
+        if self.flat_shuffle_lines and not self.mode.startswith("flat"):
+            raise ValueError(
+                "flat_shuffle_lines is a flat-arm-only diagnostic (it scrambles the "
+                "flat serialization's triple-line order; the graph arm has no "
+                "equivalent linear order to scramble) — remove it from graph runs.")
         if self.boundary_loss_weight <= 0:
             raise ValueError(
                 f"boundary_loss_weight must be > 0; got {self.boundary_loss_weight}.")
