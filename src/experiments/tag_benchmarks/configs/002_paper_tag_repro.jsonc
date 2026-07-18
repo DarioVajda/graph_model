@@ -1,0 +1,110 @@
+{
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Reproduce the Table 2 (Text-Attributed Graph) results from the GTLM paper
+  //   "Teaching LLMs to See Graphs: Unifying Text and Structural Reasoning"
+  //   (Vajda, arXiv:2605.10247v1).
+  //
+  // Every value below is taken verbatim from the paper's appendix:
+  //   • Table 6  — fixed graph-attention bias hyperparameters (all experiments)
+  //   • Table 8  — the per-dataset SELECTED configuration (the bolded option in
+  //                each search set), plus neighbors / epochs / text strategy
+  //   • Appendix E — text-attribute strategy and question/answer injection
+  //
+  // Table 2 reports "mean ± std of 3 runs alongside the exact results for the run
+  // with the highest accuracy", so this sweeps 3 seeds × 4 datasets = 12 runs.
+  //
+  // ── HOW TO RUN ──────────────────────────────────────────────────────────────
+  // 1. Build the caches this file references (once). Three already exist on disk;
+  //    only PubMed needs building — its canonical dir
+  //    `pubmed_hops2_neighbors30_target_abstract` does not yet exist (the legacy
+  //    `pubmed_hops2_neighbors30` predates the mapping-name suffix). Flip "mode"
+  //    to "data_prep", uncomment a `samples_per_node` in each dataset_arm entry,
+  //    and run once. (Or, if you can confirm the legacy dir was built with the
+  //    target_abstract mapping, just rename it to the canonical name.)
+  // 2. Set "mode": "train" and launch on a COMPUTE NODE (execution.mode "sbatch").
+  //    Never run training on the login node.
+  //
+  //   python3 -m sweep src.experiments.tag_benchmarks \
+  //           src/experiments/tag_benchmarks/configs/002_paper_tag_repro.jsonc
+  //   python3 -m sweep.report src/experiments/tag_benchmarks/results/paper_tag_repro
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  "name": "paper_tag_repro",
+  "results_dir": "src/experiments/tag_benchmarks/results",
+
+  "execution": {
+    "mode": "sbatch",                 // heavy training -> compute nodes only
+    "sbatch": {
+      "granularity": "per_config",    // one Slurm job per run
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300:1"],             // B300 preferred; B200 nodes are saturated
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      // "dry_run": true,             // write sbatch_commands.sh without submitting
+    }
+  },
+
+  "mode": "train",                    // switch to "data_prep" for step 1 above
+
+  // ── 3 seeds -> mean/std of 3 runs, as reported in Table 2 ───────────────────
+  "seed": [42, 43, 44],
+
+  // ── per-dataset SELECTED config (Table 8) — every knob that differs by dataset
+  //    travels together in one bundle entry. Values are the bolded selections:
+  //      Cora        lr 3e-4  bias_lr 0.04  r 64  epochs 20  k=60
+  //      PubMed      lr 2e-4  bias_lr 0.04  r 32  epochs  4  k=30
+  //      ogbn-arxiv  lr 2e-4  bias_lr 0.04  r 64  epochs  1  k=60
+  //      Reddit      lr 6e-5  bias_lr 0.01  r 32  epochs 15  k=30
+  //    LoRA alpha is derived as 2·r automatically. Citation graphs use the
+  //    target-abstract text strategy (target: title+abstract, others: title only);
+  //    Reddit truncates each post to ~25 tokens (128 chars).
+  //    samples_per_node is omitted so each run adopts its cache's value; for a
+  //    data_prep run, uncomment the samples_per_node lines (the values below are
+  //    what the existing caches were built with).
+  "dataset_arm": [
+    { "dataset": "cora",       "max_neighbors": 60, "text_mapping": "target_abstract",
+      "num_epochs": 20, "lr": 3e-4, "bias_lr": 0.04, "lora_r": 64 /*, "samples_per_node": 16 */ },
+    { "dataset": "pubmed",     "max_neighbors": 30, "text_mapping": "target_abstract",
+      "num_epochs": 4,  "lr": 2e-4, "bias_lr": 0.04, "lora_r": 32 /*, "samples_per_node": 4  */ },
+    { "dataset": "ogbn-arxiv", "max_neighbors": 60, "text_mapping": "target_abstract",
+      "num_epochs": 1,  "lr": 2e-4, "bias_lr": 0.04, "lora_r": 64 /*, "samples_per_node": 1  */ },
+    { "dataset": "reddit",     "max_neighbors": 30, "text_mapping": "truncated_text",
+      "text_mapping_param": 128,
+      "num_epochs": 15, "lr": 6e-5, "bias_lr": 0.01, "lora_r": 32 /*, "samples_per_node": 8  */ }
+  ],
+
+  // ── fixed across every run ──────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "dtype": "bf16",
+  "lora": true,
+  "lora_dropout": 0.05,               // NOT specified in the paper; code default
+  "k_hop": 0,                         // no k-hop attention gate (matches original)
+
+  // all three structural biases on (Table 5 ablates each; full model uses all)
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  // fixed bias hyperparameters (Table 6)
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,                    // 0 = all N eigenvectors
+
+  // optimization / eval (original benchmark defaults; unchanged by the paper)
+  "batch_size": 1,
+  "accumulation_steps": 32,
+  "eval_steps": 40,
+  "max_steps": -1,
+  "include_f1": true,                 // Table 2 reports F1 alongside accuracy
+  "val_subsample": 500,               // val graphs used for best-checkpoint selection
+  "test_subsample": null,             // score the full test split
+
+  "wandb_project": null
+}

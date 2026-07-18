@@ -1,0 +1,77 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // TAG benchmarks sweep config (JSONC: // comments + trailing commas allowed).
+  // Run with:  python3 -m sweep src.experiments.tag_benchmarks <this file>
+  //
+  // Expansion rules (how a value becomes runs):
+  //   scalar            -> fixed in every run
+  //   [a, b, c]         -> a sweep AXIS (one run per value; cartesian with others)
+  //   [ {..}, {..} ]    -> a BUNDLE: params that vary TOGETHER; each object's keys
+  //                        flatten into the run, and the bundle's label disappears.
+  // A key may be defined in exactly one place (top-level OR one bundle).
+  // Keys map 1:1 to this experiment's CLI flags (some_key -> --some-key).
+  //
+  // TWO-STEP WORKFLOW: run once with "mode": "data_prep" to build the cache for
+  // every dataset this file references, then again with "mode": "train".
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "my_sweep",                 // results land in <results_dir>/<name>/
+  "results_dir": "src/experiments/tag_benchmarks/results",
+
+  "execution": {
+    "mode": "local",                  // "local" (sequential, this process) | "sbatch"
+    "sbatch": {                       // only used when mode == "sbatch"
+      "granularity": "per_config",    // "single" (one job, in sequence) | "per_config"
+      "max_concurrent": 4,            // cap concurrent jobs (Slurm array %N); omit for no cap
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],   // --gres=gpu:<gpus>
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      // "dry_run": true,             // write sbatch_commands.sh but don't submit
+    }
+  },
+
+  "mode": "train",                    // "train" | "data_prep"
+
+  // ── sweep axes (lists => swept) ───────────────────────────────────────────
+  "seed": [42, 43, 44],
+
+  // ── dataset + its cache identity as a bundle: these vary TOGETHER ─────────
+  // Each entry pins the (max_neighbors, text_mapping) whose cache was built, plus
+  // samples_per_node — which is NOT part of the cache's directory name, so it is
+  // cross-checked against the built dataset's metadata on load.
+  "dataset_arm": [
+    { "dataset": "cora",   "max_neighbors": 60, "text_mapping": "target_abstract", "samples_per_node": 16 },
+    { "dataset": "pubmed", "max_neighbors": 60, "text_mapping": "target_abstract", "samples_per_node": 2 }
+  ],
+
+  // ── fixed scalars ─────────────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",                  // "v2-flex" | "v2-eager" (the parity/debug path)
+  "dtype": "bf16",                    // "fp32" is slower but is where v0<->v2 parity is proven
+  "k_hop": 0,                         // 0 disables the k-hop attention gate
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+  "lora": true,
+  "lora_r": 32,
+  "num_epochs": 10,
+  "batch_size": 1,
+  "accumulation_steps": 32,
+  "lr": 3e-4,
+  "bias_lr": 5e-2,
+  "eval_steps": 40,
+  "max_steps": -1,                    // >0 caps optimizer steps (quick smoke tests)
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,                    // # magnetic eigenvectors (0 = all N)
+  "val_subsample": 500,               // val graphs used for checkpoint selection
+  "test_subsample": null,             // null = score the whole test split
+
+  "wandb_project": null               // e.g. "GraphLLM"; null = no tracking
+}
