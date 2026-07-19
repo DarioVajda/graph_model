@@ -38,6 +38,15 @@ GRAPH_TYPES = ("standard", "incidence")
 IMPLS = ("v2-eager", "v2-flex")
 DTYPES = ("fp32", "bf16")
 
+# Where the question text lives (mirrors the kgqa experiment's arm of the same
+# name). "off" — the historical layout: the prompt node carries "{question}{answer}"
+# together, so graph tokens never see the question. "isolated" — the question moves
+# into its own QUESTION *prefix* node with NO edges to the graph; the bidirectional
+# prefix mask then lets every graph token attend to it (question-conditioned graph
+# encoding), while the prompt node is left holding just the "A:" anchor + answer, so
+# the supervised span and generation anchor are byte-identical to "off".
+QUESTION_NODES = ("off", "isolated")
+
 # Every task `process_dataset` can build. (`maximum_flow` ships in the raw download
 # but is unbuildable — the released files omit the edge capacities the task needs.)
 TASKS = (
@@ -68,6 +77,7 @@ UNWIRED_FEATURES = ("laplacian", "rwse")
 _CACHE_DEFAULTS = dict(
     model_name=MODEL_NAME, max_length=1024,
     magnetic_q=0.25, magnetic_m=0, max_rw_steps=16,
+    question_node="off",
 )
 
 
@@ -79,6 +89,7 @@ class RunConfig:
     mode: str = "train"                         # "train" | "data_prep"
     task: str = "shortest_path"                 # which GraphQA task (see TASKS)
     graph_type: str = "standard"                # "standard" | "incidence"
+    question_node: str = "off"                  # "off" | "isolated" (see QUESTION_NODES)
 
     # ── model ──────────────────────────────────────────────────────────────────
     model_name: str = MODEL_NAME
@@ -204,6 +215,8 @@ class RunConfig:
         tags = [f"q{self.magnetic_q}", f"rw{self.max_rw_steps}", f"len{self.max_length}"]
         if self.magnetic_m:
             tags.append(f"m{self.magnetic_m}")
+        if self.question_node != "off":
+            tags.append(f"qn-{self.question_node}")
         if self.model_name != MODEL_NAME:
             tags.append(self.model_name.split("/")[-1])
         return f"{base}__{'_'.join(tags)}"
@@ -215,8 +228,9 @@ class RunConfig:
         """Default (standalone) run name; the sweep runner overrides this."""
         lora_tag = f"_lora{self.lora_r}" if self.lora else ""
         khop_tag = f"_k{self.k_hop}" if self.k_hop else ""
+        qn_tag = f"_qn-{self.question_node}" if self.question_node != "off" else ""
         return (f"{EXPERIMENT_NAME}_{self.arm()}_{self.task}_{self.graph_type}"
-                f"{lora_tag}{khop_tag}_s{self.seed}")
+                f"{qn_tag}{lora_tag}{khop_tag}_s{self.seed}")
 
     def validate(self):
         """Reject settings this experiment does not support, with a clear message.
@@ -230,6 +244,8 @@ class RunConfig:
             raise ValueError(f"Unknown task {self.task!r} (expected one of {TASKS}).")
         if self.graph_type not in GRAPH_TYPES:
             raise ValueError(f"Unknown graph_type {self.graph_type!r} (expected one of {GRAPH_TYPES}).")
+        if self.question_node not in QUESTION_NODES:
+            raise ValueError(f"Unknown question_node {self.question_node!r} (expected one of {QUESTION_NODES}).")
         if self.impl not in IMPLS:
             raise ValueError(f"Unknown impl {self.impl!r} (expected one of {IMPLS}).")
         if self.dtype not in DTYPES:

@@ -23,7 +23,7 @@ one record; ``data_prep`` just builds that config's dataset splits.
 import argparse
 import os
 
-from .config import RunConfig, TASKS, GRAPH_TYPES, IMPLS, DTYPES
+from .config import RunConfig, TASKS, GRAPH_TYPES, IMPLS, DTYPES, QUESTION_NODES
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
@@ -127,6 +127,9 @@ def build_parser():
     p.add_argument("--task", choices=TASKS, default=d.task)
     p.add_argument("--graph-type", choices=GRAPH_TYPES, default=d.graph_type,
                    help="'standard' (one node per vertex) | 'incidence' (bipartite Levi graph).")
+    p.add_argument("--question-node", choices=QUESTION_NODES, default=d.question_node,
+                   help="'off' (question in the prompt node) | 'isolated' (question in its "
+                        "own edge-free prefix node, so graph tokens attend to it).")
 
     # ── model ──────────────────────────────────────────────────────────────────
     p.add_argument("--model-name", default=d.model_name)
@@ -200,6 +203,7 @@ def config_from_args(args):
     """Build (and validate) a RunConfig from parsed args."""
     return RunConfig(
         mode=args.mode, task=args.task, graph_type=args.graph_type,
+        question_node=args.question_node,
         model_name=args.model_name, impl=args.impl,
         flex_compile_mode=args.flex_compile_mode, dtype=args.dtype,
         k_hop=args.k_hop, k_hop_directed=args.k_hop_directed,

@@ -41,6 +41,7 @@ def _save_train_record(cfg, run_name, sizes, results, runs_jsonl, sweep_meta=Non
         "run_name": run_name,
         # ── the experiment's axes (analysis/prep_table.py groups on these) ──
         "task": cfg.task, "graph_type": cfg.graph_type, "arm": cfg.arm(),
+        "question_node": cfg.question_node,
         "spd": cfg.spd, "rrwp": cfg.rrwp, "magnetic": cfg.magnetic,
         "seed": cfg.seed,
         # ── hyperparameters ──

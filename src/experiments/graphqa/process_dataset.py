@@ -196,7 +196,8 @@ class GetGraphLabels:
         return labels
 
 
-def example_to_graph(example, graph_type="standard", problem_type=None):
+def example_to_graph(example, graph_type="standard", problem_type=None,
+                     question_node="off"):
     raw_question = example['question']
     num_nodes = int(example['nnodes'])
     num_edges = int(example['nedges'])
@@ -232,11 +233,34 @@ def example_to_graph(example, graph_type="standard", problem_type=None):
 
     graph = graph.to_directed()
 
-    # create a new node for the question and the answer
-    prompt_node = num_nodes
+    # Attach the prompt node (and, when question_node != "off", a QUESTION node).
+    #
+    # "off": one node carries "{question}{answer}" — the historical layout, byte-
+    #   identical to pre-feature builds.
+    # "isolated": the question body moves into its own QUESTION prefix node (no
+    #   edges — the bidirectional prefix mask alone makes graph tokens question-
+    #   aware, mirroring the kgqa experiment's best arm). The prompt node keeps
+    #   the "A:" anchor onward, so the supervised span / generation anchor are
+    #   byte-identical to "off"; `question` ends in "...\nA: ", so splitting on
+    #   ANSWER_PREFIX cleanly separates the two.
+    if question_node == "isolated":
+        head, sep, tail = question.partition(ANSWER_PREFIX)
+        if not sep:
+            raise ValueError(
+                f"question_node='isolated' needs the {ANSWER_PREFIX!r} anchor in the "
+                f"task_description to split on, but none was found: {question!r}")
+        q_node = num_nodes
+        graph.add_node(q_node, text=head)
+        graph.graph['question_node'] = q_node
+        prompt_node = num_nodes + 1
+        graph.add_node(prompt_node, text=f"{sep}{tail}{answer}")
+    else:
+        prompt_node = num_nodes
+        graph.add_node(prompt_node, text=f"{question}{answer}")
     graph.graph['prompt_node'] = prompt_node
-    graph.add_node(prompt_node, text=f"{question}{answer}")
 
+    # Prompt edges wire to the prompt node only; an "isolated" QUESTION node stays
+    # edge-free by construction.
     prompt_connections = extract_prompt_edges(example, nodes, edges if graph_type=="incidence" else None, problem_type)
     for target_node in prompt_connections:
         graph.add_edge(prompt_node, target_node)
@@ -270,7 +294,8 @@ def build_split(cfg, split, tokenizer):
     """
     examples = load_json_dataset(raw_split_file(cfg.task, split))
     graphs = [
-        example_to_graph(example, graph_type=cfg.graph_type, problem_type=cfg.task)
+        example_to_graph(example, graph_type=cfg.graph_type, problem_type=cfg.task,
+                         question_node=cfg.question_node)
         for example in tqdm(examples, desc=f"{cfg.graph_type}/{cfg.task}/{split}: building graphs")
     ]
     ds = TextGraphDataset(graphs, dataset_label=f"{cfg.graph_type}/{cfg.task}")
