@@ -1,0 +1,60 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Plumbing check: 4 optimizer steps per arm, both question_node modes, one task.
+  // Proves the datasets load, the model builds, the collator handles an isolated
+  // (edge-free) question node, and a well-formed record lands in runs.jsonl.
+  //
+  //   python3 -m sweep src.experiments.our_tests src/experiments/our_tests/configs/002_smoke.jsonc
+  //   python3 -m sweep.report src/experiments/our_tests/results/002_smoke
+  //
+  // A 0.0 accuracy here is EXPECTED and not a failure: exact match is
+  // all-or-nothing and 4 steps of warmup has barely moved the LR off zero.
+  // What is being checked is that runs COMPLETE and log, not that they learn.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "002_smoke",
+  "results_dir": "src/experiments/our_tests/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "01:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  "task": "family",
+  "question_node": ["off", "isolated"],
+  "seed": 42,
+
+  "max_steps": 4,
+  "num_epochs": 1,
+  "eval_steps": 2,
+
+  // ── the paper recipe (everything else held at study values) ───────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 32,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "lr": 5e-5,
+  "bias_lr": 1e-2,
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": null
+}

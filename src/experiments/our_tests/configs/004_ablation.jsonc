@@ -1,0 +1,99 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // STEP 2 of the study (TODO.md §3): the GRAPH-BIAS ABLATION.
+  // 3 arms x 2 tasks x 3 seeds = 18 runs.
+  //
+  //   python3 -m sweep src.experiments.our_tests src/experiments/our_tests/configs/004_ablation.jsonc
+  //   python3 -m sweep.report src/experiments/our_tests/results/004_ablation
+  //
+  // EVERYTHING except which biases are active is inherited from the winning probe
+  // settings, PER TASK:
+  //
+  //   family : 003_question_node  -> lr 1e-4 / bias_lr 1e-2, question_node "off"
+  //            (003: off 87.9 +/- 0.6 vs isolated 67.7 +/- 2.9 — `off` wins by 20 pts)
+  //   kg_qa  : 005_kgqa_lr_1e-4_bias_1e-2 -> lr 1e-4 / bias_lr 1e-2, question_node
+  //            "isolated" (003: isolated 70.4 +/- 1.5 vs off 67.3 +/- 7.0 — isolated
+  //            wins on both mean and variance, and won in the deleted sweep too)
+  //
+  // The two tasks happen to share one LR pair here, but they are still bundled with
+  // `task` rather than hoisted to the top level: they are per-task decisions that
+  // agreed, not one global setting, and hoisting them would re-open the failure mode
+  // where a task silently inherits the other's recipe.
+  //
+  // CAVEAT ON THE KG-QA ENCODING. This config was written while 005 was still in
+  // flight, so kg_qa's "isolated" comes from 003 (and the deleted sweep), not from
+  // the run whose LR it uses. If 005 flips the kg_qa winner to "off", the 9 kg_qa
+  // runs here must be re-run at that encoding; the 9 family runs are unaffected.
+  //
+  // ONLY THE THREE `w/o *` ARMS ARE HERE. The base (all-biases-on) cell is already
+  // measured by 003 (family) and 005 (kg_qa) at these exact settings — re-running it
+  // would burn 6 GPU-jobs to recompute numbers we have. Merge it in at table time
+  // from those records.
+  //
+  // The arms are a BUNDLE, not three axes: a cartesian product of three booleans
+  // would also generate the all-on cell (duplicating the probes) and the all-off cell
+  // (not part of the study).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "004_ablation",
+  "results_dir": "src/experiments/our_tests/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 18,          // all 18 in flight at once
+      "partition": "frida",
+      "account": "povejmo",
+      // Both GPU brands allowed. Consequence: train_runtime_s is NOT comparable
+      // across runs here, nor against 003 (B300-only). Accuracy is.
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  // task carries its full winning recipe: learning rates AND question_node.
+  "task_recipe": [
+    { "task": "family", "lr": 1e-4, "bias_lr": 1e-2, "question_node": "off" },
+    { "task": "kg_qa",  "lr": 1e-4, "bias_lr": 1e-2, "question_node": "isolated" }
+  ],
+  "seed": [0, 1, 2],
+
+  // ── the ablation arms (which biases are active, varying together) ─────────
+  // Each arm is unconditional and reported either way: the `w/o SPD` result must
+  // inform the paper's SPD wording whatever it shows (TODO.md §3).
+  "arm": [
+    { "spd": false, "rrwp": true,  "magnetic": true  },
+    { "spd": true,  "rrwp": false, "magnetic": true  },
+    { "spd": true,  "rrwp": true,  "magnetic": false }
+  ],
+
+  // ── the rest of the recipe, identical to 003/005 ──────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 32,
+  "lora_dropout": 0.15,
+  "num_epochs": 10,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "eval_steps": 40,
+  "max_steps": -1,
+  "num_workers": 4,
+
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

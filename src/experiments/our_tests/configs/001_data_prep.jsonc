@@ -1,0 +1,71 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build the datasets the question_node probe needs.
+  //
+  //   python3 -m sweep src.experiments.our_tests src/experiments/our_tests/configs/001_data_prep.jsonc
+  //
+  // Builds whatever is MISSING for the probe, across both question_node modes.
+  // run_data_prep_mode is idempotent: a dataset that already exists is detected
+  // and skipped, never rebuilt. That matters here, because one of these cells is
+  // irreplaceable:
+  //   family / off      -> family_tree_graph_dataset/     PRESENT — the paper's own
+  //                        data. MUST be skipped, never regenerated.
+  //   family / isolated -> tagged sibling                 built by this config
+  //   kg_qa  / isolated -> tagged sibling                 built by this config
+  //   kg_qa  / off      -> graph_datasets/dataset_30-50/  ABSENT (the paper's copy
+  //                        was never committed and lives on another HPC), so it is
+  //                        regenerated here to give the kg_qa probe a matching
+  //                        `off` arm. See 005's header for what that costs.
+  //
+  // Verify the skip logic before running if the paper datasets are on disk:
+  //   python3 -c "from src.experiments.our_tests.config import RunConfig; \
+  //               from src.experiments.our_tests.data import _is_built, SPLITS; \
+  //               cfg=RunConfig(task='family',question_node='off').validate(); \
+  //               print([s for s in SPLITS if not _is_built(cfg,s)] or 'SKIP')"
+  //
+  // NOT a login-node job: each split generates thousands of graphs and then
+  // eigendecomposes every one of them. Hence sbatch + a GPU (the feature
+  // builders default to use_gpu, which is also what the historical builds used).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "001_data_prep",
+  "results_dir": "src/experiments/our_tests/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",   // 2 jobs (one per task) — they are independent
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300:1"],
+      "cpus": 16,                    // compute_labels uses num_proc=12
+      "mem": "128G",                 // family train is ~1.1 GB on disk, more in memory
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "task": ["family", "kg_qa"],
+  "question_node": ["off", "isolated"],
+
+  // ── generation settings: must match what the `off` datasets were built with,
+  //    or the two probe arms would differ in their DATA as well as their encoding ──
+  "gen_seed": 42,
+  "family_train": 3500,
+  "family_val": 200,
+  "family_test": 1000,
+  "kgqa_train": 500,
+  "kgqa_val": 30,
+  "kgqa_test": 150,
+  "kgqa_min_nodes": 30,
+  "kgqa_max_nodes": 50,
+
+  // ── feature settings (part of the dataset cache key) ──────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "max_length": 32768,
+  "max_rw_steps": 16,
+  "magnetic_q": 0.25,
+  "use_gpu": true
+}

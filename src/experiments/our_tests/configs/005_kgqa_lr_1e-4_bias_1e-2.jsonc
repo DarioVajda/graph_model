@@ -1,0 +1,83 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // KG-QA LEARNING-RATE RETRY — 6 runs (2 question_node modes x 3 seeds).
+  //
+  //   python3 -m sweep src.experiments.our_tests src/experiments/our_tests/configs/005_kgqa_lr_1e-4_bias_1e-2.jsonc
+  //   python3 -m sweep.report src/experiments/our_tests/results/005_kgqa_lr_1e-4_bias_1e-2
+  //
+  // Identical to 003_question_node.jsonc in every respect except the learning rates,
+  // and restricted to kg_qa: this runs kg_qa at the pair that worked for FAMILY in
+  // 003 (lr 1e-4 / bias_lr 1e-2) instead of kg_qa's published 5e-4 / 3e-2.
+  //
+  // WHY. 003 reproduced family well (off 87.9 +/- 0.6, above the paper's 84.7) but
+  // kg_qa came in at 67.3 / 70.4 — roughly 15 points BELOW a deleted earlier sweep
+  // that had run kg_qa at lr 5e-5 / bias_lr 1e-2 (off 82.9 +/- 3.1, isolated
+  // 85.6 +/- 3.7). The suspected cause is kg_qa's high published learning rate.
+  //
+  // NOTE ON THE LR CHOICE. 5e-5 / 1e-2 is what the deleted sweep actually used; this
+  // config tests 1e-4 / 1e-2 instead — family's 003 pair, one point higher. So a
+  // recovery here confirms "the published kg_qa LR was too high" without pinning the
+  // optimum, and a failure to recover would point back at 5e-5 or at lora_dropout
+  // (0.15 here vs 0.05 in the deleted sweep — still confounded, deliberately).
+  //
+  // config.py::validate() prints a deviation warning on every run here, since kg_qa's
+  // published pair is 5e-4 / 3e-2. That warning is expected and is the point.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "005_kgqa_lr_1e-4_bias_1e-2",
+  "results_dir": "src/experiments/our_tests/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      // Both GPU brands allowed. Consequence: train_runtime_s is NOT comparable
+      // across runs in this sweep, nor against 003 (B300-only). Accuracy is.
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "task": "kg_qa",
+  "question_node": ["off", "isolated"],
+  "seed": [0, 1, 2],
+
+  // ── THE ONLY DIFFERENCE FROM 003's kg_qa runs ─────────────────────────────
+  "lr": 1e-4,        // 003 used kg_qa's published 5e-4
+  "bias_lr": 1e-2,   // 003 used kg_qa's published 3e-2
+
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 32,
+  "lora_dropout": 0.15,
+  "num_epochs": 10,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "eval_steps": 40,
+  "max_steps": -1,
+  "num_workers": 4,
+
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}
