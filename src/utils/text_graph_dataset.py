@@ -80,9 +80,15 @@ class TextGraphDataset(Dataset):
                 g_int = nx.relabel_nodes(g, mapping, copy=True)
                 nx.set_node_attributes(g_int, {new_int: old for old, new_int in mapping.items()}, "original_id")
 
-                old_prompt = g_int.graph.get('prompt_node', -1)
-                if old_prompt != -1 and old_prompt in mapping:
-                    g_int.graph['prompt_node'] = mapping[old_prompt]
+                # Graph-level attributes that NAME a node have to follow the relabeling;
+                # NetworkX only remaps the nodes themselves. `question_node` is set by
+                # the experiments that give the question its own prefix node (graphqa,
+                # kgqa, our_tests); nothing downstream reads it, but leaving a stale
+                # label behind turns it into a KeyError for any analysis that trusts it.
+                for attr in ('prompt_node', 'question_node'):
+                    old = g_int.graph.get(attr, -1)
+                    if old != -1 and old in mapping:
+                        g_int.graph[attr] = mapping[old]
 
                 self.graphs.append(g_int)
 
@@ -130,9 +136,10 @@ class TextGraphDataset(Dataset):
         ordered.graph.update(g2.graph)
         g2 = ordered
 
-        p = g.graph.get('prompt_node', -1)
-        if p != -1 and p in mapping:
-            g2.graph['prompt_node'] = mapping[p]
+        for attr in ('prompt_node', 'question_node'):
+            p = g.graph.get(attr, -1)
+            if p != -1 and p in mapping:
+                g2.graph[attr] = mapping[p]
         return g2
 
     def apply_rcm_ordering(self):
