@@ -1,4 +1,5 @@
-from .data_gen import generate_dataset
+from .kgqa_gen import generate_dataset
+from .prompt import node_texts, GetGraphLabels, label_masker
 from ...utils.text_graph_dataset import TextGraphDataset
 
 import os
@@ -29,31 +30,41 @@ def create_incidence_graph(graph):
 
     return incidence_graph
 
-def prepare_graph(graph):
+def prepare_graph(graph, question_node="off"):
     graph = create_incidence_graph(graph)
 
     graphs = []
     for func_name, (q, pointers, a) in graph.graph['questions'].items():
         # create a new copy of the graph for each question-answer pair
         G = graph.copy()
-        # add the question + answer as the "prompt" node to the graph
+        # Split question/answer across nodes per `question_node` (see prompt.py). With
+        # "off" this is exactly the historical single-node layout; with "isolated" the
+        # question gets its own edge-free node and the prompt node keeps the "A:" anchor.
         prompt_node_id = f"prompt_{func_name}"
-        G.add_node(prompt_node_id, text=f"Q: {q}\nA: {a}")
+        question_text, prompt_text = node_texts(q, a, question_node)
 
-        # add edges from the prompt node to the pointer nodes
+        if question_text is not None:
+            question_node_id = f"question_{func_name}"
+            G.add_node(question_node_id, text=question_text)
+            G.graph['question_node'] = question_node_id
+
+        G.add_node(prompt_node_id, text=prompt_text)
+
+        # add edges from the prompt node to the pointer nodes (the question node stays
+        # edge-free by construction — only the attention mask connects it)
         for pointer in pointers:
             G.add_edge(prompt_node_id, pointer)
 
         G.graph['prompt_node'] = prompt_node_id
         graphs.append(G)
-    
+
     return graphs
 
 
-def prepare_dataset(raw_graphs):
+def prepare_dataset(raw_graphs, question_node="off"):
     graphs = []
     for graph in tqdm(raw_graphs):
-        graphs.extend(prepare_graph(graph))
+        graphs.extend(prepare_graph(graph, question_node=question_node))
     return graphs
 
 
@@ -66,37 +77,8 @@ def print_text_graph(graph):
         print(f"  {graph.nodes[u]['text']} --{data['relation']}--> {graph.nodes[v]['text']}")
     print(f"\nPrompt Node: {graph.graph['prompt_node']}")
 
-#region Label Preparation
-class GetGraphLabels:
-    """
-    This is a callable class responsible for finding the question end in the prompt node and masking all tokens to -100 except for the answer (which follows the question end).
-    """
-    def __init__(self, question_end, tokenizer):
-        self.tokenizer = tokenizer
-        if question_end is None:
-            raise ValueError("question_end parameter cannot be None. It should be a list of token IDs that indicate the end of the question in the prompt node's text.")
-        self.question_end = question_end
-
-    def __call__(self, example):
-        prompt_node = example.get('prompt_node', None)
-        labels = example['input_ids'][prompt_node].copy()
-        prompt_input_ids = example['input_ids'][prompt_node]
-
-        # find question end in the prompt node's input_ids
-        question_end_index = None
-        for i in range(len(prompt_input_ids) - len(self.question_end) + 1):
-            if prompt_input_ids[i:i+len(self.question_end)] == self.question_end:
-                question_end_index = i + len(self.question_end) - 1
-        if question_end_index is None:
-            for token_id in prompt_input_ids:
-                print(f"{token_id}: {self.tokenizer.decode([token_id]).replace(' ', '_')}")
-            raise ValueError(f"Could not find question end token sequence {self.question_end} in the prompt node's input_ids: {prompt_input_ids}")
-
-        # Mask all tokens before and including the question end index to -100
-        for i in range(question_end_index + 1):
-            labels[i] = -100
-        return labels
-#endregion
+# Label preparation now lives in prompt.py (GetGraphLabels / label_masker), shared with
+# family_tree_prep.py so the question_node feature is implemented once.
 
 def save_text_graph_dataset(graphs, path, params=None, per_graph_versions=1):
     # check if a dataset already exists at the path, and if so, load and return it instead of creating a new one

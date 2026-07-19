@@ -13,8 +13,8 @@ from transformers import (
 from peft import LoraConfig, get_peft_model
 from torch.utils.data import Dataset
 
-from .data_load import load_dataset
-from .train_utils import get_device
+from .text_data import load_dataset
+from ._utils import get_device
 
 # ------------------------------------------------------------------------------
 # Dataset Wrapper for Text Baseline

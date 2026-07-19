@@ -1,383 +1,274 @@
-from ...utils import set_wandb_project, GraphTrainer, TextGraphDataset, GraphCollator
-from ...models.legacy.modeling_gtlm_llama_v0 import GraphLlamaForCausalLM, GraphLlamaConfig
+"""
+our_tests experiment (Family Tree + Knowledge-Graph QA) — standalone single-run entry point.
 
-from .data_load import load_dataset
-from .train_utils import get_device, compute_exact_match
+A self-contained argparse program: given parameters for **one** configuration it runs
+that configuration. It knows nothing about sweeps or job submission — the generic
+``sweep`` runner drives those and invokes this program once per resolved config
+(rendering each config key to the matching flag below):
 
-import torch
-import os, json
-import datetime
-import random
-from transformers import TrainingArguments, AutoTokenizer, TrainerCallback
-from peft import LoraConfig, get_peft_model
-import numpy as np
+    python3 -m sweep src.experiments.our_tests src/experiments/our_tests/configs/003_question_node.jsonc
 
-#region -------- Code for model intialization and parameter selection --------
-def init_model(model_name, device, bias_params):
-    config = GraphLlamaConfig.from_pretrained(model_name, **bias_params)
-    model = GraphLlamaForCausalLM.from_pretrained(
-        model_name, 
-        config=config, 
-        attn_implementation="sdpa",
-    )
+Run it directly for a single config / quick iteration:
 
-    model.to(device)
+    python3 -m src.experiments.our_tests --task family
+    python3 -m src.experiments.our_tests --task family --question-node isolated
+    python3 -m src.experiments.our_tests --no-magnetic --seed 43     # an ablation arm
+    python3 -m src.experiments.our_tests --max-steps 4 --num-epochs 1  # smoke test
+    python3 -m src.experiments.our_tests --mode data_prep --task kg_qa
+    python3 -m src.experiments.our_tests --init my_sweep             # write a sweep template
 
-    for param in model.parameters():
-        param.requires_grad = False
+``--mode`` routes within the experiment: ``train`` (default) trains one config and logs
+one record; ``data_prep`` builds that config's dataset splits.
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+NOTE: data prep here generates thousands of graphs and eigendecomposes each one — it is
+not a login-node job. Submit it through the sweep runner's sbatch mode.
+"""
 
-    return model, tokenizer
+import argparse
+import os
 
-def select_active_params(model, active_params=None, lora=None):
-    """
-    Applies LoRA if a configuration dictionary is provided.
-    Sets requires_grad=True for parameters whose names contain any of the substrings in active_params.
-    If active_params is None, no additional parameters are unfrozen.
-    If active_params is "all", all parameters are set to requires_grad=True.
-    """
-    # apply LoRA if configuration is provided
-    if lora is not None:
-        print("Applying LoRA with config:", lora)
-        lora_config = LoraConfig(
-            r=lora.get("r", 8),
-            lora_alpha=lora.get("lora_alpha", 16),
-            target_modules=lora.get("target_modules", ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]),
-            lora_dropout=lora.get("lora_dropout", 0.05),
-            bias=lora.get("bias", "none"),
-            task_type="CAUSAL_LM",
-        )
-        # wrap the model with Low-Rank Adapters
-        model = get_peft_model(model, lora_config)
+from .config import RunConfig, TASKS, IMPLS, DTYPES, QUESTION_NODES
 
-    # handle custom active paramters (usually those used for computing the graph-based attention biases)
-    if active_params == "all":
-        for param in model.parameters():
-            param.requires_grad = True
-    elif active_params is not None:
-        for name, param in model.named_parameters():
-            if any(active_param in name for active_param in active_params):
-                param.requires_grad = True
-
-    return model
-
-def print_trainable_parameters(model):
-    """
-    Prints the number of trainable parameters in the model, 
-    differentiating between LoRA adapters and custom active parameters.
-    """
-    trainable_lora_params = 0
-    trainable_custom_params = 0
-    all_param = 0
-    
-    print("List of custom active parameters (requires_grad=True):")
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        all_param += num_params
-        
-        if param.requires_grad:
-            # PEFT always includes 'lora' in the adapter weight names
-            if "lora" in name.lower():
-                trainable_lora_params += num_params
-                print(f" - {name} ({num_params:,} params) [LoRA Adapter]")
-            else:
-                trainable_custom_params += num_params
-                print(f" - {name} ({num_params:,} params)")
-                
-    total_trainable = trainable_lora_params + trainable_custom_params
-    
-    print("\n" + "="*50)
-    print("TRAINABLE PARAMETER SUMMARY")
-    print("="*50)
-    print(f"LoRA Adapters:       {trainable_lora_params:>15,}")
-    print(f"Custom Graph Biases: {trainable_custom_params:>15,}")
-    print("-" * 50)
-    print(f"Total Trainable:     {total_trainable:>15,}")
-    print(f"Total Model Params:  {all_param:>15,}")
-    print(f"Trainable %:         {100 * total_trainable / all_param:>14.4f}%")
-    print("="*50 + "\n")
-#endregion
-
-def training_run(
-    model, 
-    train_dataset, 
-    eval_dataset, 
-    test_dataset,
-    collator, 
-    run_name, 
-    num_epochs=3, 
-    batch_size=8, 
-    learning_rate=5e-5, 
-    bias_learning_rate=1e-3,
-    accumulation_steps=4, 
-    pad_token_id=None,
-    active_params=None,
-    eval_every=40,
-    gradient_checkpointing=True,
-):
-    if gradient_checkpointing:
-        print("Gradient checkpointing is ENABLED. This will save memory but may increase training time.")
-    else:
-        print("Gradient checkpointing is DISABLED. This may lead to out-of-memory errors if the model or batch size is too large.")
-
-    STEPS_PER_EPOCH = len(train_dataset) // batch_size // accumulation_steps
-    TOTAL_STEPS = STEPS_PER_EPOCH * num_epochs
-    EVAL_EVERY = eval_every
-
-    training_args = TrainingArguments(
-        # Basic training arguments:
-        num_train_epochs=num_epochs,                            # Total number of training epochs to perform
-        output_dir=f"./checkpoints/{run_name}",                 # Directory to save checkpoints and logs
-        logging_steps=1,                                        # Log training metrics every 5 steps
-        per_device_train_batch_size=batch_size,                 # Batch size per device during training
-        gradient_accumulation_steps=accumulation_steps,         # Number of steps to accumulate gradients before performing an optimizer step
-        # torch_compile=True,                                     # Use PyTorch 2.0's torch.compile for potential speedup (requires PyTorch 2.0+)
-        gradient_checkpointing=gradient_checkpointing,          # Enable gradient checkpointing to save memory (trades compute for memory)
-        gradient_checkpointing_kwargs={"use_reentrant": False} if gradient_checkpointing else None,
-
-        # Evaluation arguments:
-        eval_strategy="steps",                                  # Evaluate every eval_steps during training
-        eval_steps=EVAL_EVERY,                                  # Number of steps between evaluations
-        save_strategy="steps",                                  # Save a checkpoint based on save_steps
-        save_steps=EVAL_EVERY,                                  # Number of steps between saving checkpoints
-        metric_for_best_model="eval_em_accuracy",               # Metric to use for determining the best model
-        greater_is_better=True,                                 # Higher classification_accuracy is better
-        save_total_limit=1,                                     # Maximum number of checkpoints to store
-        load_best_model_at_end=True,                            # Load the best model at the end of training
-
-        # WandB logging:
-        report_to="wandb",                                      # Report training metrics to Weights & Biases
-        run_name=run_name,                                      # Name of the WandB run for better organization
-        
-        # Learning rate scheduler:
-        learning_rate=learning_rate,                            # The initial learning rate for Adam
-        lr_scheduler_type="cosine_with_min_lr",                 # Type of learning rate scheduler to use
-        lr_scheduler_kwargs={"min_lr": learning_rate/10},       # Additional arguments for the learning rate scheduler
-        warmup_steps=TOTAL_STEPS // 10,                         # Number of steps for the warmup phase (when the learning rate is increasing linearly)
-        weight_decay=0.1,                                       # Weight decay to apply (if not zero)
-    )
-
-    # initialize using the custom class
-    trainer = GraphTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=collator,
-
-        # Evaluation parameters
-        compute_metrics=compute_exact_match,
-
-        # set the active parameters for bias saving in the trainer callback
-        active_params=active_params,
-
-        # set the custom bias learning rate to create two distinct parameter groups
-        bias_lr=bias_learning_rate,
-    )
-
-    trainer.train()
-
-    if test_dataset is None:
-        print("No test dataset provided. Skipping final evaluation.")
-        return
-
-    # =====================================================================
-    # Evaluate the best model on the test dataset
-    # =====================================================================    
-    print("\n" + "="*50)
-    print("Training Complete. Evaluating Best Model on Test Dataset...")
-    print("="*50)
-    
-    # By passing metric_key_prefix="test", the metrics will show up in wandb 
-    # as test_em_accuracy and test_em_f1, keeping them distinct from eval metrics.
-    test_results = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
-    
-    print("\nFinal Test Set Results:")
-    for key, value in test_results.items():
-        print(f"  {key}: {value:.4f}")
-    print("="*50 + "\n")
+CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
 
-def save_run_metadata(run_name, bias_params, dataset_name, base_model, active_params, lr, bias_lr, lora_config, num_epochs):
-    """
-    Save the metadata of the training run to the run_metadata_graph.json file with the run_name being the key (if there are multiple runs with the same base name, append "_v2", "_v3", etc. to the run name).
+TEMPLATE = """\
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // our_tests sweep config (JSONC: // comments + trailing commas allowed).
+  // Run with:  python3 -m sweep src.experiments.our_tests <this file>
+  //
+  // Expansion rules (how a value becomes runs):
+  //   scalar            -> fixed in every run
+  //   [a, b, c]         -> a sweep AXIS (one run per value; cartesian with others)
+  //   [ {..}, {..} ]    -> a BUNDLE: params that vary TOGETHER; each object's keys
+  //                        flatten into the run, and the bundle's label disappears.
+  // A key may be defined in exactly one place (top-level OR one bundle).
+  // Keys map 1:1 to this experiment's CLI flags (some_key -> --some-key).
+  //
+  // TWO-STEP WORKFLOW: run once with "mode": "data_prep" to build the datasets for
+  // every (task, question_node) this file references, then again with "mode": "train".
+  // Data prep is EXPENSIVE here (generation + an eigendecomposition per graph) and
+  // wants a GPU node — always sbatch it.
+  // ─────────────────────────────────────────────────────────────────────────
 
-    Returns:
-    run_name --> The final run name used for this training run (which may have a version suffix if there were duplicate names).
-    """
-    metadata_path = "./src/experiments/our_tests/run_metadata_graph.json"
-    if not os.path.exists(metadata_path):
-        with open(metadata_path, "w") as f:
-            json.dump({}, f)
-    with open(metadata_path, "r") as f:
-        run_metadata = json.load(f)
-    
-    if run_name in run_metadata:
-        version = 2
-        new_run_name = f"{run_name}_v{version}"
-        while new_run_name in run_metadata:
-            version += 1
-            new_run_name = f"{run_name}_v{version}"
-        run_name = new_run_name
+  "name": "my_sweep",                 // results land in <results_dir>/<name>/
+  "results_dir": "src/experiments/our_tests/results",
 
-    # determine what is the exact time of the run
-    date_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # 1. Create a dictionary specifically for the new entry
-    new_entry = {
-        run_name: {
-            "date_time": date_time,
-            "bias_params": bias_params,
-            "dataset_name": dataset_name,
-            "base_model": base_model,
-            "active_params": active_params,
-            "num_epochs": num_epochs,
-            "learning_rate": lr,
-            "bias_learning_rate": bias_lr,
-            "lora_config": lora_config,
-        }
+  "execution": {
+    "mode": "local",                  // "local" (sequential, this process) | "sbatch"
+    "sbatch": {                       // only used when mode == "sbatch"
+      "granularity": "per_config",    // "single" (one job, in sequence) | "per_config"
+      "max_concurrent": 4,            // cap concurrent jobs (Slurm array %N); omit for no cap
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",               // --gres=gpu:<gpus>
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      // "dry_run": true,             // write sbatch_commands.sh but don't submit
     }
+  },
 
-    # 2. Prepend the new entry to the existing metadata by unpacking both
-    # The new_entry comes first, so it stays at the top!
-    run_metadata = {**new_entry, **run_metadata}
+  "mode": "train",                    // "train" | "data_prep"
 
-    with open(metadata_path, "w") as f:
-        json.dump(run_metadata, f, indent=4)
-    
-    return run_name
+  // ── sweep axes (lists => swept) ───────────────────────────────────────────
+  "task": ["family", "kg_qa"],
+  "seed": [42, 43, 44],
+
+  // ── the encoding probe / ablation arms ────────────────────────────────────
+  "question_node": "off",             // "off" | "isolated"
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  // ── fixed scalars (the paper recipe) ──────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",                 // "v2-eager" | "v2-flex"
+  "dtype": "fp32",                    // "bf16" is a numerical change, not a free speedup
+  "k_hop": 0,                         // 0 disables the k-hop attention gate
+  "lora": true,
+  "lora_r": 32,
+  "num_epochs": 10,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "lr": 5e-5,
+  "bias_lr": 1e-2,
+  "eval_steps": 40,
+  "max_steps": -1,                    // >0 caps optimizer steps (quick smoke tests)
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,                    // # magnetic eigenvectors (0 = all N)
+
+  "wandb_project": null               // e.g. "GraphLLM"; null = no tracking
+}
+"""
 
 
-def parse_args():
-    import argparse
-    parser = argparse.ArgumentParser(description="Fine-tune GraphLLaMA on a specified dataset with configurable parameters.")
+def build_parser():
+    d = RunConfig()
+    p = argparse.ArgumentParser(
+        prog="python3 -m src.experiments.our_tests",
+        description="Run ONE our_tests configuration (the sweep runner invokes this per config).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    B = argparse.BooleanOptionalAction
 
-    # general parameters
-    parser.add_argument("--dataset_name", type=str, default="kg_qa", help="Directory containing the processed dataset. Should be 'kg_qa' or 'family'.")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B", help="Pre-trained model name or path.")
-    parser.add_argument("--num_epochs", type=int, default=6, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=2, help="Training batch size.")
-    parser.add_argument("--accumulation_steps", type=int, default=8, help="Number of steps to accumulate gradients before performing an optimizer step.")
-    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate for the LoRA parameters.")
-    parser.add_argument("--bias_learning_rate", type=float, default=5e-2, help="Learning rate for the bias parameters.")
-    parser.add_argument("--eval_every", type=int, default=40, help="Number of steps between evaluations.")
-    parser.add_argument("--no_gradient_checkpointing", action="store_true", help="Disable gradient checkpointing (useful for debugging or if memory is not a concern).")
+    p.add_argument("--init", nargs="?", const="template", default=None, metavar="NAME",
+                   help="Write a sweep-config template to configs/<NAME>.jsonc and exit.")
+    p.add_argument("--mode", choices=("train", "data_prep"), default=d.mode,
+                   help="train one config | build that config's dataset splits.")
 
-    # which parameters to activate and train
-    parser.add_argument("--active_params", nargs="+", default=["spd_weights", "laplacian_weights", "rwse_weights", "rrwp_proj", "magnetic_"], help="List of parameter name substrings to activate for training. Use 'all' to activate all parameters.")
-    parser.add_argument("--lora_r", type=int, default=16, help="Rank for LoRA adapters. If not using LoRA, set to 0.")
+    # ── what to run ────────────────────────────────────────────────────────────
+    p.add_argument("--task", choices=TASKS, default=d.task,
+                   help="'family' (family-tree QA) | 'kg_qa' (knowledge-graph QA).")
+    p.add_argument("--question-node", choices=QUESTION_NODES, default=d.question_node,
+                   help="'off' (question in the prompt node) | 'isolated' (question in its "
+                        "own edge-free prefix node, so graph tokens attend to it).")
 
-    args = parser.parse_args()
-    return args
+    # ── model ──────────────────────────────────────────────────────────────────
+    p.add_argument("--model-name", default=d.model_name)
+    p.add_argument("--impl", choices=IMPLS, default=d.impl,
+                   help="v2-eager is the implementation pinned equivalent to the legacy "
+                        "v0 path these datasets were trained with.")
+    p.add_argument("--flex-compile-mode", default=d.flex_compile_mode)
+    p.add_argument("--dtype", choices=DTYPES, default=d.dtype,
+                   help="fp32 is the dtype the v0<->v2 parity is proven at.")
+
+    # ── k-hop gate ─────────────────────────────────────────────────────────────
+    p.add_argument("--k-hop", type=int, default=d.k_hop, help="K-hop attention gate (0 disables).")
+    p.add_argument("--k-hop-directed", action=B, default=d.k_hop_directed)
+
+    # ── graph-bias features (the ablation axes) ────────────────────────────────
+    p.add_argument("--spd", action=B, default=d.spd)
+    p.add_argument("--max-spd", type=int, default=d.max_spd)
+    p.add_argument("--rrwp", action=B, default=d.rrwp)
+    p.add_argument("--max-rw-steps", type=int, default=d.max_rw_steps)
+    p.add_argument("--magnetic", action=B, default=d.magnetic)
+    p.add_argument("--magnetic-dim", type=int, default=d.magnetic_dim,
+                   help="model bias-MLP hidden width.")
+    p.add_argument("--magnetic-q", type=float, default=d.magnetic_q,
+                   help="magnetic-Laplacian charge (a data-prep knob: part of the cache key).")
+    p.add_argument("--magnetic-m", type=int, default=d.magnetic_m,
+                   help="# magnetic eigenvectors kept (0 = all N).")
+    p.add_argument("--laplacian", action=B, default=d.laplacian)
+    p.add_argument("--rwse", action=B, default=d.rwse)
+
+    # ── dataset ────────────────────────────────────────────────────────────────
+    p.add_argument("--max-length", type=int, default=d.max_length,
+                   help="per-node token cap (a data-prep knob).")
+    p.add_argument("--use-gpu", action=B, default=d.use_gpu,
+                   help="build SPD/RRWP/magnetic features on GPU (data prep).")
+
+    # ── data generation (data_prep mode only) ──────────────────────────────────
+    p.add_argument("--gen-seed", type=int, default=d.gen_seed,
+                   help="seed for dataset generation (distinct from the training seed).")
+    p.add_argument("--family-train", type=int, default=d.family_train)
+    p.add_argument("--family-val", type=int, default=d.family_val)
+    p.add_argument("--family-test", type=int, default=d.family_test)
+    p.add_argument("--family-generations", type=int, default=d.family_generations)
+    p.add_argument("--family-marriage-prob", type=float, default=d.family_marriage_prob)
+    p.add_argument("--family-child-prob", type=float, default=d.family_child_prob)
+    p.add_argument("--kgqa-train", type=int, default=d.kgqa_train)
+    p.add_argument("--kgqa-val", type=int, default=d.kgqa_val)
+    p.add_argument("--kgqa-test", type=int, default=d.kgqa_test)
+    p.add_argument("--kgqa-min-nodes", type=int, default=d.kgqa_min_nodes)
+    p.add_argument("--kgqa-max-nodes", type=int, default=d.kgqa_max_nodes)
+
+    # ── LoRA ───────────────────────────────────────────────────────────────────
+    p.add_argument("--lora", action=B, default=d.lora)
+    p.add_argument("--lora-r", type=int, default=d.lora_r,
+                   help="LoRA rank; alpha is always 2*r (--no-lora disables LoRA).")
+    p.add_argument("--lora-dropout", type=float, default=d.lora_dropout)
+
+    # ── training schedule ──────────────────────────────────────────────────────
+    p.add_argument("--num-epochs", type=int, default=d.num_epochs)
+    p.add_argument("--batch-size", type=int, default=d.batch_size)
+    p.add_argument("--accumulation-steps", type=int, default=d.accumulation_steps)
+    p.add_argument("--lr", type=float, default=d.lr)
+    p.add_argument("--bias-lr", type=float, default=d.bias_lr)
+    p.add_argument("--eval-steps", type=int, default=d.eval_steps)
+    p.add_argument("--max-steps", type=int, default=d.max_steps,
+                   help=">0 caps optimizer steps (quick tests).")
+    p.add_argument("--seed", type=int, default=d.seed)
+    p.add_argument("--num-workers", type=int, default=d.num_workers)
+    p.add_argument("--gradient-checkpointing", action=B, default=d.gradient_checkpointing)
+    p.add_argument("--include-f1", action=B, default=d.include_f1,
+                   help="also log macro-F1 alongside exact match.")
+
+    # ── tracking ───────────────────────────────────────────────────────────────
+    p.add_argument("--wandb-project", default=d.wandb_project,
+                   help="wandb project to report to (omit for no tracking).")
+
+    # ── sweep-runner bookkeeping (where to log this run) ───────────────────────
+    p.add_argument("--runs-jsonl", default=None, help="(runner) JSONL to append this run's record to.")
+    p.add_argument("--run-name", default=None, help="(runner) this run's name within the sweep.")
+    p.add_argument("--sweep-id", default=None, help="(runner) the sweep this run belongs to.")
+    return p
+
+
+def config_from_args(args):
+    """Build (and validate) a RunConfig from parsed args."""
+    return RunConfig(
+        mode=args.mode, task=args.task, question_node=args.question_node,
+        model_name=args.model_name, impl=args.impl,
+        flex_compile_mode=args.flex_compile_mode, dtype=args.dtype,
+        k_hop=args.k_hop, k_hop_directed=args.k_hop_directed,
+        spd=args.spd, max_spd=args.max_spd,
+        rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
+        magnetic=args.magnetic, magnetic_dim=args.magnetic_dim,
+        magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
+        laplacian=args.laplacian, rwse=args.rwse,
+        max_length=args.max_length, use_gpu=args.use_gpu,
+        gen_seed=args.gen_seed,
+        family_train=args.family_train, family_val=args.family_val,
+        family_test=args.family_test, family_generations=args.family_generations,
+        family_marriage_prob=args.family_marriage_prob,
+        family_child_prob=args.family_child_prob,
+        kgqa_train=args.kgqa_train, kgqa_val=args.kgqa_val, kgqa_test=args.kgqa_test,
+        kgqa_min_nodes=args.kgqa_min_nodes, kgqa_max_nodes=args.kgqa_max_nodes,
+        lora=args.lora, lora_r=args.lora_r, lora_dropout=args.lora_dropout,
+        num_epochs=args.num_epochs, batch_size=args.batch_size,
+        accumulation_steps=args.accumulation_steps,
+        lr=args.lr, bias_lr=args.bias_lr, eval_steps=args.eval_steps,
+        max_steps=args.max_steps, seed=args.seed, num_workers=args.num_workers,
+        gradient_checkpointing=args.gradient_checkpointing, include_f1=args.include_f1,
+        wandb_project=args.wandb_project,
+    ).validate()
+
+
+def _do_init(name):
+    if not (name.endswith(".json") or name.endswith(".jsonc")):
+        name += ".jsonc"
+    os.makedirs(CONFIGS_DIR, exist_ok=True)
+    path = os.path.join(CONFIGS_DIR, name)
+    with open(path, "w") as f:
+        f.write(TEMPLATE)
+    print(f"Wrote sweep template to {path}\n"
+          f"Edit it, then run:  python3 -m sweep src.experiments.our_tests {path}")
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.init is not None:
+        _do_init(args.init)
+        return 0
+
+    cfg = config_from_args(args)
+
+    if cfg.mode == "data_prep":
+        from .data import run_data_prep_mode
+        run_data_prep_mode(cfg)
+        return 0
+
+    from .train import run_train_mode
+    run_train_mode(cfg, runs_jsonl=args.runs_jsonl, run_name=args.run_name,
+                   sweep_id=args.sweep_id)
+    return 0
+
 
 if __name__ == "__main__":
-    # parse command line arguments
-    args = parse_args()
-    # python3 -m src.experiments.our_tests --dataset_name=kg_qa --model_name=meta-llama/Llama-3.2-1B --lora_r=32 --batch_size=4 --accumulation_steps=4 --learning_rate=5e-4 --bias_learning_rate=1e-2 --num_epochs=8
-    # python3 -m src.experiments.our_tests --dataset_name=kg_qa --model_name=meta-llama/Llama-3.2-3B --lora_r=64 --batch_size=2 --accumulation_steps=8 --learning_rate=1e-4 --bias_learning_rate=1e-2 --num_epochs=8
-    # python3 -m src.experiments.our_tests --dataset_name=kg_qa --model_name=meta-llama/Llama-3.1-8B --lora_r=64 --batch_size=1 --accumulation_steps=16 --learning_rate=5e-5 --bias_learning_rate=1e-2 --num_epochs=8
-
-    # --------------------------------------------------------------------------
-    #region ----------------------- CONFIGURATION ------------------------------
-    # --------------------------------------------------------------------------
-    if args.dataset_name not in ["kg_qa", "family"]:
-        raise ValueError(f"Invalid dataset name: {args.dataset_name}. Must be 'kg_qa' or 'family'.")
-    
-    if args.dataset_name == "kg_qa":
-        dataset_dir = "./src/experiments/our_tests/graph_datasets/dataset_30-50"
-    else:
-        dataset_dir = "./src/experiments/our_tests/family_tree_graph_dataset"
-    dataset_name = f"graph_{args.dataset_name}"
-    BIAS_PARAMS = { 
-        "spd": True, 
-        "max_spd": 8, 
-        "laplacian": False, 
-        "rwse": False, 
-        "rrwp": True, 
-        "max_rw_steps": 16,
-        "magnetic": True,
-        "magnetic_dim": 32,
-        "magnetic_q": 0.25
-    }
-    MODEL_NAME = args.model_name
-    ACTIVE_PARAMS = args.active_params
-    LR = args.learning_rate
-    BIAS_LR=args.bias_learning_rate
-    NUM_EPOCHS = args.num_epochs
-
-    LORA_R = args.lora_r
-    LORA_CONFIG = {
-        "r": LORA_R,
-        "lora_alpha": LORA_R*2,
-        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        "lora_dropout": 0.05,
-        "bias": "none",
-    }
-    if LORA_R == 0: # if rank is set to 0, don't use LoRA at all
-        LORA_CONFIG = None
-
-    model_size = "1B" if "1b" in MODEL_NAME.lower() else ("3B" if "3b" in MODEL_NAME.lower() else ("8B" if "8b" in MODEL_NAME.lower() else "unknown_size"))
-
-    # Create a unique run name and save the run metadata
-    RUN_NAME = f"{model_size}_graph_{args.dataset_name}{'_lora' if LORA_CONFIG else ''}"
-    RUN_NAME = save_run_metadata(
-        run_name=RUN_NAME,
-        bias_params=BIAS_PARAMS,
-        dataset_name=dataset_name,
-        base_model=MODEL_NAME,
-        active_params=ACTIVE_PARAMS,
-        lr=LR,
-        bias_lr=BIAS_LR,
-        num_epochs=NUM_EPOCHS,
-        lora_config=LORA_CONFIG,
-    )
-    EVAL_EVERY = args.eval_every
-    #endregion
-    # --------------------------------------------------------------------------
-
-    set_wandb_project("GraphLLM")
-    device = get_device()
-
-    model, tokenizer = init_model(model_name=MODEL_NAME, device=device, bias_params=BIAS_PARAMS)
-
-    # --------------------------------------------------------------------------
-    #region ----------------------- LOAD DATASETS ------------------------------
-    # --------------------------------------------------------------------------
-    train_dataset, eval_dataset, test_dataset = load_dataset(dataset_dir, type='graph')
-
-    collator = GraphCollator()
-
-    print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Eval dataset size: {len(eval_dataset)}")
-
-    #endregion
-    # --------------------------------------------------------------------------
-
-
-    # --------------------------------------------------------------------------
-    #region ---------------- FINE TUNE SELECTED PARAMETERS ---------------------
-    # --------------------------------------------------------------------------
-    print("Fine-tuning these parameters: ", ACTIVE_PARAMS)
-    model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=LORA_CONFIG)
-    print_trainable_parameters(model)
-
-    training_run(
-        model=model,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        test_dataset=test_dataset,
-        collator=collator,
-        run_name=RUN_NAME,
-        num_epochs=NUM_EPOCHS,
-        batch_size=args.batch_size,
-        learning_rate=LR,
-        bias_learning_rate=BIAS_LR,
-        accumulation_steps=args.accumulation_steps,
-        active_params=ACTIVE_PARAMS,
-        eval_every=EVAL_EVERY,
-        gradient_checkpointing=not args.no_gradient_checkpointing,
-    )
-
-    #endregion
-    # --------------------------------------------------------------------------
+    raise SystemExit(main())

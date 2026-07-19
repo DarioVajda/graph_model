@@ -1,4 +1,4 @@
-from .data_gen import generate_dataset
+from ..kgqa_gen import generate_dataset
 
 import os
 import random
