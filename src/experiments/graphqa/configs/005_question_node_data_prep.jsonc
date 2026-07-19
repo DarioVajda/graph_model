@@ -1,0 +1,59 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build the ISOLATED-question-node dataset cache for the nine reported tasks,
+  // both graph encodings — the inputs for 006_question_node_ablation.
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/005_question_node_data_prep.jsonc
+  //
+  // Same as 001_data_prep, only `question_node: "isolated"` — the question text
+  // moves into its own edge-free QUESTION prefix node (see config.QUESTION_NODES),
+  // so these graphs differ from the "off" cache and land in a tagged sibling dir
+  // (`.../<task>__q0.25_rw16_len1024_qn-isolated`). The "off" cache 001 built is
+  // untouched. Idempotent: built splits are skipped.
+  //
+  // Runs as a dedicated cluster job (never on the login node). CPU-bound work, so
+  // `granularity: "single"` builds all 18 (task x encoding) caches sequentially in
+  // ONE allocation rather than grabbing 18 GPUs; `use_gpu: false` keeps feature
+  // computation on CPU, byte-for-byte the way 001 built the "off" cache (so the
+  // isolated-vs-off comparison isn't confounded by a CPU/GPU numeric difference).
+  // The GPU request is only because sbatch mode requires one — it goes unused.
+  //
+  // The bias flags are deliberately NOT here: every split carries spd + rrwp +
+  // magnetic features regardless of which arm consumes them.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "005_question_node_data_prep",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",        // all 18 builds sequentially in one job
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],    // required by sbatch mode; unused (use_gpu=false)
+      "cpus": 8,
+      "mem": "64G",
+      "time": "4:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  // ── axes: every reported task x both encodings (9 x 2 = 18 configs) ───────
+  "task": ["node_count", "edge_count", "cycle_check", "triangle_counting",
+           "node_degree", "connected_nodes", "reachability", "edge_existence",
+           "shortest_path"],
+  "graph_type": ["standard", "incidence"],
+
+  // ── the isolated-question-node layout ─────────────────────────────────────
+  "question_node": "isolated",
+
+  // ── feature-generation knobs (these define the cache identity) ────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "max_length": 1024,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,                    // 0 = keep all N eigenvectors
+  "max_rw_steps": 16,
+  "use_gpu": false
+}
