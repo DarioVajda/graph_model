@@ -80,6 +80,18 @@ QUESTION_NODE_MODES = ("off", "all", "topics", "isolated")
 # A TRAIN-TIME collator knob only — not in the .gtds cache key (doesn't touch
 # cached graph features) — so both modes reuse the same built dataset.
 NODE_POSITION_MODES = ("reset", "spd_depth")
+# Graph construction (2026-07-19): how the retrieved subgraph becomes nodes.
+#   "levi"    — the historical bipartite Levi graph (h -> rel -> t per triple,
+#               single-parent CVT collapse; entities/relations are the nodes).
+#   "triplet" — one node PER SELECTED TRIPLE, its text the flat arm's
+#               "head | relation | tail" line from the SAME select_triples()
+#               call the text-serialization control uses (same budget, same
+#               triple set, raw/uncollapsed — a 100%-content-fair graph arm);
+#               symmetric edges connect triples sharing an entity. PROMPT's
+#               topic edges go to the triples CONTAINING a topic entity;
+#               targets still come from the collapsed Levi base, so they are
+#               byte-identical to both other arms'.
+GRAPH_CONSTRUCTIONS = ("levi", "triplet")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
 PROMPT_STYLES = ("plain", "chat")
@@ -144,6 +156,11 @@ class RunConfig:
                                               # "off" = historical "{q}\nAnswer:" prompt node;
                                               # "all"|"topics"|"isolated" = its directed out-edge set.
                                               # Graph arm + plain prompt style only; in the cache key.
+    graph_construction: str = "levi"          # subgraph -> node scheme (see GRAPH_CONSTRUCTIONS
+                                              # above): "levi" = historical bipartite Levi graph;
+                                              # "triplet" = one node per selected raw triple (the
+                                              # flat arm's line text/budget), entity-sharing edges.
+                                              # Graph arm only; in the cache key.
     flat_shuffle_lines: bool = False          # E1 diagnostic (2026-07-16): scramble each question's
                                               # triple-line order (once per question, RNG-seeded,
                                               # shared across that question's `versions` rows — mirrors
@@ -364,7 +381,8 @@ class RunConfig:
                 + ("" if ps == "plain" else f"_ps{ps}")
                 + ("" if self.naming_version == NAMING_VERSION else f"_nm{self.naming_version}")
                 + ("" if self.resolved_cvt_collapse("graph") else "_nocvt")
-                + ("" if self.question_node == "off" else f"_qn{self.question_node}"))
+                + ("" if self.question_node == "off" else f"_qn{self.question_node}")
+                + ("" if self.graph_construction == "levi" else f"_gc{self.graph_construction}"))
 
     def validate(self):
         """Reject accepted-but-unsupported combinations with a clear message.
@@ -428,6 +446,21 @@ class RunConfig:
                 raise ValueError(
                     "question_node is a graph-arm knob (the flat serialization is "
                     "already question-first); remove it from flat_* runs.")
+        if self.graph_construction not in GRAPH_CONSTRUCTIONS:
+            raise ValueError(
+                f"graph_construction must be one of {GRAPH_CONSTRUCTIONS}; "
+                f"got {self.graph_construction!r}.")
+        if self.graph_construction == "triplet":
+            if self.mode.startswith("flat"):
+                raise ValueError(
+                    "graph_construction is a graph-arm knob (the flat serialization "
+                    "builds no graph); remove it from flat_* runs.")
+            if self.cvt_collapse is not None:
+                raise ValueError(
+                    "cvt_collapse has no meaning under graph_construction='triplet' "
+                    "(nodes are the RAW selected triples, exactly the flat "
+                    "serialization's lines; targets come from the collapsed Levi "
+                    "base like both other arms) — leave it at the arm default (null).")
         if self.flat_shuffle_lines and not self.mode.startswith("flat"):
             raise ValueError(
                 "flat_shuffle_lines is a flat-arm-only diagnostic (it scrambles the "

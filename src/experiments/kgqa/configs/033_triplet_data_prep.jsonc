@@ -1,0 +1,65 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Data-prep step for the triplet-construction arm (2026-07-19): builds the
+  // .gtds cache for graph_construction="triplet" on the frozen WebQSP data
+  // config (max_nodes 512, n_max 50, versions 8, dfv3 — matches 021/028/029's
+  // data keys), question_node="isolated" (the best Levi arm, 029).
+  //
+  // "triplet" makes one node PER SELECTED TRIPLE: node text is the flat arm's
+  // "head | relation | tail" line from the SAME select_triples(max_nodes=512)
+  // call the text-only control uses (identical triple set + per-triple text,
+  // raw/uncollapsed — a 100%-content-fair graph arm); symmetric edge pairs
+  // connect triples sharing an entity; PROMPT's topic edges go to the triples
+  // CONTAINING a topic entity; the QUESTION prefix node stays isolated.
+  // Targets come from the collapsed Levi base, byte-identical to both arms'.
+  //
+  // Unlike 028, no question-node budget slot is subtracted: content fairness
+  // with flat trumps it, and triplet node counts (#triples + 2) stay under
+  // max_nodes by construction.
+  //
+  // Run this first; the training sweep (034) requires this cache to exist.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/033_triplet_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "triplet_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      // 512G, not the usual 64G: the entity-sharing cliques make triplet edge
+      // lists far heavier per row than Levi's, and compute_labels fans out to
+      // os.cpu_count() workers — 64G OOM-killed the first attempt (job 114222).
+      "mem": "512G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "graph_construction": "triplet",
+  "question_node": "isolated",
+
+  // data-config keys — must match 029's frozen WebQSP data config exactly
+  // (aside from graph_construction) so the training sweep's cache lookups hit.
+  "dataset": "webqsp",
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 50,
+  "versions": 8,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

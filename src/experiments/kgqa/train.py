@@ -96,6 +96,7 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         "data_format_version": cfg.data_format_version,
         "cvt_collapse": cfg.resolved_cvt_collapse("graph"),
         "question_node": cfg.question_node,
+        "graph_construction": cfg.graph_construction,
         # ── results: best-checkpoint dev + test metrics, dataset-prefixed ──
         **result_block(cfg, dev, test),
     }

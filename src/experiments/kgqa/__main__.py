@@ -22,7 +22,8 @@ import argparse
 import os
 
 from .config import (RunConfig, DATASETS, REL_MODES, GRAPH_ATTN_IMPLS, DTYPES,
-                     PROMPT_STYLES, QUESTION_NODE_MODES, NODE_POSITION_MODES)
+                     PROMPT_STYLES, QUESTION_NODE_MODES, NODE_POSITION_MODES,
+                     GRAPH_CONSTRUCTIONS)
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
@@ -213,6 +214,13 @@ def build_parser():
                         "'all' = every base-graph node, 'topics' = topic entities, "
                         "'isolated' = no edges. Default 'off' = the historical "
                         "single-prompt-node format. Part of the .gtds cache key.")
+    p.add_argument("--graph-construction", choices=GRAPH_CONSTRUCTIONS,
+                   default=d.graph_construction,
+                   help="subgraph -> node scheme: 'levi' = historical bipartite Levi "
+                        "graph; 'triplet' = one node per selected raw triple (text = "
+                        "the flat arm's 'h | r | t' line, same budget/triple set), "
+                        "symmetric edges between triples sharing an entity. Graph arm "
+                        "only; part of the .gtds cache key.")
     p.add_argument("--flat-shuffle-lines", action=B, default=d.flat_shuffle_lines,
                    help="E1 diagnostic: scramble each question's triple-line order once "
                         "(flat arm only, in the flat cache key) to test whether flat's edge "
@@ -313,6 +321,7 @@ def config_from_args(args):
         data_seed=args.data_seed, data_format_version=args.data_format_version,
         naming_version=args.naming_version, prompt_style=args.prompt_style,
         cvt_collapse=args.cvt_collapse, question_node=args.question_node,
+        graph_construction=args.graph_construction,
         flat_shuffle_lines=args.flat_shuffle_lines,
         use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
         model_name=args.model_name,

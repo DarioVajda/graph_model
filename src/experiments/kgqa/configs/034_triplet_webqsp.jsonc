@@ -1,0 +1,85 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Triplet-construction arm (2026-07-19): the best WebQSP GTLM recipe so far
+  // — 029's question_node="isolated" arm (test F1 .7351 ± .0074, itself 021's
+  // recipe verbatim) — with ONLY graph_construction flipped to "triplet".
+  //
+  // The triplet graph carries EXACTLY the flat (text-only LLM) arm's content:
+  // the same select_triples(512) triple set, each triple one node whose text
+  // is the same "head | relation | tail" line (raw, uncollapsed), so the
+  // comparison vs. the flat reference (74.93 ± .23) isolates what the
+  // graph-aware attention biases (SPD + magnetic on the entity-sharing
+  // topology) contribute over identical content. Levi/isolated reference:
+  // .7351 ± .0074 (029).
+  //
+  // 3 seeds, B300 GPUs. Requires 033_triplet_data_prep.jsonc's cache.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/034_triplet_webqsp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "triplet_webqsp",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300:1",
+      "cpus": 8,
+      // 256G, not the usual 64G: triplet rows carry clique-heavy edge lists
+      // (p99 ~65k edges/graph), and the in-RAM dataset + 4 persistent
+      // dataloader workers OOM-killed all three seeds at 64G (array 114226,
+      // ~2.4h in at step ~1825/4890).
+      "mem": "256G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+  "graph_construction": "triplet",
+  "question_node": "isolated",
+
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

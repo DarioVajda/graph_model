@@ -215,6 +215,40 @@ def build_base_levi(record, entity_names, rel_mode, max_nodes, cvt_collapse=True
     return G
 
 
+def build_base_triplet(record, entity_names, rel_mode, max_nodes):
+    """Triplet graph (graph_construction="triplet"): one node per selected triple.
+
+    Content-fair twin of the flat serialization: the SAME ``select_triples``
+    call (same budget, same triple set, raw/uncollapsed) and each node's text
+    is exactly the flat arm's ``head | relation | tail`` line (``triple_lines``
+    in flat_data.py). Symmetric edge pairs connect triples sharing an entity
+    (head or tail; relations don't count). No prompt node yet; the triples
+    containing a topic entity are stashed in ``G.graph["topic_nodes"]`` for
+    ``add_prompt_node`` (topic entities aren't nodes here).
+
+    Node count = #triples + 2 (PROMPT + QUESTION) never exceeds ``max_nodes``:
+    the Levi estimate the budget caps counts every triple PLUS its entities.
+    """
+    selected = select_triples(record, max_nodes)
+    G = nx.DiGraph()
+    ent2nodes = defaultdict(list)
+    for i, (h, rel, t) in enumerate(selected):
+        nid = ("T", i)
+        G.add_node(nid, text=(f"{resolve_entity_text(h, entity_names)} | "
+                              f"{verbalize_relation(rel, rel_mode)} | "
+                              f"{resolve_entity_text(t, entity_names)}"))
+        for ent in {h, t}:
+            ent2nodes[ent].append(nid)
+    for nodes in ent2nodes.values():
+        for a in range(len(nodes)):
+            for b in range(a + 1, len(nodes)):
+                G.add_edge(nodes[a], nodes[b])
+                G.add_edge(nodes[b], nodes[a])
+    topic_nodes = sorted({n for tp in record["entities"] for n in ent2nodes.get(tp, ())})
+    G.graph["topic_nodes"] = topic_nodes
+    return G
+
+
 def _collapse_cvts(G, topics):
     """Contract single-parent unnamed mediator entity nodes into rel->rel chains."""
     for n in list(G.nodes()):
@@ -324,6 +358,13 @@ def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain",
     single-prompt-node format, byte-identical to pre-feature builds.
     """
     g = G.copy()
+    # Topic-attachment targets: the topic entity nodes themselves (Levi) or the
+    # triplet nodes CONTAINING a topic entity (triplet construction — stashed by
+    # build_base_triplet; popped so the stale original-id list never outlives
+    # this function into the saved/relabeled graph).
+    topic_targets = g.graph.pop("topic_nodes", None)
+    if topic_targets is None:
+        topic_targets = [tp for tp in record["entities"] if tp in g]
     if prompt_style == "chat":
         if question_node != "off":
             raise ValueError("question_node + chat prompt style is unsupported (see validate()).")
@@ -347,18 +388,16 @@ def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain",
             for n in base_nodes:
                 g.add_edge("QUESTION", n)
         elif question_node == "topics":
-            for tp in record["entities"]:
-                if tp in g:
-                    g.add_edge("QUESTION", tp)
+            for n in topic_targets:
+                g.add_edge("QUESTION", n)
         # "isolated": no edges.
     g.add_node("PROMPT", text=text)
     g.graph["prompt_node"] = "PROMPT"
     g.graph["gold_answers"] = gold_answers
     g.graph["question"] = record["question"]
     g.graph["unanswerable"] = not answer_str
-    for tp in record["entities"]:
-        if tp in g:
-            g.add_edge("PROMPT", tp)
+    for n in topic_targets:
+        g.add_edge("PROMPT", n)
     return g
 
 
@@ -371,13 +410,24 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
     denominators equal RoG/GNN-RAG's (all answered questions; such rows score
     ~0, like their retrieval failures).
     """
-    # A QUESTION node consumes one slot of the Levi budget (select_triples
-    # reserves the PROMPT slot itself); shrink the cap so built graphs never
-    # exceed max_nodes (which would spill into the next flex node bucket).
-    budget = cfg.max_nodes - (0 if cfg.question_node == "off" else 1)
-    base = build_base_levi(record, entity_names, cfg.rel_mode, budget,
-                           cvt_collapse=cfg.resolved_cvt_collapse("graph"))
-    present = present_answer_texts(base, record)
+    if cfg.graph_construction == "triplet":
+        # Content fairness with the flat arm trumps the question-node slot: use
+        # the UNSHRUNK budget (the same select_triples call flat makes), so the
+        # triple set is identical to the text-only LLM's. Node count stays
+        # under max_nodes regardless (see build_base_triplet). Targets come
+        # from the collapsed Levi base — the same graph build_flat_rows uses —
+        # so they are byte-identical to both other arms'.
+        base = build_base_triplet(record, entity_names, cfg.rel_mode, cfg.max_nodes)
+        target_base = build_base_levi(record, entity_names, cfg.rel_mode, cfg.max_nodes)
+    else:
+        # A QUESTION node consumes one slot of the Levi budget (select_triples
+        # reserves the PROMPT slot itself); shrink the cap so built graphs never
+        # exceed max_nodes (which would spill into the next flex node bucket).
+        budget = cfg.max_nodes - (0 if cfg.question_node == "off" else 1)
+        base = build_base_levi(record, entity_names, cfg.rel_mode, budget,
+                               cvt_collapse=cfg.resolved_cvt_collapse("graph"))
+        target_base = base
+    present = present_answer_texts(target_base, record)
     gold = full_gold_texts(record)
     style = cfg.resolved_prompt_style
     if not present:
@@ -536,6 +586,7 @@ def run_data_prep_mode(cfg, splits=None):
                        "naming_version": view.naming_version,
                        "rel_mode": view.rel_mode, "max_nodes": view.max_nodes,
                        "n_max": view.n_max, "question_node": view.question_node,
+                       "graph_construction": view.graph_construction,
                        "versions": view.versions, "max_length": view.max_length,
                        "rcm": view.rcm,
                        "data_seed": view.data_seed, "model_name": view.model_name,
