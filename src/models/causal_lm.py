@@ -72,6 +72,25 @@ def _normalize_graph_attn_impl(impl):
     return impl
 
 
+def _node_start_indices(node_ids: torch.Tensor, num_node_slots: int) -> torch.Tensor:
+    """First-token position per node: ``(B, N)`` where entry ``n`` is the lowest
+    token position whose ``node_ids == n`` (the inverse of ``node_ids``).
+
+    Node slots with no token (padding, or absent nodes up to ``num_node_slots``)
+    get the **safe sentinel 0** — they never map to a real token after
+    ``expand_node_to_token_bias`` / ``num_nodes`` masking, so a clamped in-bounds
+    gather on them is harmless. Trailing right-padding tokens cannot corrupt a
+    real node's first-occurrence because ``amin`` keeps the smallest position.
+    """
+    B, L = node_ids.shape
+    device = node_ids.device
+    pos = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
+    ids = node_ids.clamp(0, num_node_slots - 1)
+    start = torch.full((B, num_node_slots), L, dtype=torch.long, device=device)
+    start.scatter_reduce_(1, ids, pos, reduce="amin", include_self=True)
+    return start.masked_fill(start == L, 0)
+
+
 class GraphCausalLMMixin:
     """Graph-biased causal LM orchestration, backbone-neutral.
 
@@ -92,7 +111,28 @@ class GraphCausalLMMixin:
         self.shared_graph_bias = build_shared_bias_modules(config.num_attention_heads, config.head_dim, config)
         self.config.architectures = [type(self).__name__]
         self._graph_bias_cache: dict = {}
+        # magnetic_content reads each layer's live residual-stream hidden state.
+        # Strategy B's registered attention function only sees q/k/v, so capture
+        # the raw hidden_states with a forward pre-hook that stashes them on the
+        # attention module (mirroring the set-and-leave _graph_ctx pattern). Only
+        # registered when the bias is enabled, so no overhead otherwise.
+        if getattr(config, "magnetic_content", False):
+            self._register_hidden_state_capture()
         self.post_init()
+
+    def _register_hidden_state_capture(self) -> None:
+        """Stash each attention module's input ``hidden_states`` on the module for
+        MagneticContentBias. Fires again on gradient-checkpoint recompute, so the
+        stashed tensor is always the freshly recomputed one."""
+        def _hook(module, args, kwargs):
+            hs = kwargs.get("hidden_states")
+            if hs is None and args:
+                hs = args[0]
+            module._captured_hidden_states = hs
+
+        for attn in self._iter_attn_modules():
+            attn._captured_hidden_states = None
+            attn.register_forward_pre_hook(_hook, with_kwargs=True)
 
     # ── Backbone-neutrality seams (#6) ───────────────────────────────────────────
     # Defaults assume the HF decoder-LM convention. A backbone that deviates
@@ -257,6 +297,13 @@ class GraphCausalLMMixin:
                 if shared_node_bias is not None and not self.training:
                     self._graph_bias_cache["shared_node_bias"] = shared_node_bias
 
+        # magnetic_content: first-token position per node (inverse of node_ids).
+        # N node slots = the magnetic eigenvector count; derived once here and
+        # reused by every layer. Requires the magnetic features to be present.
+        node_start_indices = None
+        if getattr(self.config, "magnetic_content", False) and magnetic is not None:
+            node_start_indices = _node_start_indices(node_ids, magnetic_lambdas.shape[1])
+
         ctx = GraphContext(
             node_ids=node_ids,
             num_nodes=num_nodes,
@@ -266,6 +313,7 @@ class GraphCausalLMMixin:
             block_mask=block_mask,
             node_ids_flex=node_ids_flex,
             shared_node_bias=shared_node_bias,
+            node_start_indices=node_start_indices,
         )
         ctx.install_on(self._iter_attn_modules())
 

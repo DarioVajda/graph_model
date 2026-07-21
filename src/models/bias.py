@@ -18,6 +18,7 @@ LaplacianBias - learnable scalar weight × L2 distance between spectral embeddin
 RWSEBias      - same pattern for random-walk structural encodings
 RRWPBias      - small MLP applied to multi-hop random-walk probability vectors
 MagneticBias  - complex-eigenvector-based directional encoding via deep-set MLP
+MagneticContentBias - MagneticBias widened with a live per-node content summary
 K-hop gate (hard) - -inf for node pairs more than K hops apart; K=0 = disabled
 """
 
@@ -158,27 +159,72 @@ class MagneticBias(BaseBias):
         nn.init.zeros_(self.proj[2].bias)
         self.proj[2]._is_hf_initialized = True
 
-    def forward(
-        self, *, dtype, device,
-        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        num_nodes: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> Optional[torch.Tensor]:
+    # ── Shared spectral machinery (reused by MagneticContentBias) ──────────────
+
+    def _phi(
+        self, magnetic, num_nodes, device,
+    ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Fold the eigenvalues into the deep-set per-node feature ``phi``.
+
+        Returns ``(V_real, V_imag, phi)`` — the eigenvector real/imag parts
+        ``(B, N, N)`` and ``phi`` ``(B, M, magnetic_dim)`` — or ``None`` when the
+        magnetic input is absent.
+        """
         if magnetic is None or num_nodes is None:
             return None
-        V, lambdas = magnetic # (B,N,N,2), (B,N)
-        V_real, V_imag = V[..., 0], V[..., 1] # (B, N, N) each
+        V, lambdas = magnetic                                     # (B,N,N,2), (B,N)
+        V_real, V_imag = V[..., 0], V[..., 1]                     # (B, N, N) each
 
-        h_i   = self.lambda_lin(lambdas.unsqueeze(-1))                                          # (B, M, head_dim)
+        h_i   = self.lambda_lin(lambdas.unsqueeze(-1))            # (B, M, head_dim)
         valid = (torch.arange(lambdas.shape[1], device=device).unsqueeze(0)
-                 < num_nodes.unsqueeze(1))                                                       # (B, M) bool
+                 < num_nodes.unsqueeze(1))                        # (B, M) bool
 
         # Divide by the number of valid eigenvalues, not num_nodes.
         # With full eigenvectors (M=N) these are equal; with truncated (M<N) they differ.
         n_valid = valid.sum(dim=1, keepdim=True).unsqueeze(-1).to(h_i.dtype).clamp(min=1)       # (B, 1, 1)
         h_avg   = (h_i * valid.unsqueeze(-1)).sum(1, keepdim=True) / n_valid                   # (B, 1, head_dim)
 
-        phi = self.deep_set(torch.cat([h_i, h_avg.expand_as(h_i)], dim=-1))                                 # (B, N, magnetic_dim)
+        phi = self.deep_set(torch.cat([h_i, h_avg.expand_as(h_i)], dim=-1))                    # (B, N, magnetic_dim)
+        return V_real, V_imag, phi
+
+    def _folded_spectral(self, V_real, V_imag, phi) -> torch.Tensor:
+        """Folded per-edge spectral feature ``(B, N, N, magnetic_dim)`` — the
+        input to ``proj[1]``.
+
+        The first proj layer is linear, so project ``phi`` (B,M,m — tiny) BEFORE
+        the N² einsums instead of their (B,N,N,2m) cat after. The (B,N,N,m)
+        hidden is emitted directly; ``real``/``imag`` and the cat never exist,
+        halving the largest per-layer intermediates. Uses the same parameters —
+        ``proj[0]``'s weight is just split into its real/imag column halves.
+        """
+        W1, b1 = self.proj[0].weight, self.proj[0].bias           # (m, 2m), (m)
+        m = W1.shape[0]
+        phiR = phi @ W1[:, :m].T                                  # (B, M, m)
+        phiI = phi @ W1[:, m:].T                                  # (B, M, m)
+        return (
+            torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phiR)
+            + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phiR)
+            + torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phiI)
+            - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phiI)
+        ) + b1                                                    # (B, N, N, m)
+
+    @staticmethod
+    def _finalize(b, device) -> torch.Tensor:
+        """``(B, N, N, H)`` → ``(B, H, N, N)`` with the intra-node diagonal zeroed."""
+        b = b.permute(0, 3, 1, 2).contiguous()                    # (B, H, N, N)
+        diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
+        return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
+
+    def forward(
+        self, *, dtype, device,
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        num_nodes: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Optional[torch.Tensor]:
+        parts = self._phi(magnetic, num_nodes, device)
+        if parts is None:
+            return None
+        V_real, V_imag, phi = parts
 
         if getattr(self, "legacy_unfolded", False):
             # Original formulation, kept for parity testing: materializes the
@@ -188,28 +234,87 @@ class MagneticBias(BaseBias):
             imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi) - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi))
             b = self.proj(torch.cat([real, imag], dim=-1))
         else:
-            # Folded formulation (algebraically identical): the first proj
-            # layer is linear, so project phi (B,M,m — tiny) BEFORE the N²
-            # einsums instead of their (B,N,N,2m) cat after. The first hidden
-            # layer (B,N,N,m) is emitted directly; `real`/`imag` and the cat
-            # never exist, halving the largest per-layer intermediates (and
-            # the #7 recompute cost). Uses the same parameters — proj[0]'s
-            # weight is just split into its real/imag column halves.
-            W1, b1 = self.proj[0].weight, self.proj[0].bias       # (m, 2m), (m)
-            m = W1.shape[0]
-            phiR = phi @ W1[:, :m].T                              # (B, M, m)
-            phiI = phi @ W1[:, m:].T                              # (B, M, m)
-            hidden = (
-                torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phiR)
-                + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phiR)
-                + torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phiI)
-                - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phiI)
-            ) + b1                                                # (B, N, N, m)
+            hidden = self._folded_spectral(V_real, V_imag, phi)   # (B, N, N, m)
             b = self.proj[2](self.proj[1](hidden))                # SiLU, Linear
 
-        b = b.permute(0, 3, 1, 2).contiguous()                    # (B, H, N, N)
-        diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
-        return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
+        return self._finalize(b, device)
+
+
+class MagneticContentBias(MagneticBias):
+    """Content-conditioned magnetic bias (per-layer).
+
+    Reuses ``MagneticBias``'s spectral machinery up to the ``proj[1]`` output —
+    the per-edge spectral feature ``Spectral(u,v) ∈ (B,N,N,m)`` — then widens the
+    final projection with a low-dimensional semantic summary of each endpoint
+    node, extracted live from the first token of every node's sequence.
+
+    At each layer l:
+      Z          = MLP_down(H^(l)[node_start_indices])   # (B, N, d_proj)
+      feat(u,v)  = [ Spectral(u,v) ‖ Z_u ‖ Z_v ]         # (B, N, N, m + 2·d_proj)
+      b(u,v)     = proj[2](feat)                          # (B, N, N, num_heads)
+
+    proj[2] is zero-initialised (inherited pattern), so the content term starts
+    at 0 and grows in — it cannot destabilise training from step 0. Gradients
+    flow end-to-end into the hidden states (no detach), incentivising the LM to
+    aggregate semantic payload into each node's first token.
+
+    Consumes the same magnetic features as ``MagneticBias`` plus the live
+    ``hidden_states`` (stashed on the attention module by a forward pre-hook) and
+    ``node_start_indices`` (first-token position per node, derived from
+    ``node_ids``). Returns ``None`` if any required input is absent.
+    """
+
+    config_key = 'magnetic_content'
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        super().__init__(num_heads, head_dim, bias_config)
+        magnetic_dim = getattr(bias_config, 'magnetic_dim', 32)
+        d_proj = getattr(bias_config, 'magnetic_content_dim', 128)
+        d_model = getattr(bias_config, 'hidden_size')
+        # Down-project each node's first-token hidden state to a tiny summary.
+        self.down = nn.Sequential(
+            nn.Linear(d_model, d_proj, bias=True),
+            nn.SiLU(),
+        )
+        # Widen the final projection input by the two endpoint summaries, and
+        # re-apply MagneticBias's zero-init to the (now wider) final layer.
+        self.proj[2] = nn.Linear(magnetic_dim + 2 * d_proj, num_heads, bias=True)
+        nn.init.zeros_(self.proj[2].weight)
+        nn.init.zeros_(self.proj[2].bias)
+        self.proj[2]._is_hf_initialized = True
+
+    def forward(
+        self, *, dtype, device,
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        num_nodes: Optional[torch.Tensor] = None,
+        hidden_states: Optional[torch.Tensor] = None,
+        node_start_indices: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Optional[torch.Tensor]:
+        if hidden_states is None or node_start_indices is None:
+            return None
+        parts = self._phi(magnetic, num_nodes, device)
+        if parts is None:
+            return None
+        V_real, V_imag, phi = parts
+
+        spectral = self.proj[1](self._folded_spectral(V_real, V_imag, phi))    # (B, N, N, m)
+
+        # Per-node summary = first-token hidden state. node_start_indices is
+        # clamp-to-0 padded; padded node slots gather a harmless real row (they
+        # never map to real tokens after expand_node_to_token_bias / masking).
+        d = hidden_states.shape[-1]
+        idx = node_start_indices.unsqueeze(-1).expand(-1, -1, d)               # (B, N, d_model)
+        h_sum = torch.gather(hidden_states, 1, idx)                            # (B, N, d_model)
+        Z = self.down(h_sum.to(spectral.dtype))                               # (B, N, d_proj)
+
+        N = spectral.shape[1]
+        Zu = Z.unsqueeze(2).expand(-1, -1, N, -1)                             # (B, N, N, d_proj) endpoint u (row)
+        Zv = Z.unsqueeze(1).expand(-1, N, -1, -1)                             # (B, N, N, d_proj) endpoint v (col)
+        feat = torch.cat([spectral, Zu, Zv], dim=-1)                          # (B, N, N, m + 2·d_proj)
+
+        b = self.proj[2](feat)                                                # (B, N, N, H)
+        return self._finalize(b, device)
 
 
 class MagneticSharedBias(MagneticBias):
@@ -237,6 +342,7 @@ BIAS_TYPES: list[type[BaseBias]] = [
     RRWPBias,
     MagneticBias,
     MagneticSharedBias,
+    MagneticContentBias,
 ]
 """Add new bias types here — GraphAttentionBias picks them up automatically."""
 
@@ -295,6 +401,9 @@ class GraphAttentionBias(nn.Module):
     @property
     def require_magnetic(self) -> bool:  return 'magnetic'  in self._active
 
+    @property
+    def require_magnetic_content(self) -> bool: return 'magnetic_content' in self._active
+
     # ── Forward ───────────────────────────────────────────────────────────────
 
     def forward(
@@ -307,6 +416,8 @@ class GraphAttentionBias(nn.Module):
         rwse:        Optional[torch.Tensor]                           = None,
         rrwp:        Optional[torch.Tensor]                           = None,
         magnetic:    Optional[Tuple[torch.Tensor, torch.Tensor]]      = None,
+        hidden_states: Optional[torch.Tensor]                         = None,
+        node_start_indices: Optional[torch.Tensor]                    = None,
         k_hop_mask:  Optional[torch.Tensor]                           = None,
         cache_dict:  Optional[dict]                                   = None,
     ) -> Optional[torch.Tensor]:
@@ -329,6 +440,7 @@ class GraphAttentionBias(nn.Module):
                 dtype=dtype, device=device,
                 num_nodes=num_nodes, spd=spd, laplacian=laplacian,
                 rwse=rwse, rrwp=rrwp, magnetic=magnetic,
+                hidden_states=hidden_states, node_start_indices=node_start_indices,
             )
             if b is not None:
                 node_bias = b if node_bias is None else node_bias + b

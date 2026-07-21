@@ -1,39 +1,55 @@
-## GTLM v2 Architecture Specification: Content-Conditioned Structural Routing
+## GTLM v2 Feature Spec: Content-Conditioned Magnetic Bias
 
-### 1. Architectural Objective
-The standard GTLM architecture forces the language model to route attention across
-RoPE-reset node boundaries using purely structural, input-static biases (e.g. the
-magnetic Laplacian bias, whose spectral features are precomputed once and are
-identical at every layer). This specification introduces a **Content-Conditioned
-Bias** (`magnetic_content`, internally `mag_cont` — "magnetic + content") that
-injects a dynamically aggregated, low-dimensional semantic summary of each node
-into the existing magnetic-Laplacian edge feature. The result acts as a smart
-semantic gate while strictly preserving permutation equivariance and a tiny
+### 1. Objective
+The standard GTLM magnetic bias routes attention across RoPE-reset node
+boundaries using a purely **structural, input-static** signal: the magnetic
+Laplacian spectral features are precomputed once and are identical at every
+layer. This spec adds a **Content-Conditioned Bias** (`magnetic_content`,
+internally `mag_cont` — "magnetic + content") that injects a dynamically
+aggregated, low-dimensional **semantic summary of each node** into that existing
+magnetic-Laplacian edge feature. The result acts as a smart semantic gate on
+cross-node routing while strictly preserving permutation equivariance and a tiny
 (~0.015%) parameter budget.
 
-`magnetic_content` is a **new, additional** bias type registered alongside the
-existing biases. The current `magnetic` / `magnetic_shared` types are kept
-unchanged as options.
+The single research goal is to **isolate the effect of conditioning the magnetic
+bias on content priors** on downstream performance. `magnetic_content` is a
+**new, additional** bias type registered alongside the existing biases; it is a
+per-layer bias (one instance per transformer layer, exactly like `magnetic`).
+The current `magnetic` / `magnetic_shared` types are kept **unchanged** as
+options, so the ablation is a clean one-flag swap.
 
 ### 2. The First-Token API (Semantic Sink)
 The architecture makes no assumptions about specific token vocabularies (e.g.
-hardcoded `<NODE_SUMMARY>` tokens). Instead it relies on a structural
-**First-Token Assumption**.
+hardcoded `<NODE_SUMMARY>` tokens). It relies on a structural **First-Token
+Assumption**: whatever token happens to be first in a node's sequence acts as
+that node's semantic summary slot. (The dataloader *may* later place a
+user-defined tag — `<ENTITY>`, `<RELATION>`, … — there; the mechanism works on
+whatever the first token is and needs no data change to function.)
 
-*   **Data Layout:** The dataloader can place any user-defined tag (e.g.
-    `<ENTITY>`, `<RELATION>`) as the first token of a node's sequence.
-*   **Extraction:** At a compute layer $l$, the model slices the hidden states of
-    the first token of every node to act as the dynamic semantic summary.
+*   **Extraction:** at each layer $l$, the model slices the hidden states of the
+    first token of every node to form the dynamic per-node summary:
 
-$$H_{\text{sum}}^{(l)} = H^{(l)}[\text{node\_start\_indices}] \in \mathbb{R}^{N \times d_{\text{model}}}$$
+    $$H_{\text{sum}}^{(l)} = H^{(l)}[\text{node\_start\_indices}] \in \mathbb{R}^{N \times d_{\text{model}}}$$
 
 *   **`node_start_indices` — the one genuinely new data path.** Every existing
     bias consumes precomputed *node-level* structural features; `magnetic_content`
     is the first to consume the **live token-level hidden states** $H^{(l)}$. The
     model already carries `node_ids` `(B, kv_len)` (token → node). This bias needs
     the **inverse**: `node_start_indices` `(B, N)` = position of the first token
-    whose `node_ids == n`, derived once from `node_ids` (first occurrence per id)
-    and reused at every compute layer.
+    whose `node_ids == n`, derived **once** from `node_ids` (first occurrence per
+    id) and reused by every layer.
+
+*   **Obtaining $H^{(l)}$ (the new plumbing).** Under Strategy B there is no
+    attention `forward` override, and the registered `gtlm_*` function receives
+    only q/k/v (post-projection), **not** the raw residual-stream hidden state.
+    `magnetic_content` therefore captures $H^{(l)}$ with a **forward pre-hook on
+    each attention module** that stashes the layer's input `hidden_states` onto
+    the module (mirroring the existing set-and-leave `_graph_ctx` pattern in
+    `context.py`). This preserves the "init-only swaps, no forward override"
+    invariant, matches the module-attached-context idiom already in use, and is
+    correct under gradient checkpointing for free — the pre-hook fires again on
+    recompute, so the stashed $H^{(l)}$ is always the freshly-recomputed tensor.
+
 *   **Batching / padding.** `node_start_indices` is padded to `N_max`. Padded node
     slots MUST use a **safe sentinel index (clamp to 0), never an out-of-bounds
     gather**. Their gathered summaries are harmless: `num_nodes`/`valid` masking
@@ -43,73 +59,32 @@ $$H_{\text{sum}}^{(l)} = H^{(l)}[\text{node\_start\_indices}] \in \mathbb{R}^{N 
     $(u,v)$ entry before masking — a plain MLP over finite clamped-index values
     satisfies this.
 
-### 3. Bias-Stride Mechanism (unifies `shared` into a general knob)
-`bias_stride` generalizes the existing per-layer / shared distinction into a
-single integer:
+### 3. Config Surface — additive, backward-compatible
+Nothing existing migrates; the config surface only grows:
 
-| Regime            | Meaning                                              |
-| ----------------- | ---------------------------------------------------- |
-| `stride = 1`      | per-layer compute (≡ old `shared = False`) — DEFAULT |
-| `stride = L`      | computed once, reused everywhere (≡ old `shared = True`, `L = n_layers`) |
-| `1 < stride < L`  | the new intermediate capability                      |
+*   `magnetic_content: bool = False` — enables the new bias type.
+*   `magnetic_content_dim: int = 128` — the down-projection width $d_{\text{proj}}$.
+*   The existing `magnetic` / `magnetic_shared` fields and every current config
+    are **untouched** and behave identically.
 
-**Semantics of the backend** (applies to every bias type): the bias is computed
-only at layers where $l \bmod \text{stride} = 0$; that layer uses its own weights,
-caches the result in the graph context, and the subsequent $\text{stride}-1$
-layers reuse the cached tensor.
+`magnetic_content` reuses the magnetic-Laplacian machinery, so it consumes the
+**same input features** as `magnetic` (the eigenvectors/eigenvalues
+`magnetic_V` / `magnetic_lambdas` supplied by the dataloader) plus the live
+hidden states. Enabling it therefore requires the magnetic features to be present
+in the batch, exactly as `magnetic` does.
 
-Worked example — 8 layers, `stride = 4`: layer 1 computes (own weights) → uses →
-caches; layers 2–4 reuse layer 1's cache; layer 5 computes (own weights) → uses →
-caches; layers 6–8 reuse layer 5's cache.
-
-**Two placement regimes the unified backend must honor** (the old `shared` flag
-was never *only* caching — it was also placement):
-
-*   **Static-input biases** (spd, laplacian, magnetic, rwse, rrwp): input is
-    identical at every layer, so stride only controls **parameter sharing** across
-    strided groups. When `stride ≥ n_layers`, the bias is additionally eligible for
-    the **hoist-outside-checkpointing** optimization (compute once, outside the
-    gradient-checkpointed decoder layers, so the $O(N^2)$ work runs once per
-    forward instead of once-per-layer-per-recompute — the current
-    `magnetic_shared` win, which must be preserved).
-*   **Dynamic-input bias** (`magnetic_content`): the input *is* the evolving
-    hidden state, so it **must** be computed inside the layer stack at each compute
-    layer. It cannot be hoisted and is inherently subject to recompute.
-
-The backend therefore carries a "hoistable?" capability flag = (static input) ∧
-(`stride ≥ n_layers`). The default stride for `magnetic_content` is **1**.
-
-*Note:* the mechanism supports intermediate strides for the static biases for
-free, but the only effect there is parameter-sharing groups (dubious value); leave
-that undocumented/untuned until there is a reason. The interesting stride knob is
-on `magnetic_content`.
-
-### 4. Config Surface — additive, backward-compatible
-The internal model gets the stride-unified backend, but the **config surface only
-grows** — nothing existing migrates:
-
-*   Add an optional per-bias `stride` field, defaulting so existing configs behave
-    **identically** (currently-per-layer types default `stride = 1`; the shared
-    magnetic keeps its current behavior).
-*   Keep `magnetic_shared: true` working as a **thin alias** routing to the unified
-    backend with `stride = n_layers`. Old configs and call sites are untouched.
-*   `magnetic_content` is a new registered type with its own `stride` (default 1).
-
-This avoids a global config-schema rewrite (and the "million call sites" churn):
-new behavior is strictly opt-in.
-
-### 5. The Content-Conditioned Bias Formulation
+### 4. The Content-Conditioned Bias Formulation
 The injection reuses the magnetic-Laplacian machinery (see `MagneticBias` in
 `bias.py`). That module folds a per-node feature `phi` through the eigenvector
 einsums into a per-edge, basis-invariant spectral feature
 $\text{Spectral}(u,v) \in \mathbb{R}^{N \times N \times m}$ (the `hidden` tensor,
 i.e. the input to the final projection `proj[2]`).
 
-`magnetic_content` widens exactly that final-MLP input. At each compute layer $l$:
+`magnetic_content` widens exactly that final-MLP input. At each layer $l$:
 
 1.  **Down-project the summaries** through a small MLP:
     $$Z^{(l)} = \text{MLP}_{\text{down}}\!\left(H_{\text{sum}}^{(l)}\right) \in \mathbb{R}^{N \times d_{\text{proj}}}$$
-    with $d_{\text{proj}}$ configurable (default $128$).
+    with $d_{\text{proj}}$ = `magnetic_content_dim` (default $128$).
 2.  **Concatenate** the down-projected summaries of the two endpoints onto the
     existing per-edge spectral feature, endpoint order $(u, v)$:
     $$\text{feat}(u,v) = \left[\, \text{Spectral}(u,v) \;\|\; Z_u^{(l)} \;\|\; Z_v^{(l)} \,\right]$$
@@ -118,13 +93,12 @@ i.e. the input to the final projection `proj[2]`).
 
 Concretely this replaces `edge_features` with
 `cat(edge_features, sum_u_down, sum_v_down)` at the `proj[2]` boundary and widens
-that layer's input dimension accordingly.
+that layer's input dimension by $2 \cdot d_{\text{proj}}$ accordingly.
 
-### 6. Modified Attention Matrix
-For any attention layer $k$ within the active stride window
-($l \le k < l + \text{stride}$), the logits are:
+### 5. Modified Attention Matrix
+For attention layer $l$ the logits are:
 
-$$A_{ij}^{(k)} = \frac{Q_i^{(k)} {K_j^{(k)}}^T}{\sqrt{d}} + b_{\text{spd}}(u,v) + b_{\text{mag\_cont}}^{(l)}(u,v)$$
+$$A_{ij}^{(l)} = \frac{Q_i^{(l)} {K_j^{(l)}}^T}{\sqrt{d}} + b_{\text{spd}}(u,v) + b_{\text{mag\_cont}}^{(l)}(u,v)$$
 
 *   **Intra-node ($u = v$):** structural biases zero out (diagonal masked as in
     `MagneticBias`); standard RoPE guides 1D token composition.
@@ -132,7 +106,7 @@ $$A_{ij}^{(k)} = \frac{Q_i^{(k)} {K_j^{(k)}}^T}{\sqrt{d}} + b_{\text{spd}}(u,v) 
     provides a semantically gated routing scalar, bypassing cross-node RoPE
     scrambling.
 
-### 7. Optimization and Gradient Flow
+### 6. Optimization and Gradient Flow
 *   **Full end-to-end backprop:** no gradient detachment (`stop_gradient`) on the
     summary tokens. Gradients from the $O(N^2)$ structural routing loss flow
     backward through the final MLP, through $\text{MLP}_{\text{down}}$, and directly
@@ -142,15 +116,15 @@ $$A_{ij}^{(k)} = \frac{Q_i^{(k)} {K_j^{(k)}}^T}{\sqrt{d}} + b_{\text{spd}}(u,v) 
 *   **Zero-init the final MLP layer** (as `MagneticBias` already does at `proj[2]`):
     the content term starts at 0 and grows in, so it cannot destabilize training
     from step 0.
-*   **Layer-0 behavior is intended and safe.** At `stride = 1` the bias at layer $l$
-    reads layer-$l$ hidden states, so the earliest bias is conditioned on near-raw
+*   **Layer-0 behavior is intended and safe.** The bias at layer $l$ reads
+    layer-$l$ hidden states, so the earliest bias is conditioned on near-raw
     embeddings. If all nodes share the same summary token this degenerates to a
     structure-only bias (a fine prior); if the summary token is type-specific it is
     strictly better. Be aware of the intended feedback loop (summaries both shape
     and are shaped by routing) when debugging training dynamics — zero-init keeps it
     from diverging from the start.
 
-### 8. Scaling
-No fixed `max N` for now. Each `magnetic_content` compute is $O(N^2)$ in the final
-MLP; `bias_stride` amortizes how *often* that runs but not the per-invocation cost.
-Measure empirically and adjust $d_{\text{proj}}$ / inputs as needed.
+### 7. Scaling
+No fixed `max N` for now. Each `magnetic_content` layer costs $O(N^2)$ in the
+final MLP (it runs once per layer, like `magnetic`). Measure empirically and
+adjust $d_{\text{proj}}$ / inputs as needed.

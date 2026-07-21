@@ -227,6 +227,13 @@ def compute_node_bias(
             rwse=feats["rwse"],
             rrwp=feats["rrwp"],
             magnetic=feats["magnetic"],
+            # magnetic_content: the live residual-stream hidden state of this
+            # layer, stashed on the attention module by a forward pre-hook (see
+            # GraphCausalLMMixin). None for every other bias type. Read inside the
+            # closure so gradient-checkpoint recompute re-reads the freshly
+            # recomputed hidden state.
+            hidden_states=getattr(module, "_captured_hidden_states", None),
+            node_start_indices=ctx.node_start_indices,
             k_hop_mask=None,
             cache_dict=ctx.cache,
         )

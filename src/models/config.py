@@ -23,7 +23,9 @@ class GraphConfigMixin:
         max_rw_steps: int = 8,
         magnetic: bool = False,
         magnetic_shared: bool = False,
+        magnetic_content: bool = False,
         magnetic_dim: int = 32,
+        magnetic_content_dim: int = 128,
         magnetic_q: float = 0.25,
         k_hop: int = 0,
         k_hop_directed: bool = False,
@@ -43,7 +45,13 @@ class GraphConfigMixin:
         self.max_rw_steps = max_rw_steps
         self.magnetic = magnetic
         self.magnetic_shared = magnetic_shared
+        # Content-conditioned magnetic bias (per-layer). Reuses the magnetic
+        # spectral machinery and consumes the same magnetic_V / magnetic_lambdas
+        # features, plus the live hidden states (see MagneticContentBias). Its
+        # down-projection width is magnetic_content_dim (d_proj).
+        self.magnetic_content = magnetic_content
         self.magnetic_dim = magnetic_dim
+        self.magnetic_content_dim = magnetic_content_dim
         self.magnetic_q = magnetic_q
         self.k_hop = k_hop
         self.k_hop_directed = k_hop_directed
