@@ -40,9 +40,15 @@ DTYPES = ("fp32", "bf16")
 
 # Backbones this experiment can train, keyed by a substring of ``model_name`` (so the
 # backbone is not a second knob that can disagree with the checkpoint). Llama-3 is the
-# experiment's model; BLOOM is the ALiBi probe — a demonstration that the graph bias
-# is not tied to RoPE positional encoding, run at bloom-560m on one small task rather
-# than across the ablation grid. See ``src/models/modeling_gtlm_bloom.py``.
+# experiment's model; the other two are positional-encoding probes — evidence that the
+# graph bias is not tied to one PE scheme — run on one small task rather than across
+# the ablation grid:
+#
+#   llama    single global RoPE, every layer               (the production backbone)
+#   bloom    ALiBi: additive slope bias, no rotation       (modeling_gtlm_bloom.py)
+#   gemma-3  layer-heterogeneous RoPE: most layers at a local base
+#            (rope_local_base_freq), every 6th at a global one (rope_theta)
+#                                                          (modeling_gtlm_gemma3.py)
 BACKBONES = {
     "llama": dict(
         classes=("GTLMLlamaConfig", "GTLMLlamaForCausalLM"),
@@ -59,6 +65,39 @@ BACKBONES = {
         # attention never dispatches to the registered gtlm_flex function).
         impls=("v2-eager",),
     ),
+    "gemma-3": dict(
+        classes=("GTLMGemma3Config", "GTLMGemma3ForCausalLM"),
+        # Gemma-3 uses Llama's projection names, so the same LoRA targets apply.
+        lora_targets=("q_proj", "k_proj", "v_proj", "o_proj",
+                      "gate_proj", "up_proj", "down_proj"),
+        # Strategy B like Llama (stock attention dispatches through HF's attention
+        # interface), so both backends are reachable — unlike the BLOOM probe.
+        impls=IMPLS,
+    ),
+}
+
+# Checkpoints that *look* like a wired backbone but are not, with the reason. Checked
+# before the BACKBONES substring match so the failure names the actual obstacle rather
+# than "no backbone wires this" (gemma-2) or blowing up later inside from_pretrained
+# on a config shape we never handle (multimodal gemma-3).
+_MULTIMODAL_GEMMA3 = (
+    "Only the text-only gemma-3-1b checkpoints load through GTLMGemma3Config. The 4b "
+    "and larger Gemma-3 releases are multimodal: their config nests the text config "
+    "under `text_config`, which this experiment does not unwrap."
+)
+_GEMMA2_SOFTCAP = (
+    "Gemma-2 ships attn_logit_softcapping=50.0 and final_logit_softcapping=30.0, which "
+    "the shared GTLM stack applies at neither site — training it would silently diverge "
+    "from the pretrained backbone (GTLMGemma3ForCausalLM refuses such a config by "
+    "design). Gemma-3 sets both to None; use gemma-3-1b-pt, which is also the more "
+    "interesting probe — Gemma-2 is plain global RoPE, positionally identical to Llama."
+)
+
+UNWIRED_BACKBONES = {
+    "gemma-2": _GEMMA2_SOFTCAP,
+    "gemma-3-4b": _MULTIMODAL_GEMMA3,
+    "gemma-3-12b": _MULTIMODAL_GEMMA3,
+    "gemma-3-27b": _MULTIMODAL_GEMMA3,
 }
 
 # Where the question text lives (mirrors the kgqa experiment's arm of the same
@@ -187,6 +226,9 @@ class RunConfig:
     def backbone(self):
         """Which base-LLM family ``model_name`` names (a key of ``BACKBONES``)."""
         name = self.model_name.lower()
+        for key, reason in UNWIRED_BACKBONES.items():
+            if key in name:
+                raise ValueError(f"model_name={self.model_name!r} is not wired: {reason}")
         for key in BACKBONES:
             if key in name:
                 return key

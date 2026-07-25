@@ -1,0 +1,124 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // GTLM on a layer-heterogeneous RoPE backbone: train the full graph-bias recipe
+  // on gemma-3-1b-pt across the nine reported tasks and report what it reaches.
+  // 9 tasks x 3 seeds = 27 runs.
+  //
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/010_gemma3_dualrope_data_prep.jsonc  # once
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/011_gemma3_dualrope_canary.jsonc     # does it learn?
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/012_gemma3_dualrope.jsonc
+  //   python3 -m sweep.report src/experiments/graphqa/results/012_gemma3_dualrope                                   # when jobs finish
+  //
+  // Backbone: google/gemma-3-1b-pt, whose positional information is RoPE at TWO
+  // frequencies that alternate by layer — 22 of its 26 layers rotate at a local
+  // base (rope_local_base_freq, 10k) and the other 4 at a global one (rope_theta,
+  // 1M). With Llama's single global RoPE (003_ablation) and BLOOM's ALiBi (009)
+  // that makes three positional-encoding regimes on one unchanged graph stack.
+  // `src/models/modeling_gtlm_gemma3.py` adapts it; nothing in the shared GTLM
+  // modules changed. Unlike the BLOOM adapter this is Strategy B like Llama — the
+  // stock attention dispatches to the registered gtlm_* function, so there is no
+  // attention forward override at all.
+  //
+  // Two adapter behaviours worth knowing when reading these numbers:
+  //   * Gemma-3's sliding-window layers are run WITHOUT the window. The window is
+  //     indexed by packed serialization order, so it would hide most of the graph
+  //     from 5 of every 6 layers. At GraphQA scale this is vacuous anyway: packed
+  //     sequences reach at most 126 tokens under the Gemma-3 tokenizer against a
+  //     512-token window, so every batch here reproduces stock Gemma-3 exactly plus
+  //     the graph bias.
+  //   * Both RoPE bases see GTLM's per-node position_ids, so the reset that every
+  //     backbone gets applies to the local and global layers alike.
+  //
+  // ONE arm — spd + rrwp + magnetic all on, the standard GTLM recipe. This is not
+  // an ablation: the question is whether the GTLM stack trains and performs on a
+  // dual-RoPE base model at all, which a single arm answers. (Consequence to keep
+  // in mind when writing it up, same as 009: with no text-only control in this
+  // sweep, the numbers show that GTLM *works* on this backbone, not how much of
+  // the accuracy the graph bias itself contributes.)
+  //
+  // Reading the result: per-task accuracy that lands in a sensible band and tracks
+  // the qualitative Llama pattern (easy tasks near ceiling, edge_count and
+  // triangle_counting lower) means the adapter is sound. Absolute numbers will sit
+  // below the Llama-3.2-1B figures in 003_ablation, and a shortfall is NOT evidence
+  // about positional encoding: gemma-3-1b has four attention heads to Llama's 32
+  // and the per-layer graph bias is per-head, so it has far fewer channels to
+  // express structure through. Compare against 009 with the same caveat.
+  //
+  // The recipe below is 003_ablation's, verbatim, except `model_name` and seeds.
+  // Standard encoding, question_node "off" (the 003 default), so the backbone is
+  // the only axis that differs from that study.
+  //
+  // Eager, like the rest of this probe. Flex IS wired and verified here (unlike
+  // BLOOM, whose adapter rejects it) — see tests/models/test_flex_attention_gemma3.py
+  // — but at ~90 packed tokens a batch is a single block mask with nothing to skip,
+  // so flex would buy per-shape compile time and no speedup.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "012_gemma3_dualrope",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 27,           // all 27 at once; nothing to throttle for
+      "partition": "frida",
+      // Any brand, as in 009: this sweep compares accuracy, not train_runtime_s, so
+      // there is nothing to keep comparable within a GPU generation, and widening
+      // the pool past the contended Blackwell nodes is what gets it scheduled. The
+      // runs are small (fp32 gemma-3-1b is ~4G of weights; only LoRA and bias
+      // tensors carry gradients), so a 40G A100 is ample.
+      // NB `gpus` entries become `GPU_BRD:<type>` constraints, and the A100 nodes
+      // carry GPU_BRD:A100 with GPU_MEM 40G or 80G — there is no GPU_BRD:A100_80GB
+      // feature to select the 80G one with.
+      "gpus": ["B200:1", "B300:1", "H100:1", "A100:1"],
+      "cpus": 8,
+      "mem": "64G",
+      // 2h, matching 009. Set from 011's measured runtime once it has run; the
+      // 003_ablation standard-encoding worst case was 17.7 min and 008 took 13.4.
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+      // "dry_run": true             // write sbatch_commands.sh without submitting
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes: the nine reported tasks x three seeds ───────────────────────────
+  "task": ["node_count", "edge_count", "cycle_check", "triangle_counting",
+           "node_degree", "connected_nodes", "reachability", "edge_existence",
+           "shortest_path"],
+  "seed": [0, 1, 2],
+  "graph_type": "standard",
+
+  // ── the graph bias: all three features on ─────────────────────────────────
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  // ── the recipe (003_ablation's, verbatim) ─────────────────────────────────
+  "model_name": "google/gemma-3-1b-pt",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+
+  // ── bias architecture ─────────────────────────────────────────────────────
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

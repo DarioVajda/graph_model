@@ -1,0 +1,92 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // ONE real run of the dual-RoPE probe: does gemma-3-1b-pt actually LEARN a
+  // GraphQA task through the GTLM graph bias? Run before committing to 012's 27.
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/011_gemma3_dualrope_canary.jsonc
+  //
+  // 004_canary and 008_bloom_alibi_canary are the same check for the Llama and
+  // BLOOM backbones, and the reasoning carries over: everything up to this point
+  // proves the *plumbing*, and proves it harder than for BLOOM — 13 unit tests
+  // (stock-Gemma-3 parity within the sliding window, both RoPE bases reaching
+  // their layers, per-node reset driving the rotation, DynamicCache instead of
+  // HybridCache, save/load round-trip) plus 8 GPU flex-vs-eager parity tests. None
+  // of that proves the model converges. Exact match over the whole answer span is
+  // all-or-nothing, so only a full-length run separates "it learns" from "it never
+  // leaves 0".
+  //
+  // Task: node_count, the easiest one — Llama-3.2-1B reaches 0.997 on it in
+  // 003_ablation and bloom-1b1 reached 1.000 in 008. gemma-3-1b has ~700M
+  // non-embedding parameters (a 262k tied vocab holds ~300M of its 1B), so expect
+  // LOWER; the question here is only whether accuracy climbs off the floor at all.
+  //
+  // Read: `eval_em_accuracy` over the 20 epochs (and `eval_loss` falling).
+  //   climbs well off 0    -> the backbone learns through the graph bias; run 012
+  //   flat at 0.0          -> the backbone, not the wiring. The adapter path is
+  //                           already pinned by the test suite above, so the first
+  //                           hypothesis is capacity: gemma-3-1b has FOUR attention
+  //                           heads to Llama-3.2-1B's 32, and the per-layer graph
+  //                           bias is per-head — it has 8x fewer channels to
+  //                           express structure through. gemma-3-4b-pt (8 heads) is
+  //                           the fallback, at the cost of leaving the ~1B scale.
+  //
+  // Base arm only, all three bias features on — there is no text-only control in
+  // this probe (see 012's header for what that costs the write-up).
+  //
+  // Eager, like every run in this probe: flex's win is block-skipping on sparse
+  // block masks, and at ~90 packed tokens the batch is a single block with nothing
+  // to skip, so it would only buy per-shape compile time. (Flex IS wired and
+  // verified on this backbone — unlike BLOOM — it is simply pointless at this
+  // scale; see tests/models/test_flex_attention_gemma3.py.)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "011_gemma3_dualrope_canary",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "task": "node_count",
+  "graph_type": "standard",
+  "seed": 42,
+
+  // ── all biases on: the base arm ──────────────────────────────────────────
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  // ── the real recipe (identical to 012 / 003_ablation) ────────────────────
+  "model_name": "google/gemma-3-1b-pt",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": null
+}

@@ -20,8 +20,13 @@ python3 -m sweep.report src/experiments/graphqa/results/003_ablation            
 python3 -m src.experiments.graphqa.analysis.prep_table src/experiments/graphqa/results/003_ablation   # paper tables
 ```
 
-Side probe — the same recipe on an **ALiBi** backbone (bloom-1b1) instead of Llama-3,
-to show the GTLM stack is not tied to RoPE (`src/models/modeling_gtlm_bloom.py`):
+## Positional-encoding probes
+
+Side probes — the same recipe on a base model whose positional encoding is *not*
+Llama's single global RoPE, to show the GTLM stack is not tied to one PE scheme.
+
+**ALiBi** (bloom-1b1, `src/models/modeling_gtlm_bloom.py`) — additive slope bias, no
+rotation at all:
 
 ```bash
 python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/007_bloom_alibi_data_prep.jsonc  # BLOOM-tokenized cache
@@ -30,14 +35,33 @@ python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/009_blo
 python3 -m sweep.report src/experiments/graphqa/results/009_bloom_alibi                                   # aggregate
 ```
 
-Same nine reported tasks and the same recipe as `003_ablation` (standard encoding,
-`question_node: "off"`), with the full graph bias on in every run — this is a
-demonstration that GTLM trains on an ALiBi base model, not a second ablation.
+**Layer-heterogeneous RoPE** (gemma-3-1b-pt, `src/models/modeling_gtlm_gemma3.py`) —
+22 of 26 layers rotate at a local base (`rope_local_base_freq`, 10k), the other 4 at a
+global one (`rope_theta`, 1M), so different layers read the same `position_ids` at
+different frequencies:
+
+```bash
+python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/010_gemma3_dualrope_data_prep.jsonc  # Gemma3-tokenized cache
+python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/011_gemma3_dualrope_canary.jsonc     # 1 run: does it learn?
+python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/012_gemma3_dualrope.jsonc            # 27 runs: 9 tasks x 3 seeds
+python3 -m sweep.report src/experiments/graphqa/results/012_gemma3_dualrope                                   # aggregate
+```
+
+Both use the same nine reported tasks and the same recipe as `003_ablation` (standard
+encoding, `question_node: "off"`), with the full graph bias on in every run — these are
+demonstrations that GTLM trains on those base models, not further ablations.
 
 The backbone follows from `model_name` (`config.BACKBONES`), which also picks the LoRA
-target modules and the tokenizer the cache is keyed by. Absolute accuracy sits below
-the Llama numbers for reasons unrelated to positional encoding (bloom-1b1 has ~680M
-non-embedding parameters to Llama-3.2-1B's ~975M, and is multilingual).
+target modules and the tokenizer the cache is keyed by. Compare each probe against its
+own text-only control rather than against the Llama numbers: absolute accuracy differs
+for reasons unrelated to positional encoding (bloom-1b1 has ~680M non-embedding
+parameters to Llama-3.2-1B's ~975M and is multilingual; gemma-3-1b has 4 attention
+heads to Llama's 32, and the per-layer graph bias is per-head).
+
+Gemma-2 and the multimodal Gemma-3 sizes (4b+) are refused with an explanatory error
+(`config.UNWIRED_BACKBONES`) — Gemma-2 because its logit softcapping would be silently
+dropped by the shared stack, the larger Gemma-3s because their config nests the text
+config under `text_config`.
 
 The two checks answer different questions, and the order matters. `002_smoke` runs 4
 steps and **reports `test_accuracy: 0.0` even when everything is correct** — exact match

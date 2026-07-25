@@ -1,0 +1,70 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build the Gemma3-tokenized dataset cache for the dual-RoPE probe (011/012).
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/010_gemma3_dualrope_data_prep.jsonc
+  //
+  // Same graphs, same nine reported tasks and same feature knobs as 001_data_prep
+  // and 007 — only the tokenizer changes, because the cache stores token ids.
+  // `model_name` is part of the cache identity, so these land in tagged sibling
+  // directories (`.../<task>__q0.25_rw16_len1024_gemma-3-1b-pt`) and both the Llama
+  // and BLOOM caches are untouched.
+  //
+  // STANDARD encoding only, for the same reason as 007: the probe asks whether the
+  // graph bias survives a backbone whose layers read positions at two different
+  // RoPE frequencies, which the standard encoding answers; incidence would double
+  // the build and the run for a question 003_ablation already covers on Llama.
+  //
+  // NB Gemma-3 tokenizes with a 262k-entry SentencePiece vocabulary against Llama's
+  // 128k, so token counts differ from the Llama cache. Measured over these nine
+  // tasks it runs ~1.16-1.22x longer, worst case 126 packed tokens (connected_nodes)
+  // against Gemma-3's 512-token sliding window — 4x headroom. That matters because
+  // it is the whole reason the adapter can drop the window for free: every batch
+  // stays in the regime where GTLM-Gemma3 reproduces stock Gemma-3 exactly. If a
+  // future task or encoding pushed past 512, `GTLMGemma3Model._update_causal_mask`
+  // would start warning on every batch — that warning is the tripwire.
+  // `max_length` below is a PER-NODE cap, not the packed length, and never binds.
+  //
+  // Idempotent; one allocation builds all nine sequentially. GPU feature build
+  // (`use_gpu: true`) as in 007 — 011 and 012 read this one cache, so any CPU/GPU
+  // numeric difference is common to every run and cannot confound anything.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "010_gemma3_dualrope_data_prep",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",        // all nine builds sequentially in one job
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],   // used: SPD / RRWP / magnetic build on it
+      "cpus": 8,
+      "mem": "64G",
+      "time": "4:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  // ── the nine reported tasks, as in 001 / 003 / 007 ────────────────────────
+  "task": ["node_count", "edge_count", "cycle_check", "triangle_counting",
+           "node_degree", "connected_nodes", "reachability", "edge_existence",
+           "shortest_path"],
+  "graph_type": "standard",
+
+  // ── the only difference from 001: the tokenizer ───────────────────────────
+  // Text-only checkpoint. The 4b+ Gemma-3 releases are multimodal (their config
+  // nests the text config under `text_config`) and are refused by
+  // `config.UNWIRED_BACKBONES`, as is Gemma-2 (logit softcapping the shared GTLM
+  // stack does not apply).
+  "model_name": "google/gemma-3-1b-pt",
+
+  // ── feature-generation knobs (these define the cache identity) ────────────
+  "max_length": 1024,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,                    // 0 = keep all N eigenvectors
+  "max_rw_steps": 16,
+  "use_gpu": true
+}

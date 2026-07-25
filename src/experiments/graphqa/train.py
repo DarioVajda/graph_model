@@ -92,8 +92,9 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     # Trainer seeds itself, but only once the model already exists.)
     set_seed(cfg.seed)
 
-    # Llama by default; BLOOM when model_name names it (the ALiBi probe). Both are
-    # the same GTLM stack — only the thin backbone adapter differs.
+    # Llama by default; BLOOM (ALiBi) or Gemma-3 (layer-heterogeneous RoPE) when
+    # model_name names one — the positional-encoding probes. All three are the same
+    # GTLM stack; only the thin backbone adapter differs.
     gtlm_config_cls, gtlm_model_cls = cfg.gtlm_classes()
     config = gtlm_config_cls.from_pretrained(
         cfg.model_name, **cfg.bias_params(),
