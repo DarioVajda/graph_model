@@ -1,0 +1,103 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Content-conditioned magnetic bias on the levi_typed graph (2026-07-21): does
+  // the new `magnetic_content` bias (commit ee8431c, spec in src/models/TODO.md),
+  // fed type-specific first-token summary sinks, beat the plain magnetic term on
+  // WebQSP?
+  //
+  // Recipe = the best Levi GTLM arm — 029's question_node="isolated" (test F1
+  // .7351 ± .0074, itself 021's recipe verbatim, spd + magnetic) — with TWO
+  // coupled changes:
+  //   (1) routing bias:  magnetic=false, magnetic_content=true. magnetic_content
+  //       subsumes the magnetic spectral feature and widens its final MLP with a
+  //       live per-node semantic summary (each node's FIRST-token hidden state),
+  //       so the attention logit is  QK + b_spd + b_mag_cont  (TODO.md §6).
+  //   (2) graph_construction="levi_typed": every node's text is prefixed with a
+  //       uniform type word so the first token magnetic_content reads is a clean,
+  //       type-specific sink — entity→"entity", relation→"relation",
+  //       QUESTION→"question"; the PROMPT/answer node already starts with
+  //       "Answer:" and is left untouched. Topology/edges/targets are identical
+  //       to plain levi; only the node text (hence the first token) changes.
+  //
+  // NOTE: this arm couples (1) and (2), so it is NOT a clean single-variable
+  // ablation of magnetic_content alone — it is the intended combined design (the
+  // whole point of levi_typed was to give magnetic_content a good summary token).
+  // A magnetic_content-on-plain-levi arm would isolate the type-token's share.
+  //
+  // Everything else (hyperparameters, seeds, eval protocol) matches 029/021.
+  //
+  // References:
+  //   Levi/isolated (spd+magnetic)  .7351 ± .0074  (029)  <- the term to beat
+  //   Levi/off      (spd+magnetic)  .7207 mean     (021 graph runs)
+  //   flat (text-only LLM)          .7493 ± .0023
+  //
+  // 3 seeds. Requires 035_levi_typed_data_prep.jsonc's qnisolated_gclevi_typed
+  // cache to exist first.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/036_magnetic_content_webqsp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "magnetic_content_levi_typed_webqsp",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+  "question_node": "isolated",
+  "graph_construction": "levi_typed",
+
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": false,               // replaced by magnetic_content (subsumes it)
+  "magnetic_shared": false,
+  "magnetic_content": true,
+  "magnetic_content_dim": 128,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

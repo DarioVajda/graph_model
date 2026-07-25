@@ -185,12 +185,37 @@ def select_triples(record, max_nodes):
 # --------------------------------------------------------------------------- #
 # Levi construction + CVT collapse
 # --------------------------------------------------------------------------- #
-def build_base_levi(record, entity_names, rel_mode, max_nodes, cvt_collapse=True):
+ENTITY_TYPE_PREFIX = "entity "
+RELATION_TYPE_PREFIX = "relation "
+# The QUESTION node's uniform type-word sink (levi_typed). The PROMPT/answer node
+# already starts with "Answer:" (its label-mask + generation anchor), so its first
+# token is a uniform type word by construction and is deliberately left untyped.
+QUESTION_TYPE_PREFIX = "question "
+
+
+def _apply_type_prefix(G):
+    """Prefix every node's ``text`` with a type word so its FIRST token is a
+    uniform, type-specific semantic sink for the ``magnetic_content`` bias (which
+    reads each node's first-token hidden state). Relation nodes (``is_rel``) get
+    ``"relation "``, entity / value nodes get ``"entity "``. Applied AFTER CVT
+    collapse, so contracted rel->rel chains are unaffected. Only the base Levi
+    entity/relation nodes are typed — the PROMPT / QUESTION nodes are added later
+    and carry the question text, not a type."""
+    for n in G.nodes():
+        prefix = RELATION_TYPE_PREFIX if G.nodes[n].get("is_rel", False) else ENTITY_TYPE_PREFIX
+        G.nodes[n]["text"] = prefix + G.nodes[n]["text"]
+
+
+def build_base_levi(record, entity_names, rel_mode, max_nodes, cvt_collapse=True, typed=False):
     """Directed per-triple Levi graph with node text (CVTs collapsed by default).
     No prompt node yet. ``cvt_collapse=False`` keeps mediators as nodes (the
     2x2 collapse ablation's uncollapsed graph arm); the ``select_triples``
     budget already counts PRE-collapse Levi nodes, so uncollapsed graphs still
-    respect ``max_nodes``."""
+    respect ``max_nodes``.
+
+    ``typed=True`` (graph_construction="levi_typed") prefixes each node's text
+    with "entity "/"relation " — identical topology, only the text (hence the
+    first token) changes."""
     selected = select_triples(record, max_nodes)
     G = nx.DiGraph()
     for i, (h, rel, t) in enumerate(selected):
@@ -212,6 +237,9 @@ def build_base_levi(record, entity_names, rel_mode, max_nodes, cvt_collapse=True
     for tp in record["entities"]:
         if tp not in G:
             G.add_node(tp, text=resolve_entity_text(tp, entity_names))
+
+    if typed:
+        _apply_type_prefix(G)
     return G
 
 
@@ -340,8 +368,14 @@ def chat_prompt_text(question):
 
 
 def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain",
-                    question_node="off"):
+                    question_node="off", typed=False):
     """Attach the PROMPT node (and, unless ``question_node="off"``, a QUESTION node).
+
+    ``typed=True`` (levi_typed) prefixes the QUESTION node's text with "question "
+    so its first token is a uniform type-word sink for magnetic_content, matching
+    the "entity "/"relation " prefixes on the base nodes. The PROMPT/answer node is
+    left untouched — it already starts with "Answer:" (a uniform first token) and
+    that string is the load-bearing label-mask / generation anchor.
 
     ``question_node`` ("off" | "all" | "topics" | "isolated") moves the question
     text out of the PROMPT node into its own QUESTION *prefix* node: the model's
@@ -382,7 +416,8 @@ def add_prompt_node(G, record, answer_str, gold_answers, prompt_style="plain",
             text = f"{record['question']}{ANSWER_DELIM}{suffix}"
     if question_node != "off":
         base_nodes = list(g.nodes())            # pre-PROMPT, pre-QUESTION
-        g.add_node("QUESTION", text=record["question"])
+        q_text = QUESTION_TYPE_PREFIX + record["question"] if typed else record["question"]
+        g.add_node("QUESTION", text=q_text)
         g.graph["question_node"] = "QUESTION"
         if question_node == "all":
             for n in base_nodes:
@@ -410,6 +445,7 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
     denominators equal RoG/GNN-RAG's (all answered questions; such rows score
     ~0, like their retrieval failures).
     """
+    typed = cfg.graph_construction == "levi_typed"   # prefix node text with type words
     if cfg.graph_construction == "triplet":
         # Content fairness with the flat arm trumps the question-node slot: use
         # the UNSHRUNK budget (the same select_triples call flat makes), so the
@@ -425,7 +461,8 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
         # exceed max_nodes (which would spill into the next flex node bucket).
         budget = cfg.max_nodes - (0 if cfg.question_node == "off" else 1)
         base = build_base_levi(record, entity_names, cfg.rel_mode, budget,
-                               cvt_collapse=cfg.resolved_cvt_collapse("graph"))
+                               cvt_collapse=cfg.resolved_cvt_collapse("graph"),
+                               typed=typed)
         target_base = base
     present = present_answer_texts(target_base, record)
     gold = full_gold_texts(record)
@@ -433,7 +470,7 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
     if not present:
         if keep_unanswerable and gold:
             return [add_prompt_node(base, record, "", gold, prompt_style=style,
-                                    question_node=cfg.question_node)]
+                                    question_node=cfg.question_node, typed=typed)]
         return []
     graphs = []
     for _ in range(versions):
@@ -441,7 +478,7 @@ def build_question_graphs(record, entity_names, cfg, versions, rng, keep_unanswe
         rng.shuffle(order)
         answer_str = cfg.answer_sep.join(order[: cfg.n_max])
         graphs.append(add_prompt_node(base, record, answer_str, gold, prompt_style=style,
-                                      question_node=cfg.question_node))
+                                      question_node=cfg.question_node, typed=typed))
     return graphs
 
 

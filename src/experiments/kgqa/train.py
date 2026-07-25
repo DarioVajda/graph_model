@@ -158,7 +158,9 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     # magnetic_m is the eigenvector count for the collator — a data/collator knob,
     # NOT the model's magnetic_dim (the old code aliased the two; they only agreed
     # by coincidence).
-    magnetic_m = cfg.magnetic_m if (cfg.magnetic or cfg.magnetic_shared) else 0
+    # magnetic_content reuses the magnetic eigenvectors, so it needs the collator
+    # to emit them even when the plain `magnetic` term is off.
+    magnetic_m = cfg.magnetic_m if (cfg.magnetic or cfg.magnetic_shared or cfg.magnetic_content) else 0
     train_collator = GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
         magnetic_m=magnetic_m, pad_to_block=(cfg.graph_attn_impl == "flex"),

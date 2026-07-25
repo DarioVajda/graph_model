@@ -1,0 +1,99 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // magnetic_content follow-up (2026-07-22): longer training + the levi_typed
+  // vs levi disentangling axis.
+  //
+  // 036 (magnetic_content on levi_typed, 15 epochs) finished at test F1
+  // .7223 ± .002 — ~1.3pp UNDER the plain-magnetic baseline (029 .7351 ± .007) —
+  // but was confounded two ways: (1) UNDERTRAINED — magnetic_content's zero-init
+  // content term grows in slowly (at epoch 1.8 dev-F1 sat at the SPD-only floor
+  // and only climbed toward the SPD+magnetic ceiling as it grew in); seed0's best
+  // dev checkpoint was the LAST epoch (still rising). (2) two coupled changes vs
+  // baseline (magnetic->magnetic_content AND levi->levi_typed).
+  //
+  // This sweep addresses both, holding 036's recipe otherwise VERBATIM:
+  //   * num_epochs 15 -> 30  (let the content term fully grow in — does it catch
+  //     up to / overtake the .7351 magnetic baseline?)
+  //   * graph_construction axis {levi_typed, levi}  (isolates the type-token: the
+  //     "levi" arm is magnetic_content on the PLAIN graph, natural first tokens;
+  //     "levi_typed" repeats 036's typed first-token sinks at 30 epochs)
+  //
+  // Bias is spd + magnetic_content (magnetic=false) in BOTH arms; only the node
+  // text differs. Both data caches already exist (levi from 028, levi_typed from
+  // 035) — magnetic_content is architecture-only, so NO data prep is needed.
+  //
+  // 2 constructions x 3 seeds = 6 runs. References (test F1):
+  //   plain magnetic (levi/isolated)  .7351 ± .0074  (029)  <- the term to beat
+  //   magnetic_content levi_typed e15 .7223 ± .002   (036)  <- last run
+  //   flat (text-only LLM)            .7493 ± .0023
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/037_magnetic_content_e30_gc_webqsp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "magnetic_content_e30_gc_webqsp",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],   // either B200 or B300, whichever frees up
+      "cpus": 8,
+      // 128G (not 64G): a slow CPU-RAM creep over long training crosses the 64G
+      // cap around epoch ~25 at 30 epochs (OOM-killed 2 levi_typed seeds in job
+      // 115668); 15-epoch runs never reached it. 128G clears the observed peak.
+      "mem": "128G",
+      "time": "16:00:00",             // 30 epochs ~ 2x 036 (slow seed ~5h @ e15)
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+  "graph_construction": ["levi_typed", "levi"],
+  "question_node": "isolated",
+
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 30,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": false,               // replaced by magnetic_content (subsumes it)
+  "magnetic_shared": false,
+  "magnetic_content": true,
+  "magnetic_content_dim": 128,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

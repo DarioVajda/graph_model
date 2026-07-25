@@ -1,0 +1,63 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Data-prep step for the levi_typed graph construction (2026-07-21): builds
+  // the .gtds cache for graph_construction="levi_typed" on the frozen WebQSP
+  // data config (max_nodes 512, n_max 50, versions 8, dfv3 — matches
+  // 021/028/029's data keys), question_node="isolated" (the best Levi arm, 029).
+  //
+  // "levi_typed" is the historical Levi graph with each node's text prefixed by
+  // a type word ("entity " / "relation "). That first token is a uniform,
+  // type-specific semantic sink for the magnetic_content bias (which reads each
+  // node's first-token hidden state — spec §2 "First-Token API"). Topology,
+  // edges, CVT collapse and answer targets are byte-identical to "levi"; ONLY
+  // the node text (and thus the first token) changes. question_node="isolated"
+  // stays untyped (it carries the question text, not an entity/relation).
+  //
+  // graph_construction is part of data_config_key(), so this writes a distinct
+  // cache (…_qnisolated_gclevi_typed) that the paired training sweep will read.
+  //
+  // Run this first; the magnetic_content-on-levi_typed training sweep (036)
+  // requires this cache to exist.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/035_levi_typed_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "levi_typed_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      // 64G: levi_typed has Levi's (light) topology, unlike triplet's cliques.
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "graph_construction": "levi_typed",
+  "question_node": "isolated",
+
+  // data-config keys — must match 029's frozen WebQSP data config exactly
+  // (aside from graph_construction) so the training sweep's cache lookups hit.
+  "dataset": "webqsp",
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 50,
+  "versions": 8,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

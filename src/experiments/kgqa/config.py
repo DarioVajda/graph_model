@@ -83,6 +83,12 @@ NODE_POSITION_MODES = ("reset", "spd_depth")
 # Graph construction (2026-07-19): how the retrieved subgraph becomes nodes.
 #   "levi"    — the historical bipartite Levi graph (h -> rel -> t per triple,
 #               single-parent CVT collapse; entities/relations are the nodes).
+#   "levi_typed" — identical topology/text to "levi", but each node's text is
+#               prefixed with a type word ("entity " / "relation "). That first
+#               token is a uniform, type-specific semantic sink for the
+#               magnetic_content bias (which reads each node's first-token hidden
+#               state); everything else — edges, CVT collapse, answer targets — is
+#               byte-identical to "levi".
 #   "triplet" — one node PER SELECTED TRIPLE, its text the flat arm's
 #               "head | relation | tail" line from the SAME select_triples()
 #               call the text-serialization control uses (same budget, same
@@ -91,7 +97,7 @@ NODE_POSITION_MODES = ("reset", "spd_depth")
 #               topic edges go to the triples CONTAINING a topic entity;
 #               targets still come from the collapsed Levi base, so they are
 #               byte-identical to both other arms'.
-GRAPH_CONSTRUCTIONS = ("levi", "triplet")
+GRAPH_CONSTRUCTIONS = ("levi", "levi_typed", "triplet")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
 PROMPT_STYLES = ("plain", "chat")
@@ -158,6 +164,9 @@ class RunConfig:
                                               # Graph arm + plain prompt style only; in the cache key.
     graph_construction: str = "levi"          # subgraph -> node scheme (see GRAPH_CONSTRUCTIONS
                                               # above): "levi" = historical bipartite Levi graph;
+                                              # "levi_typed" = levi with each node text prefixed by
+                                              # "entity "/"relation " (a type-specific first-token
+                                              # summary sink for magnetic_content);
                                               # "triplet" = one node per selected raw triple (the
                                               # flat arm's line text/budget), entity-sharing edges.
                                               # Graph arm only; in the cache key.
@@ -182,6 +191,16 @@ class RunConfig:
     # `magnetic` in practice (both consume the same data; combining them just
     # double-counts the term) — the bias ablation sweep never sets both True.
     magnetic_shared: bool = False
+    # Content-conditioned magnetic bias (see MagneticContentBias in
+    # src/models/bias.py): reuses the magnetic spectral machinery and eigenvector
+    # DATA, then widens the final projection with a live per-node semantic summary
+    # (first-token hidden state). It subsumes the plain `magnetic` term, so the
+    # spec-aligned arm sets `magnetic=False, magnetic_content=True`. Consumes the
+    # same magnetic eigenvectors as `magnetic`, so it needs the collator to emit
+    # them (train.py gates magnetic_m on magnetic OR magnetic_content) and does NOT
+    # change the data cache key (architecture-only knob).
+    magnetic_content: bool = False
+    magnetic_content_dim: int = 128           # magnetic_content down-projection width (d_proj)
     magnetic_dim: int = 128                   # magnetic-bias MLP hidden width (model architecture)
     magnetic_q: float = 0.25                  # magnetic-Laplacian charge
     magnetic_m: int = 128                     # # magnetic eigenvectors (data prep + collator; 0 = all N)
@@ -338,6 +357,11 @@ class RunConfig:
             cfg.update(magnetic=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
         if self.magnetic_shared:
             cfg.update(magnetic_shared=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+        if self.magnetic_content:
+            # Reuses MagneticBias's spectral machinery (magnetic_dim/magnetic_q)
+            # and adds the content down-projection (magnetic_content_dim).
+            cfg.update(magnetic_content=True, magnetic_content_dim=self.magnetic_content_dim,
+                       magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
         return cfg
 
     def lora_config(self):
