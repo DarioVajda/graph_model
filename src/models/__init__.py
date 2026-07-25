@@ -29,6 +29,15 @@ from .modeling_gtlm_bloom import (
     GTLMBloomModel,
     GTLMBloomForCausalLM,
 )
+# Gemma-3: a layer-heterogeneous RoPE backbone (local vs global base per layer),
+# wired Strategy B like Llama — both backends, no attention forward override.
+from .modeling_gtlm_gemma3 import (
+    GTLMGemma3Config,
+    GTLMGemma3Attention,
+    GTLMGemma3DecoderLayer,
+    GTLMGemma3Model,
+    GTLMGemma3ForCausalLM,
+)
 
 __all__ = [
     "GTLMLlamaConfig",
@@ -41,4 +50,9 @@ __all__ = [
     "GTLMBloomBlock",
     "GTLMBloomModel",
     "GTLMBloomForCausalLM",
+    "GTLMGemma3Config",
+    "GTLMGemma3Attention",
+    "GTLMGemma3DecoderLayer",
+    "GTLMGemma3Model",
+    "GTLMGemma3ForCausalLM",
 ]

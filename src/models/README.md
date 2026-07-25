@@ -9,8 +9,9 @@ The implementation is **backbone-agnostic**: all graph logic lives in shared,
 backbone-neutral modules, and each base LLM is a thin `modeling_gtlm_<backbone>.py`
 adapter (flat in this package). The **Llama-3** family is the production backbone
 (`modeling_gtlm_llama.py` — `GTLMLlamaForCausalLM` / `GTLMLlamaConfig`); **BLOOM**
-is a probe adapter showing the same machinery on an ALiBi backbone (see *ALiBi
-backbones* below); `v0`/`v1` are legacy. Import the public classes from the package:
+(ALiBi) and **Gemma-3** (layer-heterogeneous RoPE) are positional-encoding probe
+adapters running the same machinery on other PE schemes (see the two sections at the
+end); `v0`/`v1` are legacy. Import the public classes from the package:
 `from src.models import GTLMLlamaForCausalLM, GTLMLlamaConfig` (see REFACTOR.md §3c
 to add a backbone).
 
@@ -328,6 +329,44 @@ and `009_bloom_alibi.jsonc` (9 tasks x 3 seeds, full graph bias in every run).
 
 ---
 
+## Layer-heterogeneous RoPE backbones (Gemma-3)
+
+`modeling_gtlm_gemma3.py` runs the same machinery on a base model where **different
+layers read positions at different RoPE frequencies**: on gemma-3-1b, 22 of 26 layers
+rotate at a local base (`rope_local_base_freq`, 10k) and the other 4 at a global one
+(`rope_theta`, 1M). With BLOOM's ALiBi and Llama's single global RoPE that makes three
+positional-encoding regimes on one graph stack.
+
+Unlike the BLOOM probe this is **Strategy B, exactly like Llama** — `Gemma3Attention`
+dispatches through `ALL_ATTENTION_FUNCTIONS`, so there is no attention `forward`
+override and **both** backends are wired:
+
+```python
+from src.models import GTLMGemma3Config, GTLMGemma3ForCausalLM
+
+cfg = GTLMGemma3Config.from_pretrained("google/gemma-3-1b-pt",
+                                       spd=True, magnetic=True, graph_attn_impl="flex")
+model = GTLMGemma3ForCausalLM.from_pretrained("google/gemma-3-1b-pt", config=cfg)
+```
+
+Text-only: the multimodal 4b+ checkpoints nest their text config under `text_config`
+and do not load through `GTLMGemma3Config`. **No shared GTLM module was modified**; the
+three deviations are absorbed in the adapter:
+
+| Deviation | How the adapter handles it |
+|---|---|
+| Gemma-3 alternates sliding-window layers (512 tokens on 1b) with full-attention ones, applied by editing the 4-D `attention_mask` | GTLM passes `attention_mask=None` and substitutes its own structural mask, so the band never materializes. Deliberate: the window is indexed by **packed serialization order** (`cache_position`, *not* `position_ids` — per-node reset does not shrink it), so it would hide most of the graph from 5 of every 6 layers. `_update_causal_mask` warns once past the window so the divergence is never silent. GraphQA never reaches it (~90 packed tokens) |
+| `Gemma3TextModel` builds a `HybridCache` in eval, whose sliding layers hold only `min(sliding_window, max_cache_len)` keys and return the *last* window — silently truncating the KV against a full-length structural mask | A forward pre-hook installs a plain `DynamicCache` first (what `LlamaModel` does anyway), and `_prepare_cache_for_generation` forces `generate` off `cache_implementation="hybrid"` |
+| The shared stack applies neither softcapping site (`gtlm_*` ignore `softcap=`; the mixin calls `lm_head` directly) | Gemma-3 sets both fields to `None`, so both omissions are exact — `_sanitize_attn_config` **raises** if a checkpoint reintroduces either, rather than training a backbone that is quietly not the pretrained one. Gemma-2 hits this by design |
+
+A single-node graph at any length up to `sliding_window` reproduces stock
+`Gemma3ForCausalLM` logits exactly — which covers every real GraphQA batch.
+
+Experiment configs: `010_gemma3_dualrope_data_prep.jsonc`, then
+`011_gemma3_dualrope_canary.jsonc` and `012_gemma3_dualrope.jsonc`.
+
+---
+
 ## Testing
 
 ```bash
@@ -342,6 +381,13 @@ and `009_bloom_alibi.jsonc` (9 tasks x 3 seeds, full graph bias in every run).
 - `tests/test_modeling_gtlm_bloom.py` — the ALiBi adapter: stock-BLOOM parity on a
   single-node graph, bias reaches the scores + gets gradients, ALiBi built over
   per-node positions, decode, flex refusal.
+- `tests/models/test_modeling_gtlm_gemma3.py` — the dual-RoPE adapter: stock-Gemma-3
+  parity within the sliding window (and the deliberate divergence past it), both RoPE
+  bases reaching their layers, per-node reset driving the rotation, `DynamicCache`
+  instead of `HybridCache`, softcapping refusal, save/load round-trip.
+- `tests/models/test_flex_attention_gemma3.py` — flex-vs-eager parity on the Gemma-3
+  backbone (forward, bias grads, bias checkpointing, decode fallback). **Requires a
+  GPU**; auto-skips otherwise.
 - `tests/test_graph_bias.py` — `GraphAttentionBias`, the K-hop collator mask, and
   `expand_node_to_token_bias`.
 - `tests/test_collator_bucketing.py` — L/N bucketing + fp64 loss-neutrality.
