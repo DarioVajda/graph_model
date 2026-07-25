@@ -54,6 +54,38 @@ From now on, we will assume that each program is ran inside of the `.venv` envir
 
 The instructions for each individual experiment can be found in the appropriate directories inside `src/experiments/`, while the core architectural logic is implemented in `src/models/`.
 
+## Using GTLM in Another Project
+
+Install this repo as an editable package to reuse the model and utilities from a
+separate project (e.g. app-specific data pipelines) without copying code:
+
+```bash
+pip install -e /path/to/graph_model      # same machine: `git pull` here → picked up on next run
+# or, from another machine / for a pinned build:
+pip install "gtlm @ git+ssh://git@github.com/DarioVajda/graph_model.git@main"
+```
+
+Then import the library (top-level package is `gtlm`, not `src`):
+
+```python
+from gtlm.models import GTLMLlamaConfig, GTLMLlamaForCausalLM
+from gtlm.utils import GraphCollatorV2
+from gtlm.train import select_active_params, get_device
+```
+
+The install also exposes the experiment-agnostic **sweep runner**, so you can
+sweep your *own* experiment module (same contract as `src/experiments/template`)
+from your project:
+
+```bash
+python -m sweep myproject.experiments.foo configs/my_sweep.jsonc
+```
+
+Local (`execution.mode: "local"`) and Slurm (`"sbatch"`) both run against the
+directory you invoke from and its venv. Set `results_dir` in your sweep config so
+outputs land in your project (it otherwise defaults to this repo's `sweeps/`); for
+sbatch, ensure the container `mounts` cover your project's path.
+
 ## Starting a New Experiment
 
 Copy `src/experiments/template/` to a new directory and edit three files:

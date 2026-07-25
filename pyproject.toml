@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gtlm"
+version = "0.1.0"
+description = "GTLM — graph-biased causal LMs (backbone-agnostic) + graph utilities."
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.0.0",
+  "transformers==4.50.3",
+  "accelerate",
+  "peft",
+  "torch-geometric",
+  "networkx",
+  "scipy",
+  "numpy>=1.21,<2.0.0",
+  "typing-extensions>=4.8.0",
+  "pydantic",
+]
+
+# The importable top-level package is `gtlm`, but its files live in `src/`
+# (no directory move). `flex_attn`, `experiments`, `backup`, `legacy`, and
+# `configs` are intentionally NOT exposed to consumers. `sweep` is a separate
+# top-level package (repo root, not under src/): a stdlib-only, experiment-
+# agnostic job-sweep runner, invoked as `python -m sweep <module> <config>`.
+[tool.setuptools]
+package-dir = {"gtlm" = "src"}
+packages = ["gtlm.models", "gtlm.utils", "gtlm.train", "sweep"]
+
+[tool.setuptools.package-data]
+# non-.py data files that must ship with the wheel (editable installs find them
+# on disk regardless). The sbatch launcher is located package-relative.
+sweep = ["slurm_launch.sh"]

@@ -21,3 +21,8 @@ wandb
 
 rclone*
 CLAUDE_CONTEXT.md
+
+# packaging
+*.egg-info/
+build/
+dist/
