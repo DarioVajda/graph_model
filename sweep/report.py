@@ -47,6 +47,13 @@ def _columns(runs):
 
 def _cell(v):
     if isinstance(v, float):
+        # Fixed-point at 4 decimals reads best for the metrics that dominate these
+        # tables (accuracies, losses), but silently renders small-magnitude values
+        # as "0.0000" — learning rates especially (3e-5 is a real setting, not a
+        # zero). Fall back to significant-figure notation below the point where
+        # 4 decimals stop carrying information.
+        if v != 0 and abs(v) < 1e-3:
+            return f"{v:.3g}"
         return f"{v:.4f}"
     if isinstance(v, (list, tuple)):
         return "[" + ",".join(str(x) for x in v) + "]"
