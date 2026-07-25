@@ -305,6 +305,9 @@ def build_parser():
     p.add_argument("--runs-jsonl", default=None, help="(runner) JSONL to append this run's record to.")
     p.add_argument("--run-name", default=None, help="(runner) this run's name within the sweep.")
     p.add_argument("--sweep-id", default=None, help="(runner) the sweep this run belongs to.")
+    p.add_argument("--resume-from", default=None,
+                   help="(recovery) resume training from this checkpoint dir (continues the "
+                        "same schedule to num_epochs). Config/run-name must match the crashed run.")
     return p
 
 
@@ -388,7 +391,8 @@ def main(argv=None):
         return 0
 
     from .train import run_train_mode
-    run_train_mode(cfg, runs_jsonl=args.runs_jsonl, run_name=args.run_name, sweep_id=args.sweep_id)
+    run_train_mode(cfg, runs_jsonl=args.runs_jsonl, run_name=args.run_name, sweep_id=args.sweep_id,
+                   resume=(args.resume_from or False))
     return 0
 
 

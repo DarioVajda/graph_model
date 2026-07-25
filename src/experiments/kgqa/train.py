@@ -104,8 +104,13 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
     print(f"[results] appended training run to {runs_jsonl}")
 
 
-def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
-    """Train this ONE config, then score + log the best checkpoint on dev + test."""
+def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None, resume=False):
+    """Train this ONE config, then score + log the best checkpoint on dev + test.
+
+    ``resume`` (False | True | checkpoint-dir path) is forwarded to
+    ``trainer.train(resume_from_checkpoint=...)`` to continue a crashed run from a
+    saved checkpoint (e.g. recovery from an OOM). The output_dir / run_name / config
+    must match the original so the checkpoint is found and the schedule continues."""
     runs_jsonl = runs_jsonl or _DEFAULT_RUNS_JSONL
     sweep_meta = {}
     if sweep_id:
@@ -243,7 +248,7 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
                            if cfg.boundary_loss_weight != 1.0 else None),
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume)
 
     # Best model is loaded (load_best_model_at_end); score it on dev + test so the
     # run record carries both — per dataset, full splits. Both evaluate() calls

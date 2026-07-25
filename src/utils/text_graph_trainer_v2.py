@@ -190,6 +190,24 @@ class GraphTrainerV2(Trainer):
                 f"active_params is set but {ckpt} has no bias_parameters.pt — "
                 "the best checkpoint cannot be fully restored.")
 
+    def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
+        """Restore the graph-bias tensors when RESUMING (mirror of _load_best_model).
+
+        HF's resume path loads only the formats it wrote itself — for a PEFT model
+        that's just the adapter. Our ``save_model`` stores the trainable graph-bias
+        tensors separately (``bias_parameters.pt``), so without this override a
+        resumed run pairs the checkpoint's adapter with FRESH-init bias weights (the
+        content/magnetic proj[2] back at zero) and silently retrains the bias from
+        scratch — the same failure mode ``_load_best_model`` fixes at end-of-train.
+        """
+        super()._load_from_checkpoint(resume_from_checkpoint, model=model)
+        if self.active_params is None:
+            return  # pure-HF checkpoint (no separate bias file)
+        if load_bias_parameters(self.model, resume_from_checkpoint) is None:
+            raise FileNotFoundError(
+                f"active_params is set but resume checkpoint {resume_from_checkpoint} "
+                "has no bias_parameters.pt — graph-bias tensors cannot be restored.")
+
 
 # ── Evaluation helpers (prompt-only exact match, no prediction_step override) ───
 
