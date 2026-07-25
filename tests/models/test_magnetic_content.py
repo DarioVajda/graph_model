@@ -133,6 +133,21 @@ class TestMagneticContent:
         for layer in model.model.layers:
             assert not hasattr(layer.self_attn, "_captured_hidden_states")
 
+    def test_truncated_eigenvectors(self):
+        # Regression: with truncated eigenvectors (magnetic_m < N) the node count
+        # and the eigenvalue count differ, so node_start_indices MUST be sized to
+        # the node dim (magnetic_V.shape[1]), not magnetic_lambdas.shape[1].
+        # node_counts max = 9, magnetic_m = 3  →  spectral is (B, 9, 9, m), and a
+        # 3-slot node_start_indices would fail the endpoint-summary concat.
+        model = _model()
+        _grow_in(model)
+        batch = GraphCollatorV2(pad_token_id=0, k_hop=0, magnetic_m=3)(
+            [dict(it) for it in _make_items()])
+        assert batch["magnetic_V"].shape[1] != batch["magnetic_lambdas"].shape[1]
+        out = model(**batch)
+        assert torch.isfinite(out.logits).all()
+        assert torch.isfinite(out.loss)
+
     def test_zero_init_is_inert(self):
         # At init proj[2] is zero → the content bias is exactly 0, so logits must
         # match a model with no soft bias at all (identical backbone weights).

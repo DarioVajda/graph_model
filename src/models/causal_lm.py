@@ -298,11 +298,13 @@ class GraphCausalLMMixin:
                     self._graph_bias_cache["shared_node_bias"] = shared_node_bias
 
         # magnetic_content: first-token position per node (inverse of node_ids).
-        # N node slots = the magnetic eigenvector count; derived once here and
-        # reused by every layer. Requires the magnetic features to be present.
+        # N node slots = the NODE count (magnetic_V's node dim), NOT the eigenvector
+        # count: with truncated eigenvectors (magnetic_m < N) the two differ, and
+        # the spectral feature this bias concatenates onto is (B, N_node, N_node, m).
+        # Derived once here and reused by every layer. Requires magnetic features.
         node_start_indices = None
         if getattr(self.config, "magnetic_content", False) and magnetic is not None:
-            node_start_indices = _node_start_indices(node_ids, magnetic_lambdas.shape[1])
+            node_start_indices = _node_start_indices(node_ids, magnetic_V.shape[1])
 
         ctx = GraphContext(
             node_ids=node_ids,
