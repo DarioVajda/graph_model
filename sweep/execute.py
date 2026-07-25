@@ -212,6 +212,30 @@ def _write_job_script(jobs_dir, label, argv_lines):
     return path
 
 
+def _launch_env():
+    """Submit-time context forwarded to ``slurm_launch.sh``.
+
+    A job must run against the project it was *submitted from* — that project's
+    working dir, its venv, and its login script — not against wherever the
+    installed ``sweep`` package physically lives (which, once ``sweep`` is
+    pip-installed into another repo, is a different tree entirely). We capture
+    that context here and forward it through the same ``env`` list that already
+    carries ``HOME``; the launcher prefers these and falls back to its own
+    location only when they are absent.
+
+    Submitting from this repo's root with its ``.venv`` active — the historical
+    invocation — makes these resolve to exactly the values the launcher used to
+    compute for itself, so submissions here are byte-for-byte unchanged.
+    """
+    root = os.getcwd()
+    venv_bin = os.path.dirname(os.path.abspath(sys.executable))
+    env = [f"SWEEP_PROJECT_ROOT={root}", f"SWEEP_VENV_BIN={venv_bin}"]
+    login = os.path.join(root, "login.sh")
+    if os.path.isfile(login):
+        env.append(f"SWEEP_LOGIN={login}")
+    return env
+
+
 def _srun_wrap(label, job_script, sb):
     """``srun --container-image=... slurm_launch.sh <label> <job_script>`` wrap.
 
@@ -225,7 +249,7 @@ def _srun_wrap(label, job_script, sb):
     if sb.get("container"):
         srun += [f"--container-image={sb['container']}",
                  f"--container-mounts={sb.get('mounts', _SBATCH_DEFAULTS['mounts'])}"]
-    srun += ["env", f"HOME={home}", "PYTHONUNBUFFERED=1", *inner]
+    srun += ["env", f"HOME={home}", "PYTHONUNBUFFERED=1", *_launch_env(), *inner]
     return " ".join(shlex.quote(a) for a in srun)
 
 
@@ -241,7 +265,7 @@ def _array_wrap(labels, scripts, sb):
     if sb.get("container"):
         srun += [f"--container-image={sb['container']}",
                  f"--container-mounts={sb.get('mounts', _SBATCH_DEFAULTS['mounts'])}"]
-    srun += ["env", f"HOME={home}", "PYTHONUNBUFFERED=1", "bash", LAUNCHER]
+    srun += ["env", f"HOME={home}", "PYTHONUNBUFFERED=1", *_launch_env(), "bash", LAUNCHER]
     srun_str = " ".join(shlex.quote(a) for a in srun)
     labels_arr = " ".join(shlex.quote(x) for x in labels)
     scripts_arr = " ".join(shlex.quote(x) for x in scripts)
