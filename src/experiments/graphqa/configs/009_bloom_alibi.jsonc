@@ -1,0 +1,109 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // GTLM on an ALiBi backbone: train the full graph-bias recipe on bloom-1b1
+  // across the nine reported tasks and report what it reaches.
+  // 9 tasks x 3 seeds = 27 runs.
+  //
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/007_bloom_alibi_data_prep.jsonc  # once
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/008_bloom_alibi_canary.jsonc    # does it learn?
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/009_bloom_alibi.jsonc
+  //   python3 -m sweep.report src/experiments/graphqa/results/009_bloom_alibi                                   # when jobs finish
+  //
+  // Backbone: bigscience/bloom-1b1, whose positional information is ALiBi — a fixed
+  // additive per-head penalty on key position, not a position_ids-driven rotation.
+  // `src/models/modeling_gtlm_bloom.py` adapts it: the graph bias enters the same
+  // additive slot BLOOM already uses, and ALiBi is rebuilt over GTLM's per-node
+  // position_ids so node *serialization order* does not leak into attention as a
+  // recency prior. Nothing in the shared GTLM modules changed.
+  //
+  // ONE arm — spd + rrwp + magnetic all on, the standard GTLM recipe. This is not
+  // an ablation: the question is whether the GTLM stack trains and performs on an
+  // ALiBi base model at all, which a single arm answers. (Consequence to keep in
+  // mind when writing it up: with no text-only control in this sweep, the numbers
+  // show that GTLM *works* on ALiBi, not how much of the accuracy the graph bias
+  // itself contributes.)
+  //
+  // Reading the result: per-task accuracy that lands in a sensible band and tracks
+  // the qualitative Llama pattern (easy tasks near ceiling, edge_count and
+  // triangle_counting lower) means the adapter is sound. 008_bloom_alibi_canary
+  // already reached 1.000 on node_count. Absolute numbers will sit below the
+  // Llama-3.2-1B figures in 003_ablation — bloom-1b1 has ~680M non-embedding
+  // parameters to Llama's ~975M and is multilingual — so a shortfall there is not
+  // evidence about positional encoding.
+  //
+  // The recipe below is 003_ablation's, verbatim, except `model_name` and seeds.
+  // Standard encoding, question_node "off" (the 003 default), so the backbone is
+  // the only axis that differs from that study.
+  //
+  // Eager only — the flex backend is not wired for this backbone (the adapter
+  // rejects it at construction rather than silently running unbiased).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "009_bloom_alibi",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 27,           // all 27 at once; nothing to throttle for
+      "partition": "frida",
+      // Any brand: this sweep compares accuracy, not train_runtime_s, so unlike 003
+      // there is nothing to keep comparable within a GPU generation — and widening
+      // the pool past the contended Blackwell nodes is what actually gets it
+      // scheduled. The runs are small (fp32 bloom-1b1 is 4.3G of weights; only LoRA
+      // and bias tensors carry gradients), so a 40G A100 is ample.
+      // NB `gpus` entries become `GPU_BRD:<type>` constraints, and the A100 nodes
+      // carry GPU_BRD:A100 with GPU_MEM 40G or 80G — there is no GPU_BRD:A100_80GB
+      // feature to select the 80G one with.
+      "gpus": ["B200:1", "B300:1", "H100:1", "A100:1"],
+      "cpus": 8,
+      "mem": "64G",
+      // 2h is ~7x headroom: the slowest standard-encoding run in 003_ablation took
+      // 17.7 min, and the 008 canary took 13.4 min (+50s of job overhead).
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+      // "dry_run": true             // write sbatch_commands.sh without submitting
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes: the nine reported tasks x three seeds ───────────────────────────
+  "task": ["node_count", "edge_count", "cycle_check", "triangle_counting",
+           "node_degree", "connected_nodes", "reachability", "edge_existence",
+           "shortest_path"],
+  "seed": [0, 1, 2],
+  "graph_type": "standard",
+
+  // ── the graph bias: all three features on ─────────────────────────────────
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  // ── the recipe (003_ablation's, verbatim) ─────────────────────────────────
+  "model_name": "bigscience/bloom-1b1",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+
+  // ── bias architecture ─────────────────────────────────────────────────────
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

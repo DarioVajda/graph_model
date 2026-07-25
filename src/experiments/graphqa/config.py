@@ -38,6 +38,29 @@ GRAPH_TYPES = ("standard", "incidence")
 IMPLS = ("v2-eager", "v2-flex")
 DTYPES = ("fp32", "bf16")
 
+# Backbones this experiment can train, keyed by a substring of ``model_name`` (so the
+# backbone is not a second knob that can disagree with the checkpoint). Llama-3 is the
+# experiment's model; BLOOM is the ALiBi probe — a demonstration that the graph bias
+# is not tied to RoPE positional encoding, run at bloom-560m on one small task rather
+# than across the ablation grid. See ``src/models/modeling_gtlm_bloom.py``.
+BACKBONES = {
+    "llama": dict(
+        classes=("GTLMLlamaConfig", "GTLMLlamaForCausalLM"),
+        # PEFT's defaults are model_type-keyed and don't know our gtlm_* types, so the
+        # LoRA targets are named per backbone here.
+        lora_targets=("q_proj", "k_proj", "v_proj", "o_proj",
+                      "gate_proj", "up_proj", "down_proj"),
+        impls=IMPLS,
+    ),
+    "bloom": dict(
+        classes=("GTLMBloomConfig", "GTLMBloomForCausalLM"),
+        lora_targets=("query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"),
+        # The BLOOM adapter wires the eager backend only (BLOOM's hand-written
+        # attention never dispatches to the registered gtlm_flex function).
+        impls=("v2-eager",),
+    ),
+}
+
 # Where the question text lives (mirrors the kgqa experiment's arm of the same
 # name). "off" — the historical layout: the prompt node carries "{question}{answer}"
 # together, so graph tokens never see the question. "isolated" — the question moves
@@ -161,12 +184,28 @@ class RunConfig:
         """The graph-attention backend ('eager' | 'flex') from ``impl``."""
         return self.impl.split("-", 1)[1]
 
+    def backbone(self):
+        """Which base-LLM family ``model_name`` names (a key of ``BACKBONES``)."""
+        name = self.model_name.lower()
+        for key in BACKBONES:
+            if key in name:
+                return key
+        raise ValueError(
+            f"model_name={self.model_name!r} names no backbone this experiment wires "
+            f"(expected one of {tuple(BACKBONES)} in the name).")
+
+    def gtlm_classes(self):
+        """The ``(config_cls, model_cls)`` pair for this run's backbone."""
+        from ... import models
+        return tuple(getattr(models, n) for n in BACKBONES[self.backbone()]["classes"])
+
     def lora_config(self):
         """LoRA config dict for ``select_active_params`` (``None`` when disabled)."""
         if not self.lora:
             return None
         return {"r": self.lora_r, "lora_alpha": self.lora_r * 2,
-                "lora_dropout": self.lora_dropout}
+                "lora_dropout": self.lora_dropout,
+                "target_modules": list(BACKBONES[self.backbone()]["lora_targets"])}
 
     def bias_params(self):
         """The graph-bias flag/architecture dict passed to the model config.
@@ -248,6 +287,11 @@ class RunConfig:
             raise ValueError(f"Unknown question_node {self.question_node!r} (expected one of {QUESTION_NODES}).")
         if self.impl not in IMPLS:
             raise ValueError(f"Unknown impl {self.impl!r} (expected one of {IMPLS}).")
+        backbone = self.backbone()          # raises on an unwired model_name
+        if self.impl not in BACKBONES[backbone]["impls"]:
+            raise ValueError(
+                f"impl {self.impl!r} is not available on the {backbone!r} backbone "
+                f"(it wires {BACKBONES[backbone]['impls']}).")
         if self.dtype not in DTYPES:
             raise ValueError(f"Unknown dtype {self.dtype!r} (expected one of {DTYPES}).")
 

@@ -20,6 +20,25 @@ python3 -m sweep.report src/experiments/graphqa/results/003_ablation            
 python3 -m src.experiments.graphqa.analysis.prep_table src/experiments/graphqa/results/003_ablation   # paper tables
 ```
 
+Side probe — the same recipe on an **ALiBi** backbone (bloom-1b1) instead of Llama-3,
+to show the GTLM stack is not tied to RoPE (`src/models/modeling_gtlm_bloom.py`):
+
+```bash
+python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/007_bloom_alibi_data_prep.jsonc  # BLOOM-tokenized cache
+python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/008_bloom_alibi_canary.jsonc     # 1 run: does it learn?
+python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/009_bloom_alibi.jsonc            # 27 runs: 9 tasks x 3 seeds
+python3 -m sweep.report src/experiments/graphqa/results/009_bloom_alibi                                   # aggregate
+```
+
+Same nine reported tasks and the same recipe as `003_ablation` (standard encoding,
+`question_node: "off"`), with the full graph bias on in every run — this is a
+demonstration that GTLM trains on an ALiBi base model, not a second ablation.
+
+The backbone follows from `model_name` (`config.BACKBONES`), which also picks the LoRA
+target modules and the tokenizer the cache is keyed by. Absolute accuracy sits below
+the Llama numbers for reasons unrelated to positional encoding (bloom-1b1 has ~680M
+non-embedding parameters to Llama-3.2-1B's ~975M, and is multilingual).
+
 The two checks answer different questions, and the order matters. `002_smoke` runs 4
 steps and **reports `test_accuracy: 0.0` even when everything is correct** — exact match
 over the whole answer span is all-or-nothing, and warmup has barely lifted the LR off

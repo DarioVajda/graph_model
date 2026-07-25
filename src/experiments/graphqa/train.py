@@ -8,8 +8,9 @@ accuracy — the metric the experiment actually reports — rather than validati
 loss, so the chosen checkpoint is the most accurate one rather than the most
 confident one.
 
-The model is the v2 GTLM stack (``GTLMLlamaForCausalLM``), built directly as in the
-kgqa experiment. See ``config.py`` for why the legacy v0 path was dropped.
+The model is the v2 GTLM stack, built directly as in the kgqa experiment; the
+backbone adapter follows from ``model_name`` (``config.BACKBONES``). See ``config.py``
+for why the legacy v0 path was dropped.
 """
 
 import os
@@ -17,7 +18,6 @@ import os
 import torch
 from transformers import AutoTokenizer, TrainingArguments, set_seed
 
-from ...models import GTLMLlamaConfig, GTLMLlamaForCausalLM
 from ...utils import GraphCollatorV2, GraphTrainerV2, set_wandb_project
 from ...utils.text_graph_trainer_v2 import make_compute_metrics, shift_logits_for_metrics
 from ...train import select_active_params, print_trainable_parameters, get_device
@@ -92,13 +92,16 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     # Trainer seeds itself, but only once the model already exists.)
     set_seed(cfg.seed)
 
-    config = GTLMLlamaConfig.from_pretrained(
+    # Llama by default; BLOOM when model_name names it (the ALiBi probe). Both are
+    # the same GTLM stack — only the thin backbone adapter differs.
+    gtlm_config_cls, gtlm_model_cls = cfg.gtlm_classes()
+    config = gtlm_config_cls.from_pretrained(
         cfg.model_name, **cfg.bias_params(),
         k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
         graph_attn_impl=cfg.backend(),
         **({"flex_compile_mode": cfg.flex_compile_mode} if cfg.backend() == "flex" else {}),
     )
-    model = GTLMLlamaForCausalLM.from_pretrained(
+    model = gtlm_model_cls.from_pretrained(
         cfg.model_name, config=config, graph_attn_impl=cfg.backend(),
         torch_dtype=cfg.torch_dtype())
     model.to(device)

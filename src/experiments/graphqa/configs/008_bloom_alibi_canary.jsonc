@@ -1,0 +1,79 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // ONE real run of the ALiBi probe: does bloom-1b1 actually LEARN a GraphQA
+  // task through the GTLM graph bias? Run before committing to the 36-run 009.
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/008_bloom_alibi_canary.jsonc
+  //
+  // 004_canary is the same check for the Llama backbone, and the reasoning
+  // carries over: everything up to this point proves the *plumbing* (the adapter
+  // loads BLOOM's weights, the collator feeds it, gradients reach the bias, a
+  // single-node graph reproduces stock BLOOM exactly). None of that proves the
+  // model converges. Exact match over the whole answer span is all-or-nothing,
+  // so only a full-length run can tell "it learns" from "it never leaves 0".
+  //
+  // Task: node_count, the easiest one — Llama-3.2-1B reaches 0.997 on it in
+  // 003_ablation. bloom-1b1 has ~680M non-embedding parameters to Llama's ~975M
+  // and is multilingual, so expect LOWER; the question here is only whether
+  // accuracy climbs off the floor at all.
+  //
+  // Read: `eval_em_accuracy` over the 20 epochs (and `eval_loss` falling).
+  //   climbs well off 0    -> the backbone learns through the graph bias; run 009
+  //   flat at 0.0          -> either bloom-1b1 is too weak for this recipe or
+  //                           something in the ALiBi path is wrong; diagnose
+  //                           before spending 36 jobs. A text-only control
+  //                           (spd/rrwp/magnetic all false) separates the two.
+  //
+  // Base arm only — the base-vs-text comparison is 009's job, not this one.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "008_bloom_alibi_canary",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "task": "node_count",
+  "graph_type": "standard",
+  "seed": 42,
+
+  // ── all biases on: the base arm ──────────────────────────────────────────
+  "spd": true,
+  "rrwp": true,
+  "magnetic": true,
+
+  // ── the real recipe (identical to 009 / 003_ablation) ────────────────────
+  "model_name": "bigscience/bloom-1b1",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": null
+}

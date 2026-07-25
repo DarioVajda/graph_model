@@ -1,0 +1,62 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build the BLOOM-tokenized dataset cache for the ALiBi probe (008).
+  //   python3 -m sweep src.experiments.graphqa src/experiments/graphqa/configs/007_bloom_alibi_data_prep.jsonc
+  //
+  // Same graphs, same nine reported tasks and same feature knobs as 001_data_prep
+  // — only the tokenizer changes, because the cache stores token ids. `model_name`
+  // is part of the cache identity, so these land in tagged sibling directories
+  // (`.../<task>__q0.25_rw16_len1024_bloom-1b1`) and the Llama cache is untouched.
+  //
+  // STANDARD encoding only: the probe asks whether the graph bias survives an ALiBi
+  // backbone, which the standard encoding answers; incidence would double the build
+  // and the run for a question 003_ablation already covers on Llama.
+  //
+  // NB: every BLOOM size ships the SAME tokenizer, so this cache is byte-identical
+  // for 560m/1b1/1b7 — but the directory tag is the model name, so switching size
+  // later rebuilds an identical cache. Keep `model_name` in step with 008.
+  //
+  // Idempotent; one allocation builds all nine sequentially. Unlike 001/005 this
+  // builds the features on the GPU (`use_gpu: true`, the library default): those
+  // configs stayed on CPU so their caches were byte-comparable with each other,
+  // but 008's two arms read this ONE cache, so a CPU/GPU numeric difference is
+  // common to both arms and cannot confound the base-vs-text gap. (It does mean
+  // these features are not bit-identical to the Llama cache's — irrelevant, since
+  // the BLOOM and Llama numbers are not comparable anyway.)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "007_bloom_alibi_data_prep",
+  "results_dir": "src/experiments/graphqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",        // all nine builds sequentially in one job
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],   // used: SPD / RRWP / magnetic build on it
+      "cpus": 8,
+      "mem": "64G",
+      "time": "4:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  // ── the nine reported tasks, as in 001 / 003 ──────────────────────────────
+  "task": ["node_count", "edge_count", "cycle_check", "triangle_counting",
+           "node_degree", "connected_nodes", "reachability", "edge_existence",
+           "shortest_path"],
+  "graph_type": "standard",
+
+  // ── the only difference from 001: the tokenizer ───────────────────────────
+  "model_name": "bigscience/bloom-1b1",
+
+  // ── feature-generation knobs (these define the cache identity) ────────────
+  "max_length": 1024,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,                    // 0 = keep all N eigenvectors
+  "max_rw_steps": 16,
+  "use_gpu": true
+}
