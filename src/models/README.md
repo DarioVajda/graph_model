@@ -7,10 +7,12 @@ text attached to graph nodes while respecting graph structure.
 
 The implementation is **backbone-agnostic**: all graph logic lives in shared,
 backbone-neutral modules, and each base LLM is a thin `modeling_gtlm_<backbone>.py`
-adapter (flat in this package). Currently only the **Llama-3** family is adapted
-(`modeling_gtlm_llama.py` — `GTLMLlamaForCausalLM` / `GTLMLlamaConfig`); `v0`/`v1`
-are legacy. Import the public classes from the package: `from src.models import
-GTLMLlamaForCausalLM, GTLMLlamaConfig` (see REFACTOR.md §3c to add a backbone).
+adapter (flat in this package). The **Llama-3** family is the production backbone
+(`modeling_gtlm_llama.py` — `GTLMLlamaForCausalLM` / `GTLMLlamaConfig`); **BLOOM**
+is a probe adapter showing the same machinery on an ALiBi backbone (see *ALiBi
+backbones* below); `v0`/`v1` are legacy. Import the public classes from the package:
+`from src.models import GTLMLlamaForCausalLM, GTLMLlamaConfig` (see REFACTOR.md §3c
+to add a backbone).
 
 Checkpoints are **HuggingFace Hub-compatible**: `save_pretrained` bundles the model
 code into the checkpoint, so others can load a published checkpoint with
@@ -288,6 +290,44 @@ compile mode, int32 node ids, checkpointing, roofline), see
 
 ---
 
+## ALiBi backbones (BLOOM)
+
+`modeling_gtlm_bloom.py` runs the same graph machinery on a base model whose
+positional encoding is **ALiBi**, not RoPE — evidence that the graph bias is not
+tied to a positional-encoding family. It is a **probe adapter**: eager only,
+single-GPU, small graphs (GraphQA scale), and it is not part of the ablation grid.
+
+```python
+from src.models import GTLMBloomConfig, GTLMBloomForCausalLM
+
+cfg = GTLMBloomConfig.from_pretrained("bigscience/bloom-1b1",
+                                      spd=True, magnetic=True, graph_attn_impl="eager")
+model = GTLMBloomForCausalLM.from_pretrained("bigscience/bloom-1b1", config=cfg)
+```
+
+Everything else — collator, dataset, trainer, bias modules, structural mask — is
+unchanged, and **no shared GTLM module was modified for it**; the adapter absorbs
+both deviations locally:
+
+| Deviation | How the adapter handles it |
+|---|---|
+| BLOOM's attention forward is hand-written and never dispatches through `ALL_ATTENTION_FUNCTIONS`, so `gtlm_eager` is unreachable (Strategy A, not B) | `GTLMBloomAttention.forward` substitutes the additive-mask argument with `structural_mask + token_soft_bias` and delegates to `super().forward()` — BLOOM already adds that tensor to the scores before the softmax, so no attention math is reimplemented |
+| ALiBi takes no `position_ids`; stock BLOOM derives positions from `attention_mask.cumsum(-1)`, i.e. raw serialization order | `GTLMBloomModel.build_alibi_tensor` rebuilds the bias over GTLM's per-node `position_ids` (reusing HF's own pretrained slopes), so node *ordering* stops leaking into attention as a recency prior. `node_position_mode="spd_depth"` flows through unchanged and makes ALiBi graph-distance-aware |
+
+A single-node graph with `arange` positions reproduces stock `BloomForCausalLM`
+logits exactly, so the pretrained model is untouched in the degenerate case.
+
+`graph_attn_impl="flex"` is **rejected at construction** rather than silently
+ignored: the flex path needs the registered `gtlm_flex` function BLOOM never calls,
+and the ALiBi term would have to be folded into the `score_mod`.
+
+Experiment configs: `src/experiments/graphqa/configs/007_bloom_alibi_data_prep.jsonc`
+(BLOOM-tokenized cache — `model_name` is part of the cache identity, so the Llama
+cache is untouched), then `008_bloom_alibi_canary.jsonc` (one run: does it learn?)
+and `009_bloom_alibi.jsonc` (9 tasks x 3 seeds, full graph bias in every run).
+
+---
+
 ## Testing
 
 ```bash
@@ -299,6 +339,9 @@ compile mode, int32 node ids, checkpointing, roofline), see
 - `tests/test_gtlm_attn_functions.py` — the Strategy-B `gtlm_eager`/`gtlm_flex`
   functions in isolation: registered in `ALL_ATTENTION_FUNCTIONS` and bit-identical
   to the reference dispatch when driven through `module._graph_ctx`.
+- `tests/test_modeling_gtlm_bloom.py` — the ALiBi adapter: stock-BLOOM parity on a
+  single-node graph, bias reaches the scores + gets gradients, ALiBi built over
+  per-node positions, decode, flex refusal.
 - `tests/test_graph_bias.py` — `GraphAttentionBias`, the K-hop collator mask, and
   `expand_node_to_token_bias`.
 - `tests/test_collator_bucketing.py` — L/N bucketing + fp64 loss-neutrality.

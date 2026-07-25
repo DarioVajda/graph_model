@@ -20,6 +20,15 @@ from .modeling_gtlm_llama import (
     GTLMLlamaModel,
     GTLMLlamaForCausalLM,
 )
+# BLOOM: an ALiBi backbone, wired as a probe adapter (eager only). Self-contained —
+# it overrides what it needs locally instead of generalising the shared modules.
+from .modeling_gtlm_bloom import (
+    GTLMBloomConfig,
+    GTLMBloomAttention,
+    GTLMBloomBlock,
+    GTLMBloomModel,
+    GTLMBloomForCausalLM,
+)
 
 __all__ = [
     "GTLMLlamaConfig",
@@ -27,4 +36,9 @@ __all__ = [
     "GTLMLlamaDecoderLayer",
     "GTLMLlamaModel",
     "GTLMLlamaForCausalLM",
+    "GTLMBloomConfig",
+    "GTLMBloomAttention",
+    "GTLMBloomBlock",
+    "GTLMBloomModel",
+    "GTLMBloomForCausalLM",
 ]
