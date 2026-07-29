@@ -68,14 +68,17 @@ def _flex_attn_forward(self, hidden_states, position_embeddings,
         k, v = past_key_value.update(k, v, self.layer_idx,
                                      {"sin": sin, "cos": cos, "cache_position": cache_position})
 
-    feats = ctx["features"]
+    # ``_graph_ctx`` is a typed GraphContext (REFACTOR.md §8), not the old
+    # stringly-keyed dict — attribute access, or every spec dies with
+    # "'GraphContext' object is not subscriptable". ``features`` is still a dict.
+    feats = ctx.features
 
     def _bias():
         return self.graph_bias(
-            dtype=q.dtype, device=q.device, num_nodes=ctx["num_nodes"],
+            dtype=q.dtype, device=q.device, num_nodes=ctx.num_nodes,
             spd=feats["spd"], laplacian=feats["laplacian"], rwse=feats["rwse"],
             rrwp=feats["rrwp"], magnetic=feats["magnetic"], k_hop_mask=None,
-            cache_dict=ctx["cache"],
+            cache_dict=ctx.cache,
         )
 
     # Mirror the real model's bias checkpointing (#7) under the same gate.
@@ -84,7 +87,10 @@ def _flex_attn_forward(self, hidden_states, position_embeddings,
         node_bias = torch.utils.checkpoint.checkpoint(_bias, use_reentrant=False)
     else:
         node_bias = _bias()
-    score_mod = flex_core.make_score_mod(node_bias, ctx["node_ids"])
+    # The model only populates node_ids_flex on its own flex route; this bench
+    # builds the model as `eager` and swaps the forward, so fall back to node_ids.
+    node_ids = ctx.node_ids_flex if ctx.node_ids_flex is not None else ctx.node_ids
+    score_mod = flex_core.make_score_mod(node_bias, node_ids)
     out = flex_core.flex_attention_forward(
         q, k, v, block_mask=self._flex_block_mask, score_mod=score_mod,
         scaling=self.scaling, enable_gqa=True,
