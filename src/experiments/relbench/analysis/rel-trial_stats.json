@@ -1,0 +1,1459 @@
+{
+  "dataset": "rel-trial",
+  "schema": {
+    "outcome_analyses": {
+      "n_rows": 225846,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies",
+        "outcome_id": "outcomes"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 225846
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 18222
+        },
+        "outcome_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 92853
+        },
+        "non_inferiority_type": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 8,
+          "chars_p50": 20,
+          "chars_p95": 29,
+          "chars_max": 39
+        },
+        "non_inferiority_description": {
+          "dtype": "object",
+          "null_frac": 0.8833,
+          "n_unique": 9342,
+          "chars_p50": 133,
+          "chars_p95": 427,
+          "chars_max": 500
+        },
+        "param_type": {
+          "dtype": "object",
+          "null_frac": 0.3251,
+          "n_unique": 4750,
+          "chars_p50": 21,
+          "chars_p95": 34,
+          "chars_max": 40
+        },
+        "param_value": {
+          "dtype": "float64",
+          "null_frac": 0.3253,
+          "n_unique": 21733
+        },
+        "dispersion_type": {
+          "dtype": "object",
+          "null_frac": 0.8111,
+          "n_unique": 3,
+          "chars_p50": 26,
+          "chars_p95": 26,
+          "chars_max": 26
+        },
+        "dispersion_value": {
+          "dtype": "float64",
+          "null_frac": 0.8111,
+          "n_unique": 9082
+        },
+        "p_value_modifier": {
+          "dtype": "object",
+          "null_frac": 0.801,
+          "n_unique": 10,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 2
+        },
+        "p_value": {
+          "dtype": "float64",
+          "null_frac": 0.1765,
+          "n_unique": 11088
+        },
+        "ci_n_sides": {
+          "dtype": "object",
+          "null_frac": 0.3332,
+          "n_unique": 2,
+          "chars_p50": 7,
+          "chars_p95": 7,
+          "chars_max": 7
+        },
+        "ci_percent": {
+          "dtype": "float64",
+          "null_frac": 0.2893,
+          "n_unique": 145
+        },
+        "ci_lower_limit": {
+          "dtype": "float64",
+          "null_frac": 0.3689,
+          "n_unique": 22367
+        },
+        "ci_upper_limit": {
+          "dtype": "float64",
+          "null_frac": 0.3702,
+          "n_unique": 23627
+        },
+        "ci_upper_limit_na_comment": {
+          "dtype": "object",
+          "null_frac": 0.9997,
+          "n_unique": 18,
+          "chars_p50": 114,
+          "chars_p95": 173,
+          "chars_max": 218
+        },
+        "p_value_description": {
+          "dtype": "object",
+          "null_frac": 0.7029,
+          "n_unique": 15782,
+          "chars_p50": 95,
+          "chars_p95": 248,
+          "chars_max": 250
+        },
+        "method": {
+          "dtype": "object",
+          "null_frac": 0.1366,
+          "n_unique": 3339,
+          "chars_p50": 15,
+          "chars_p95": 32,
+          "chars_max": 40
+        },
+        "method_description": {
+          "dtype": "object",
+          "null_frac": 0.805,
+          "n_unique": 10392,
+          "chars_p50": 101,
+          "chars_p95": 148,
+          "chars_max": 150
+        },
+        "estimate_description": {
+          "dtype": "object",
+          "null_frac": 0.8035,
+          "n_unique": 13120,
+          "chars_p50": 97,
+          "chars_p95": 241,
+          "chars_max": 250
+        },
+        "groups_description": {
+          "dtype": "object",
+          "null_frac": 0.4024,
+          "n_unique": 60425,
+          "chars_p50": 99,
+          "chars_p95": 424,
+          "chars_max": 500
+        },
+        "other_analysis_description": {
+          "dtype": "object",
+          "null_frac": 0.9923,
+          "n_unique": 919,
+          "chars_p50": 143,
+          "chars_p95": 543,
+          "chars_max": 997
+        },
+        "ci_upper_limit_raw": {
+          "dtype": "float64",
+          "null_frac": 1.0,
+          "n_unique": 0
+        },
+        "ci_lower_limit_raw": {
+          "dtype": "float64",
+          "null_frac": 1.0,
+          "n_unique": 0
+        },
+        "p_value_raw": {
+          "dtype": "float64",
+          "null_frac": 1.0,
+          "n_unique": 0
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 2784
+        }
+      },
+      "time_min": "2000-07-31T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "outcomes": {
+      "n_rows": 411933,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 411933
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 52941
+        },
+        "outcome_type": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 4,
+          "chars_p50": 9,
+          "chars_p95": 9,
+          "chars_max": 19
+        },
+        "title": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 340156,
+          "chars_p50": 65,
+          "chars_p95": 156,
+          "chars_max": 255
+        },
+        "description": {
+          "dtype": "object",
+          "null_frac": 0.0877,
+          "n_unique": 311350,
+          "chars_p50": 265,
+          "chars_p95": 846,
+          "chars_max": 999
+        },
+        "time_frame": {
+          "dtype": "object",
+          "null_frac": 0.0001,
+          "n_unique": 117762,
+          "chars_p50": 26,
+          "chars_p95": 143,
+          "chars_max": 255
+        },
+        "population": {
+          "dtype": "object",
+          "null_frac": 0.2272,
+          "n_unique": 125182,
+          "chars_p50": 130,
+          "chars_p95": 339,
+          "chars_max": 500
+        },
+        "units": {
+          "dtype": "object",
+          "null_frac": 0.0634,
+          "n_unique": 32452,
+          "chars_p50": 12,
+          "chars_p95": 29,
+          "chars_max": 40
+        },
+        "units_analyzed": {
+          "dtype": "object",
+          "null_frac": 0.9806,
+          "n_unique": 1624,
+          "chars_p50": 8,
+          "chars_p95": 28,
+          "chars_max": 40
+        },
+        "dispersion_type": {
+          "dtype": "object",
+          "null_frac": 0.3908,
+          "n_unique": 35,
+          "chars_p50": 18,
+          "chars_p95": 23,
+          "chars_max": 34
+        },
+        "param_type": {
+          "dtype": "object",
+          "null_frac": 0.0633,
+          "n_unique": 9,
+          "chars_p50": 6,
+          "chars_p95": 21,
+          "chars_max": 28
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 3755
+        }
+      },
+      "time_min": "2000-05-31T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "conditions_studies": {
+      "n_rows": 408422,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies",
+        "condition_id": "conditions"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 408422
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 203786
+        },
+        "condition_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 3924
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 5672
+        }
+      },
+      "time_min": "2000-01-01T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "facilities_studies": {
+      "n_rows": 1798765,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies",
+        "facility_id": "facilities"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 1798765
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 227838
+        },
+        "facility_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 431513
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 5579
+        }
+      },
+      "time_min": "2000-01-01T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "designs": {
+      "n_rows": 249093,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 249093
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 249093
+        },
+        "allocation": {
+          "dtype": "object",
+          "null_frac": 0.374,
+          "n_unique": 2,
+          "chars_p50": 10,
+          "chars_p95": 14,
+          "chars_max": 14
+        },
+        "intervention_model": {
+          "dtype": "object",
+          "null_frac": 0.205,
+          "n_unique": 5,
+          "chars_p50": 19,
+          "chars_p95": 23,
+          "chars_max": 23
+        },
+        "observational_model": {
+          "dtype": "object",
+          "null_frac": 0.8096,
+          "n_unique": 9,
+          "chars_p50": 6,
+          "chars_p95": 12,
+          "chars_max": 21
+        },
+        "primary_purpose": {
+          "dtype": "object",
+          "null_frac": 0.2201,
+          "n_unique": 10,
+          "chars_p50": 9,
+          "chars_p95": 15,
+          "chars_max": 31
+        },
+        "time_perspective": {
+          "dtype": "object",
+          "null_frac": 0.8026,
+          "n_unique": 4,
+          "chars_p50": 11,
+          "chars_p95": 15,
+          "chars_max": 15
+        },
+        "masking": {
+          "dtype": "object",
+          "null_frac": 0.2038,
+          "n_unique": 5,
+          "chars_p50": 17,
+          "chars_p95": 17,
+          "chars_max": 17
+        },
+        "masking_description": {
+          "dtype": "object",
+          "null_frac": 0.9543,
+          "n_unique": 9874,
+          "chars_p50": 118,
+          "chars_p95": 613,
+          "chars_max": 1000
+        },
+        "intervention_model_description": {
+          "dtype": "object",
+          "null_frac": 0.9136,
+          "n_unique": 19979,
+          "chars_p50": 119,
+          "chars_p95": 745,
+          "chars_max": 1000
+        },
+        "subject_masked": {
+          "dtype": "object",
+          "null_frac": 0.7251,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "caregiver_masked": {
+          "dtype": "object",
+          "null_frac": 0.8714,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "investigator_masked": {
+          "dtype": "object",
+          "null_frac": 0.7748,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "outcomes_assessor_masked": {
+          "dtype": "object",
+          "null_frac": 0.8085,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 5774
+        }
+      },
+      "time_min": "2000-01-01T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "conditions": {
+      "n_rows": 3973,
+      "pkey_col": "condition_id",
+      "time_col": null,
+      "fkeys": {},
+      "columns": {
+        "condition_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 3973
+        },
+        "mesh_term": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 3973,
+          "chars_p50": 19,
+          "chars_p95": 34,
+          "chars_max": 61
+        }
+      }
+    },
+    "eligibilities": {
+      "n_rows": 249730,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 249730
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 249730
+        },
+        "sampling_method": {
+          "dtype": "object",
+          "null_frac": 0.8029,
+          "n_unique": 2,
+          "chars_p50": 22,
+          "chars_p95": 22,
+          "chars_max": 22
+        },
+        "gender": {
+          "dtype": "object",
+          "null_frac": 0.0011,
+          "n_unique": 3,
+          "chars_p50": 3,
+          "chars_p95": 6,
+          "chars_max": 6
+        },
+        "minimum_age": {
+          "dtype": "object",
+          "null_frac": 0.0628,
+          "n_unique": 288,
+          "chars_p50": 8,
+          "chars_p95": 8,
+          "chars_max": 10
+        },
+        "maximum_age": {
+          "dtype": "object",
+          "null_frac": 0.4692,
+          "n_unique": 434,
+          "chars_p50": 8,
+          "chars_p95": 8,
+          "chars_max": 11
+        },
+        "healthy_volunteers": {
+          "dtype": "object",
+          "null_frac": 0.0136,
+          "n_unique": 2,
+          "chars_p50": 2,
+          "chars_p95": 26,
+          "chars_max": 26
+        },
+        "population": {
+          "dtype": "object",
+          "null_frac": 0.8029,
+          "n_unique": 47239,
+          "chars_p50": 111,
+          "chars_p95": 494,
+          "chars_max": 1000
+        },
+        "criteria": {
+          "dtype": "object",
+          "null_frac": 0.0001,
+          "n_unique": 247382,
+          "chars_p50": 756,
+          "chars_p95": 4277,
+          "chars_max": 18862
+        },
+        "gender_description": {
+          "dtype": "object",
+          "null_frac": 0.9878,
+          "n_unique": 2446,
+          "chars_p50": 38,
+          "chars_p95": 174,
+          "chars_max": 918
+        },
+        "gender_based": {
+          "dtype": "object",
+          "null_frac": 0.9817,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "adult": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 2,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "child": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 2,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "older_adult": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 2,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 5782
+        }
+      },
+      "time_min": "2000-01-01T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "sponsors_studies": {
+      "n_rows": 391462,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies",
+        "sponsor_id": "sponsors"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 391462
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 249730
+        },
+        "sponsor_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 48796
+        },
+        "lead_or_collaborator": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 2,
+          "chars_p50": 4,
+          "chars_p95": 12,
+          "chars_max": 12
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 5782
+        }
+      },
+      "time_min": "2000-01-01T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "drop_withdrawals": {
+      "n_rows": 381199,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 381199
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 32129
+        },
+        "period": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 7039,
+          "chars_p50": 13,
+          "chars_p95": 37,
+          "chars_max": 40
+        },
+        "reason": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 22089,
+          "chars_p50": 18,
+          "chars_p95": 35,
+          "chars_max": 100
+        },
+        "count": {
+          "dtype": "float64",
+          "null_frac": 0.0,
+          "n_unique": 919
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 3406
+        }
+      },
+      "time_min": "2000-05-31T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "interventions_studies": {
+      "n_rows": 171771,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies",
+        "intervention_id": "interventions"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 171771
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 90364
+        },
+        "intervention_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 3432
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 5041
+        }
+      },
+      "time_min": "2000-01-01T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "sponsors": {
+      "n_rows": 53241,
+      "pkey_col": "sponsor_id",
+      "time_col": null,
+      "fkeys": {},
+      "columns": {
+        "sponsor_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 53241
+        },
+        "name": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 53241,
+          "chars_p50": 25,
+          "chars_p95": 62,
+          "chars_max": 158
+        },
+        "agency_class": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 9,
+          "chars_p50": 7,
+          "chars_p95": 8,
+          "chars_max": 9
+        }
+      }
+    },
+    "interventions": {
+      "n_rows": 3462,
+      "pkey_col": "intervention_id",
+      "time_col": null,
+      "fkeys": {},
+      "columns": {
+        "intervention_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 3462
+        },
+        "mesh_term": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 3462,
+          "chars_p50": 11,
+          "chars_p95": 36,
+          "chars_max": 161
+        }
+      }
+    },
+    "facilities": {
+      "n_rows": 453233,
+      "pkey_col": "facility_id",
+      "time_col": null,
+      "fkeys": {},
+      "columns": {
+        "facility_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 453233
+        },
+        "name": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 453232,
+          "chars_p50": 36,
+          "chars_p95": 78,
+          "chars_max": 255
+        },
+        "city": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 28165,
+          "chars_p50": 8,
+          "chars_p95": 14,
+          "chars_max": 62
+        },
+        "state": {
+          "dtype": "object",
+          "null_frac": 0.5015,
+          "n_unique": 7722,
+          "chars_p50": 8,
+          "chars_p95": 15,
+          "chars_max": 61
+        },
+        "zip": {
+          "dtype": "object",
+          "null_frac": 0.2207,
+          "n_unique": 48347,
+          "chars_p50": 5,
+          "chars_p95": 8,
+          "chars_max": 30
+        },
+        "country": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 210,
+          "chars_p50": 7,
+          "chars_p95": 14,
+          "chars_max": 42
+        }
+      }
+    },
+    "studies": {
+      "n_rows": 249730,
+      "pkey_col": "nct_id",
+      "time_col": "start_date",
+      "fkeys": {},
+      "columns": {
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 249730
+        },
+        "start_date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 5782
+        },
+        "target_duration": {
+          "dtype": "object",
+          "null_frac": 0.9858,
+          "n_unique": 123,
+          "chars_p50": 7,
+          "chars_p95": 9,
+          "chars_max": 10
+        },
+        "study_type": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 4,
+          "chars_p50": 14,
+          "chars_p95": 14,
+          "chars_max": 32
+        },
+        "acronym": {
+          "dtype": "object",
+          "null_frac": 0.7387,
+          "n_unique": 53087,
+          "chars_p50": 7,
+          "chars_p95": 12,
+          "chars_max": 14
+        },
+        "baseline_population": {
+          "dtype": "object",
+          "null_frac": 0.9257,
+          "n_unique": 15706,
+          "chars_p50": 101,
+          "chars_p95": 321,
+          "chars_max": 500
+        },
+        "brief_title": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 248992,
+          "chars_p50": 81,
+          "chars_p95": 150,
+          "chars_max": 300
+        },
+        "official_title": {
+          "dtype": "object",
+          "null_frac": 0.0204,
+          "n_unique": 243351,
+          "chars_p50": 127,
+          "chars_p95": 249,
+          "chars_max": 598
+        },
+        "phase": {
+          "dtype": "object",
+          "null_frac": 0.2007,
+          "n_unique": 8,
+          "chars_p50": 13,
+          "chars_p95": 15,
+          "chars_max": 15
+        },
+        "enrollment": {
+          "dtype": "float64",
+          "null_frac": 0.0052,
+          "n_unique": 6466
+        },
+        "enrollment_type": {
+          "dtype": "object",
+          "null_frac": 0.0149,
+          "n_unique": 2,
+          "chars_p50": 6,
+          "chars_p95": 6,
+          "chars_max": 11
+        },
+        "source": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 17308,
+          "chars_p50": 25,
+          "chars_p95": 50,
+          "chars_max": 121
+        },
+        "limitations_and_caveats": {
+          "dtype": "float64",
+          "null_frac": 1.0,
+          "n_unique": 0
+        },
+        "number_of_arms": {
+          "dtype": "float64",
+          "null_frac": 0.2434,
+          "n_unique": 33
+        },
+        "number_of_groups": {
+          "dtype": "float64",
+          "null_frac": 0.8648,
+          "n_unique": 21
+        },
+        "has_dmc": {
+          "dtype": "object",
+          "null_frac": 0.137,
+          "n_unique": 2,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "is_fda_regulated_drug": {
+          "dtype": "object",
+          "null_frac": 0.6439,
+          "n_unique": 2,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "is_fda_regulated_device": {
+          "dtype": "object",
+          "null_frac": 0.6439,
+          "n_unique": 2,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "is_unapproved_device": {
+          "dtype": "object",
+          "null_frac": 0.995,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "is_ppsd": {
+          "dtype": "object",
+          "null_frac": 1.0,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "is_us_export": {
+          "dtype": "object",
+          "null_frac": 0.946,
+          "n_unique": 2,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "biospec_retention": {
+          "dtype": "object",
+          "null_frac": 0.9596,
+          "n_unique": 3,
+          "chars_p50": 16,
+          "chars_p95": 19,
+          "chars_max": 19
+        },
+        "biospec_description": {
+          "dtype": "object",
+          "null_frac": 0.9594,
+          "n_unique": 7821,
+          "chars_p50": 39,
+          "chars_p95": 413,
+          "chars_max": 1000
+        },
+        "source_class": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 8,
+          "chars_p50": 5,
+          "chars_p95": 8,
+          "chars_max": 9
+        },
+        "baseline_type_units_analyzed": {
+          "dtype": "object",
+          "null_frac": 0.9988,
+          "n_unique": 175,
+          "chars_p50": 7,
+          "chars_p95": 23,
+          "chars_max": 38
+        },
+        "fdaaa801_violation": {
+          "dtype": "object",
+          "null_frac": 1.0,
+          "n_unique": 1,
+          "chars_p50": 1,
+          "chars_p95": 1,
+          "chars_max": 1
+        },
+        "plan_to_share_ipd": {
+          "dtype": "object",
+          "null_frac": 0.6334,
+          "n_unique": 3,
+          "chars_p50": 2,
+          "chars_p95": 9,
+          "chars_max": 9
+        },
+        "detailed_descriptions": {
+          "dtype": "object",
+          "null_frac": 0.3405,
+          "n_unique": 163477,
+          "chars_p50": 1202,
+          "chars_p95": 5637,
+          "chars_max": 31794
+        },
+        "brief_summaries": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 248419,
+          "chars_p50": 390,
+          "chars_p95": 1792,
+          "chars_max": 4985
+        }
+      },
+      "time_min": "2000-01-01T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    },
+    "reported_event_totals": {
+      "n_rows": 383064,
+      "pkey_col": "id",
+      "time_col": "date",
+      "fkeys": {
+        "nct_id": "studies"
+      },
+      "columns": {
+        "id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 383064
+        },
+        "nct_id": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 52751
+        },
+        "event_type": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 3,
+          "chars_p50": 6,
+          "chars_p95": 7,
+          "chars_max": 7
+        },
+        "classification": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 3,
+          "chars_p50": 27,
+          "chars_p95": 29,
+          "chars_max": 29
+        },
+        "subjects_affected": {
+          "dtype": "float64",
+          "null_frac": 0.1774,
+          "n_unique": 1513
+        },
+        "subjects_at_risk": {
+          "dtype": "float64",
+          "null_frac": 0.1812,
+          "n_unique": 2570
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 3752
+        }
+      },
+      "time_min": "2000-05-31T00:00:00",
+      "time_max": "2021-01-01T00:00:00"
+    }
+  },
+  "tasks": {
+    "study-outcome": {
+      "task_type": "TaskType.BINARY_CLASSIFICATION",
+      "entity_table": "studies",
+      "entity_col": "nct_id",
+      "target_col": "outcome",
+      "time_col": "timestamp",
+      "timedelta_days": 365,
+      "metrics": [
+        "average_precision",
+        "accuracy",
+        "f1",
+        "roc_auc"
+      ],
+      "defining_module": "relbench.tasks.trial",
+      "has_docstring": true,
+      "docstring": "Predict if the trials in the next 1 year will achieve its primary outcome.",
+      "docstring_rejected": null,
+      "splits": {
+        "train": {
+          "n_rows": 11994,
+          "time_min": "2001-01-05T00:00:00",
+          "time_max": "2019-01-01T00:00:00",
+          "n_timestamps": 19,
+          "positive_rate": 0.6376
+        },
+        "val": {
+          "n_rows": 960,
+          "time_min": "2020-01-01T00:00:00",
+          "time_max": "2020-01-01T00:00:00",
+          "n_timestamps": 1,
+          "positive_rate": 0.5844
+        },
+        "test": {
+          "n_rows": 825,
+          "time_min": "2021-01-01T00:00:00",
+          "time_max": "2021-01-01T00:00:00",
+          "n_timestamps": 1,
+          "positive_rate": 0.5855
+        }
+      }
+    },
+    "study-adverse": {
+      "task_type": "TaskType.REGRESSION",
+      "entity_table": "studies",
+      "entity_col": "nct_id",
+      "target_col": "num_of_adverse_events",
+      "time_col": "timestamp",
+      "timedelta_days": 365,
+      "metrics": [
+        "r2",
+        "mae",
+        "rmse"
+      ],
+      "defining_module": "relbench.tasks.trial",
+      "has_docstring": true,
+      "docstring": "Predict the number of affected patients with severe advsere events/death for the trial in the next 1 year.",
+      "docstring_rejected": null,
+      "splits": {
+        "train": {
+          "n_rows": 43335,
+          "time_min": "2001-01-05T00:00:00",
+          "time_max": "2019-01-01T00:00:00",
+          "n_timestamps": 19,
+          "target_quantiles": {
+            "q00": 0.0,
+            "q10": 0.0,
+            "q25": 0.0,
+            "q50": 2.0,
+            "q75": 15.0,
+            "q90": 55.0,
+            "q100": 28085.0
+          },
+          "target_mean": 39.8433
+        },
+        "val": {
+          "n_rows": 3596,
+          "time_min": "2020-01-01T00:00:00",
+          "time_max": "2020-01-01T00:00:00",
+          "n_timestamps": 1,
+          "target_quantiles": {
+            "q00": 0.0,
+            "q10": 0.0,
+            "q25": 0.0,
+            "q50": 2.0,
+            "q75": 18.0,
+            "q90": 82.0,
+            "q100": 17245.0
+          },
+          "target_mean": 57.0829
+        },
+        "test": {
+          "n_rows": 3098,
+          "time_min": "2021-01-01T00:00:00",
+          "time_max": "2021-01-01T00:00:00",
+          "n_timestamps": 1,
+          "target_quantiles": {
+            "q00": 0.0,
+            "q10": 0.0,
+            "q25": 0.0,
+            "q50": 3.0,
+            "q75": 24.0,
+            "q90": 112.0,
+            "q100": 5978.0
+          },
+          "target_mean": 57.9303
+        }
+      }
+    }
+  },
+  "degrees": {
+    "study-outcome": {
+      "outcome_analyses.nct_id": {
+        "child_table": "outcome_analyses",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "outcomes.nct_id": {
+        "child_table": "outcomes",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "conditions_studies.nct_id": {
+        "child_table": "conditions_studies",
+        "fkey_col": "nct_id",
+        "mean": 1.98,
+        "p50": 2,
+        "p90": 4,
+        "p99": 6,
+        "max": 8,
+        "zero_frac": 0.0933
+      },
+      "facilities_studies.nct_id": {
+        "child_table": "facilities_studies",
+        "fkey_col": "nct_id",
+        "mean": 34.83,
+        "p50": 3,
+        "p90": 85,
+        "p99": 538,
+        "max": 999,
+        "zero_frac": 0.1067
+      },
+      "designs.nct_id": {
+        "child_table": "designs",
+        "fkey_col": "nct_id",
+        "mean": 1.0,
+        "p50": 1,
+        "p90": 1,
+        "p99": 1,
+        "max": 1,
+        "zero_frac": 0.0
+      },
+      "eligibilities.nct_id": {
+        "child_table": "eligibilities",
+        "fkey_col": "nct_id",
+        "mean": 1.0,
+        "p50": 1,
+        "p90": 1,
+        "p99": 1,
+        "max": 1,
+        "zero_frac": 0.0
+      },
+      "sponsors_studies.nct_id": {
+        "child_table": "sponsors_studies",
+        "fkey_col": "nct_id",
+        "mean": 1.46,
+        "p50": 1,
+        "p90": 2,
+        "p99": 5,
+        "max": 9,
+        "zero_frac": 0.0
+      },
+      "drop_withdrawals.nct_id": {
+        "child_table": "drop_withdrawals",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "interventions_studies.nct_id": {
+        "child_table": "interventions_studies",
+        "fkey_col": "nct_id",
+        "mean": 1.23,
+        "p50": 1,
+        "p90": 3,
+        "p99": 7,
+        "max": 11,
+        "zero_frac": 0.3533
+      },
+      "reported_event_totals.nct_id": {
+        "child_table": "reported_event_totals",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "_total_hop1_children": {
+        "mean": 41.51,
+        "p50": 11,
+        "p90": 94,
+        "p99": 542
+      },
+      "_parents": {
+        "n_relations": 0,
+        "relations": []
+      }
+    },
+    "study-adverse": {
+      "outcome_analyses.nct_id": {
+        "child_table": "outcome_analyses",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "outcomes.nct_id": {
+        "child_table": "outcomes",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "conditions_studies.nct_id": {
+        "child_table": "conditions_studies",
+        "fkey_col": "nct_id",
+        "mean": 1.99,
+        "p50": 2,
+        "p90": 4,
+        "p99": 8,
+        "max": 30,
+        "zero_frac": 0.1133
+      },
+      "facilities_studies.nct_id": {
+        "child_table": "facilities_studies",
+        "fkey_col": "nct_id",
+        "mean": 17.17,
+        "p50": 1,
+        "p90": 48,
+        "p99": 215,
+        "max": 266,
+        "zero_frac": 0.0767
+      },
+      "designs.nct_id": {
+        "child_table": "designs",
+        "fkey_col": "nct_id",
+        "mean": 1.0,
+        "p50": 1,
+        "p90": 1,
+        "p99": 1,
+        "max": 1,
+        "zero_frac": 0.0
+      },
+      "eligibilities.nct_id": {
+        "child_table": "eligibilities",
+        "fkey_col": "nct_id",
+        "mean": 1.0,
+        "p50": 1,
+        "p90": 1,
+        "p99": 1,
+        "max": 1,
+        "zero_frac": 0.0
+      },
+      "sponsors_studies.nct_id": {
+        "child_table": "sponsors_studies",
+        "fkey_col": "nct_id",
+        "mean": 1.49,
+        "p50": 1,
+        "p90": 2,
+        "p99": 5,
+        "max": 8,
+        "zero_frac": 0.0
+      },
+      "drop_withdrawals.nct_id": {
+        "child_table": "drop_withdrawals",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "interventions_studies.nct_id": {
+        "child_table": "interventions_studies",
+        "fkey_col": "nct_id",
+        "mean": 1.29,
+        "p50": 1,
+        "p90": 3,
+        "p99": 8,
+        "max": 11,
+        "zero_frac": 0.3533
+      },
+      "reported_event_totals.nct_id": {
+        "child_table": "reported_event_totals",
+        "fkey_col": "nct_id",
+        "mean": 0.0,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0,
+        "zero_frac": 1.0
+      },
+      "_total_hop1_children": {
+        "mean": 23.94,
+        "p50": 9,
+        "p90": 56,
+        "p99": 220
+      },
+      "_parents": {
+        "n_relations": 0,
+        "relations": []
+      }
+    }
+  },
+  "skipped": {},
+  "n_seeds": 300
+}

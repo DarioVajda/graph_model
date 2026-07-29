@@ -1,0 +1,922 @@
+{
+  "dataset": "rel-f1",
+  "schema": {
+    "constructor_standings": {
+      "n_rows": 10170,
+      "pkey_col": "constructorStandingsId",
+      "time_col": "date",
+      "fkeys": {
+        "raceId": "races",
+        "constructorId": "constructors"
+      },
+      "columns": {
+        "constructorStandingsId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 10170
+        },
+        "raceId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 756
+        },
+        "constructorId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 147
+        },
+        "points": {
+          "dtype": "float64",
+          "null_frac": 0.0,
+          "n_unique": 247
+        },
+        "position": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 22
+        },
+        "wins": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 16
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 756
+        }
+      },
+      "time_min": "1958-01-19T00:00:00",
+      "time_max": "2009-11-01T11:00:00"
+    },
+    "drivers": {
+      "n_rows": 857,
+      "pkey_col": "driverId",
+      "time_col": null,
+      "fkeys": {},
+      "columns": {
+        "driverId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 857
+        },
+        "driverRef": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 857,
+          "chars_p50": 7,
+          "chars_p95": 12,
+          "chars_max": 18
+        },
+        "code": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 95,
+          "chars_p50": 2,
+          "chars_p95": 3,
+          "chars_max": 3
+        },
+        "forename": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 476,
+          "chars_p50": 5,
+          "chars_p95": 9,
+          "chars_max": 17
+        },
+        "surname": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 798,
+          "chars_p50": 7,
+          "chars_p95": 10,
+          "chars_max": 23
+        },
+        "dob": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 839
+        },
+        "nationality": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 42,
+          "chars_p50": 7,
+          "chars_p95": 10,
+          "chars_max": 17
+        }
+      }
+    },
+    "races": {
+      "n_rows": 820,
+      "pkey_col": "raceId",
+      "time_col": "date",
+      "fkeys": {
+        "circuitId": "circuits"
+      },
+      "columns": {
+        "raceId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 820
+        },
+        "year": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 60
+        },
+        "round": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 19
+        },
+        "circuitId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 66
+        },
+        "name": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 38,
+          "chars_p50": 18,
+          "chars_p95": 24,
+          "chars_max": 29
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 820
+        },
+        "time": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 16,
+          "chars_p50": 8,
+          "chars_p95": 8,
+          "chars_max": 8
+        }
+      },
+      "time_min": "1950-05-13T00:00:00",
+      "time_max": "2009-11-01T11:00:00"
+    },
+    "results": {
+      "n_rows": 20323,
+      "pkey_col": "resultId",
+      "time_col": "date",
+      "fkeys": {
+        "raceId": "races",
+        "driverId": "drivers",
+        "constructorId": "constructors"
+      },
+      "columns": {
+        "resultId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 20323
+        },
+        "raceId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 820
+        },
+        "driverId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 806
+        },
+        "constructorId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 199
+        },
+        "number": {
+          "dtype": "float64",
+          "null_frac": 0.0003,
+          "n_unique": 128
+        },
+        "grid": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 35
+        },
+        "position": {
+          "dtype": "float64",
+          "null_frac": 0.4878,
+          "n_unique": 33
+        },
+        "positionOrder": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 39
+        },
+        "points": {
+          "dtype": "float64",
+          "null_frac": 0.0,
+          "n_unique": 23
+        },
+        "laps": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 172
+        },
+        "milliseconds": {
+          "dtype": "float64",
+          "null_frac": 0.785,
+          "n_unique": 4340
+        },
+        "fastestLap": {
+          "dtype": "float64",
+          "null_frac": 0.8966,
+          "n_unique": 76
+        },
+        "rank": {
+          "dtype": "float64",
+          "null_frac": 0.8966,
+          "n_unique": 22
+        },
+        "statusId": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 125
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 820
+        }
+      },
+      "time_min": "1950-05-13T00:00:00",
+      "time_max": "2009-11-01T11:00:00"
+    },
+    "qualifying": {
+      "n_rows": 4082,
+      "pkey_col": "qualifyId",
+      "time_col": "date",
+      "fkeys": {
+        "raceId": "races",
+        "driverId": "drivers",
+        "constructorId": "constructors"
+      },
+      "columns": {
+        "qualifyId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 4082
+        },
+        "raceId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 189
+        },
+        "driverId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 117
+        },
+        "constructorId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 32
+        },
+        "number": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 34
+        },
+        "position": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 28
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 189
+        }
+      },
+      "time_min": "1994-03-26T00:00:00",
+      "time_max": "2009-10-31T11:00:00"
+    },
+    "constructor_results": {
+      "n_rows": 9408,
+      "pkey_col": "constructorResultsId",
+      "time_col": "date",
+      "fkeys": {
+        "raceId": "races",
+        "constructorId": "constructors"
+      },
+      "columns": {
+        "constructorResultsId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 9408
+        },
+        "raceId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 757
+        },
+        "constructorId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 163
+        },
+        "points": {
+          "dtype": "float64",
+          "null_frac": 0.0,
+          "n_unique": 24
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 757
+        }
+      },
+      "time_min": "1956-01-22T00:00:00",
+      "time_max": "2009-11-01T11:00:00"
+    },
+    "standings": {
+      "n_rows": 28115,
+      "pkey_col": "driverStandingsId",
+      "time_col": "date",
+      "fkeys": {
+        "raceId": "races",
+        "driverId": "drivers"
+      },
+      "columns": {
+        "driverStandingsId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 28115
+        },
+        "raceId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 820
+        },
+        "driverId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 799
+        },
+        "points": {
+          "dtype": "float64",
+          "null_frac": 0.0,
+          "n_unique": 182
+        },
+        "position": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 108
+        },
+        "wins": {
+          "dtype": "int64",
+          "null_frac": 0.0,
+          "n_unique": 14
+        },
+        "date": {
+          "dtype": "datetime64[ns]",
+          "null_frac": 0.0,
+          "n_unique": 820
+        }
+      },
+      "time_min": "1950-05-13T00:00:00",
+      "time_max": "2009-11-01T11:00:00"
+    },
+    "circuits": {
+      "n_rows": 77,
+      "pkey_col": "circuitId",
+      "time_col": null,
+      "fkeys": {},
+      "columns": {
+        "circuitId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 77
+        },
+        "circuitRef": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 77,
+          "chars_p50": 7,
+          "chars_p95": 12,
+          "chars_max": 14
+        },
+        "name": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 77,
+          "chars_p50": 20,
+          "chars_p95": 30,
+          "chars_max": 37
+        },
+        "location": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 75,
+          "chars_p50": 8,
+          "chars_p95": 14,
+          "chars_max": 21
+        },
+        "country": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 35,
+          "chars_p50": 6,
+          "chars_p95": 11,
+          "chars_max": 13
+        },
+        "lat": {
+          "dtype": "float64",
+          "null_frac": 0.0,
+          "n_unique": 77
+        },
+        "lng": {
+          "dtype": "float64",
+          "null_frac": 0.0,
+          "n_unique": 77
+        },
+        "alt": {
+          "dtype": "float64",
+          "null_frac": 0.039,
+          "n_unique": 65
+        }
+      }
+    },
+    "constructors": {
+      "n_rows": 211,
+      "pkey_col": "constructorId",
+      "time_col": null,
+      "fkeys": {},
+      "columns": {
+        "constructorId": {
+          "dtype": "Int64",
+          "null_frac": 0.0,
+          "n_unique": 211
+        },
+        "constructorRef": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 211,
+          "chars_p50": 7,
+          "chars_p95": 14,
+          "chars_max": 20
+        },
+        "name": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 211,
+          "chars_p50": 7,
+          "chars_p95": 15,
+          "chars_max": 25
+        },
+        "nationality": {
+          "dtype": "object",
+          "null_frac": 0.0,
+          "n_unique": 24,
+          "chars_p50": 7,
+          "chars_p95": 8,
+          "chars_max": 13
+        }
+      }
+    }
+  },
+  "tasks": {
+    "driver-position": {
+      "task_type": "TaskType.REGRESSION",
+      "entity_table": "drivers",
+      "entity_col": "driverId",
+      "target_col": "position",
+      "time_col": "date",
+      "timedelta_days": 60,
+      "metrics": [
+        "r2",
+        "mae",
+        "rmse"
+      ],
+      "defining_module": "relbench.tasks.f1",
+      "has_docstring": true,
+      "docstring": "Predict the average finishing position of each driver all races in the next 2 months.",
+      "docstring_rejected": null,
+      "splits": {
+        "train": {
+          "n_rows": 7453,
+          "time_min": "1950-06-19T00:00:00",
+          "time_max": "2004-09-03T00:00:00",
+          "n_timestamps": 254,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 5.0,
+            "q25": 9.0,
+            "q50": 13.3333,
+            "q75": 18.0,
+            "q90": 23.0,
+            "q100": 39.0
+          },
+          "target_mean": 13.9014
+        },
+        "val": {
+          "n_rows": 499,
+          "time_min": "2005-03-02T00:00:00",
+          "time_max": "2009-10-07T00:00:00",
+          "n_timestamps": 23,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 4.4,
+            "q25": 7.55,
+            "q50": 11.4,
+            "q75": 14.6667,
+            "q90": 17.0,
+            "q100": 22.0
+          },
+          "target_mean": 11.0832
+        },
+        "test": {
+          "n_rows": 760,
+          "time_min": "2010-03-02T00:00:00",
+          "time_max": "2016-05-29T00:00:00",
+          "n_timestamps": 33,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 4.6,
+            "q25": 8.0,
+            "q50": 12.1833,
+            "q75": 16.0,
+            "q90": 18.5167,
+            "q100": 24.0
+          },
+          "target_mean": 11.9262
+        }
+      }
+    },
+    "driver-dnf": {
+      "task_type": "TaskType.BINARY_CLASSIFICATION",
+      "entity_table": "drivers",
+      "entity_col": "driverId",
+      "target_col": "did_not_finish",
+      "time_col": "date",
+      "timedelta_days": 30,
+      "metrics": [
+        "average_precision",
+        "accuracy",
+        "f1",
+        "roc_auc"
+      ],
+      "defining_module": "relbench.tasks.f1",
+      "has_docstring": true,
+      "docstring": "Predict the if each driver will DNF (not finish) a race in the next 1 month.",
+      "docstring_rejected": null,
+      "splits": {
+        "train": {
+          "n_rows": 11411,
+          "time_min": "1950-05-20T00:00:00",
+          "time_max": "2004-10-03T00:00:00",
+          "n_timestamps": 420,
+          "positive_rate": 0.8804
+        },
+        "val": {
+          "n_rows": 566,
+          "time_min": "2005-03-02T00:00:00",
+          "time_max": "2008-03-16T00:00:00",
+          "n_timestamps": 26,
+          "positive_rate": 0.7792
+        },
+        "test": {
+          "n_rows": 702,
+          "time_min": "2010-03-02T00:00:00",
+          "time_max": "2013-03-16T00:00:00",
+          "n_timestamps": 29,
+          "positive_rate": 0.7051
+        }
+      }
+    },
+    "driver-top3": {
+      "task_type": "TaskType.BINARY_CLASSIFICATION",
+      "entity_table": "drivers",
+      "entity_col": "driverId",
+      "target_col": "qualifying",
+      "time_col": "date",
+      "timedelta_days": 30,
+      "metrics": [
+        "average_precision",
+        "accuracy",
+        "f1",
+        "roc_auc"
+      ],
+      "defining_module": "relbench.tasks.f1",
+      "has_docstring": true,
+      "docstring": "Predict if each driver will qualify in the top-3 for a race within the next 1 month.",
+      "docstring_rejected": null,
+      "splits": {
+        "train": {
+          "n_rows": 1353,
+          "time_min": "1994-02-28T00:00:00",
+          "time_max": "2004-10-03T00:00:00",
+          "n_timestamps": 59,
+          "positive_rate": 0.1707
+        },
+        "val": {
+          "n_rows": 588,
+          "time_min": "2005-03-02T00:00:00",
+          "time_max": "2008-03-16T00:00:00",
+          "n_timestamps": 27,
+          "positive_rate": 0.2024
+        },
+        "test": {
+          "n_rows": 726,
+          "time_min": "2010-03-02T00:00:00",
+          "time_max": "2013-03-16T00:00:00",
+          "n_timestamps": 30,
+          "positive_rate": 0.1763
+        }
+      }
+    },
+    "results-position": {
+      "task_type": "TaskType.REGRESSION",
+      "entity_table": "results",
+      "entity_col": "resultId",
+      "target_col": "position",
+      "time_col": "date",
+      "timedelta_days": 0,
+      "metrics": [
+        "r2",
+        "mae",
+        "rmse"
+      ],
+      "defining_module": "relbench.base.task_autocomplete",
+      "has_docstring": false,
+      "docstring": null,
+      "docstring_rejected": "framework class (relbench.base.task_autocomplete)",
+      "splits": {
+        "train": {
+          "n_rows": 8997,
+          "time_min": "1950-05-21T00:00:00",
+          "time_max": "2004-10-24T00:00:00",
+          "n_timestamps": 730,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 2.0,
+            "q25": 4.0,
+            "q50": 7.0,
+            "q75": 10.0,
+            "q90": 13.0,
+            "q100": 33.0
+          },
+          "target_mean": 7.0519
+        },
+        "val": {
+          "n_rows": 1400,
+          "time_min": "2005-03-06T14:00:00",
+          "time_max": "2009-11-01T11:00:00",
+          "n_timestamps": 89,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 2.0,
+            "q25": 4.0,
+            "q50": 8.0,
+            "q75": 12.0,
+            "q90": 15.0,
+            "q100": 21.0
+          },
+          "target_mean": 8.5871
+        },
+        "test": {
+          "n_rows": 4798,
+          "time_min": "2010-03-14T12:00:00",
+          "time_max": "2023-07-30T13:00:00",
+          "n_timestamps": 271,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 2.0,
+            "q25": 5.0,
+            "q50": 9.0,
+            "q75": 14.0,
+            "q90": 17.0,
+            "q100": 24.0
+          },
+          "target_mean": 9.5044
+        }
+      }
+    },
+    "qualifying-position": {
+      "task_type": "TaskType.REGRESSION",
+      "entity_table": "qualifying",
+      "entity_col": "qualifyId",
+      "target_col": "position",
+      "time_col": "date",
+      "timedelta_days": 0,
+      "metrics": [
+        "r2",
+        "mae",
+        "rmse"
+      ],
+      "defining_module": "relbench.base.task_autocomplete",
+      "has_docstring": false,
+      "docstring": null,
+      "docstring_rejected": "framework class (relbench.base.task_autocomplete)",
+      "splits": {
+        "train": {
+          "n_rows": 2228,
+          "time_min": "1994-03-26T00:00:00",
+          "time_max": "2004-10-23T00:00:00",
+          "n_timestamps": 100,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 3.0,
+            "q25": 6.0,
+            "q50": 12.0,
+            "q75": 17.0,
+            "q90": 21.0,
+            "q100": 28.0
+          },
+          "target_mean": 11.7599
+        },
+        "val": {
+          "n_rows": 1854,
+          "time_min": "2005-03-05T14:00:00",
+          "time_max": "2009-10-31T11:00:00",
+          "n_timestamps": 89,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 3.0,
+            "q25": 6.0,
+            "q50": 11.0,
+            "q75": 16.0,
+            "q90": 19.0,
+            "q100": 22.0
+          },
+          "target_mean": 10.9434
+        },
+        "test": {
+          "n_rows": 5733,
+          "time_min": "2010-03-13T12:00:00",
+          "time_max": "2023-07-29T13:00:00",
+          "n_timestamps": 271,
+          "target_quantiles": {
+            "q00": 1.0,
+            "q10": 3.0,
+            "q25": 6.0,
+            "q50": 11.0,
+            "q75": 16.0,
+            "q90": 20.0,
+            "q100": 24.0
+          },
+          "target_mean": 11.1423
+        }
+      }
+    }
+  },
+  "degrees": {
+    "driver-position": {
+      "results.driverId": {
+        "child_table": "results",
+        "fkey_col": "driverId",
+        "mean": 38.86,
+        "p50": 21,
+        "p90": 106,
+        "p99": 173,
+        "max": 225,
+        "zero_frac": 0.106
+      },
+      "qualifying.driverId": {
+        "child_table": "qualifying",
+        "fkey_col": "driverId",
+        "mean": 4.36,
+        "p50": 0,
+        "p90": 13,
+        "p99": 59,
+        "max": 63,
+        "zero_frac": 0.844
+      },
+      "standings.driverId": {
+        "child_table": "standings",
+        "fkey_col": "driverId",
+        "mean": 42.79,
+        "p50": 28,
+        "p90": 111,
+        "p99": 178,
+        "max": 230,
+        "zero_frac": 0.116
+      },
+      "_total_hop1_children": {
+        "mean": 86.01,
+        "p50": 48,
+        "p90": 229,
+        "p99": 361
+      },
+      "_parents": {
+        "n_relations": 0,
+        "relations": []
+      }
+    },
+    "driver-dnf": {
+      "results.driverId": {
+        "child_table": "results",
+        "fkey_col": "driverId",
+        "mean": 41.61,
+        "p50": 23,
+        "p90": 111,
+        "p99": 183,
+        "max": 206,
+        "zero_frac": 0.086
+      },
+      "qualifying.driverId": {
+        "child_table": "qualifying",
+        "fkey_col": "driverId",
+        "mean": 5.27,
+        "p50": 0,
+        "p90": 22,
+        "p99": 60,
+        "max": 79,
+        "zero_frac": 0.816
+      },
+      "standings.driverId": {
+        "child_table": "standings",
+        "fkey_col": "driverId",
+        "mean": 45.3,
+        "p50": 28,
+        "p90": 109,
+        "p99": 177,
+        "max": 211,
+        "zero_frac": 0.09
+      },
+      "_total_hop1_children": {
+        "mean": 92.19,
+        "p50": 53,
+        "p90": 239,
+        "p99": 393
+      },
+      "_parents": {
+        "n_relations": 0,
+        "relations": []
+      }
+    },
+    "driver-top3": {
+      "results.driverId": {
+        "child_table": "results",
+        "fkey_col": "driverId",
+        "mean": 61.27,
+        "p50": 47,
+        "p90": 148,
+        "p99": 205,
+        "max": 211,
+        "zero_frac": 0.036
+      },
+      "qualifying.driverId": {
+        "child_table": "qualifying",
+        "fkey_col": "driverId",
+        "mean": 23.91,
+        "p50": 16,
+        "p90": 57,
+        "p99": 90,
+        "max": 96,
+        "zero_frac": 0.074
+      },
+      "standings.driverId": {
+        "child_table": "standings",
+        "fkey_col": "driverId",
+        "mean": 60.78,
+        "p50": 46,
+        "p90": 148,
+        "p99": 205,
+        "max": 216,
+        "zero_frac": 0.054
+      },
+      "_total_hop1_children": {
+        "mean": 145.96,
+        "p50": 111,
+        "p90": 339,
+        "p99": 463
+      },
+      "_parents": {
+        "n_relations": 0,
+        "relations": []
+      }
+    },
+    "results-position": {
+      "_parents": {
+        "n_relations": 3,
+        "relations": [
+          "raceId->races",
+          "driverId->drivers",
+          "constructorId->constructors"
+        ]
+      }
+    },
+    "qualifying-position": {
+      "_parents": {
+        "n_relations": 3,
+        "relations": [
+          "raceId->races",
+          "driverId->drivers",
+          "constructorId->constructors"
+        ]
+      }
+    }
+  },
+  "skipped": {
+    "driver-circuit-compete": "not an EntityTask"
+  },
+  "n_seeds": 500
+}
