@@ -1,0 +1,122 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // The headline: graph vs flat on rel-trial / study-outcome.
+  //
+  // PLAN.md 1.1 moved the headline off rel-f1 for one reason: a frozen Llama-1B
+  // scores 88.47 on `driver-top3` and 55.72 on `study-outcome`. The first is
+  // Llama knowing Formula 1, not a model reading a database. rel-trial's rows
+  // carry the free text the thesis is about (`detailed_descriptions`,
+  // `brief_summaries`, `criteria`), every LLM approach there loses to LightGBM,
+  // and `study-outcome` has 1.00 task rows per entity so there is no label
+  // history to leak -- the relational neighborhood is the only signal.
+  //
+  //   graph  spd+magnetic  bias_lr <picked by 004>  x seed {0,1,2}   3 runs
+  //   graph  no biases                              x seed {0,1,2}   3 runs
+  //   flat   no biases                              x seed {0,1,2}   3 runs
+  //                                                                --------
+  //                                                                 9 runs
+  //
+  // MATCHED COMPUTE vs 003/004 (`driver-dnf`). The two train splits are within
+  // 5% of each other -- 11,411 vs 11,994 rows -- so equal epochs is equal
+  // compute and no epoch adjustment was warranted:
+  //   driver-dnf     11,411 / 32 = 356 steps/epoch x 4 = 1,424 steps
+  //   study-outcome  11,994 / 32 = 374 steps/epoch x 4 = 1,496 steps  (+5.1%)
+  // Wall clock will come in *under* driver-dnf's despite the extra steps:
+  // measured document length is 1,122 tokens p50 here against 2,149 on
+  // driver-dnf at `max_nodes=64` (dump, 100 examples, 2026-07-27).
+  //
+  // CONSTRUCTION -- inverted from rel-f1, and measured rather than guessed
+  // (`--mode dump`, 2026-07-27; PLAN.md 4.2 predicted the shape, the dump
+  // supplied the numbers):
+  //
+  //   max_nodes 24       rel-trial's hop-1 p50 is 11, not rel-f1's 53. Its
+  //                      neighborhood is *width* (7 distinct schemas around one
+  //                      seed), not *depth* (62 near-identical `results` rows).
+  //   relation_cap 3     THE load-bearing knob. Uncapped, `facilities` took
+  //                      15/24 and 17/24 node slots on real documents -- hospital
+  //                      name, city, state, zip, country -- while
+  //                      `detailed_descriptions` was truncated mid-sentence.
+  //                      Capping costs 53 tokens p50 and frees 10 slots, because
+  //                      facilities rows are cheap in tokens and expensive in
+  //                      slots (tokens/row 71.0 -> 83.2).
+  //   max_value_chars    4000, spending the freed budget on the free text that
+  //                      is the point of the retarget (tokens/row -> 112.3).
+  //   max_node_chars     null. A node cap silently overrides the per-field cap;
+  //                      at 600 it truncated 95.5% of `studies` rows (PLAN.md 6.1).
+  //
+  // Anchors (test AUROC, arXiv:2411.11829 Table 1) -- note every LLM entry here
+  // loses to the GBT, which is why clearing 70 would be a real result:
+  //   LightGBM 70.09 | RDL 68.60 | Llama-1B 55.72 | 1B+MLP 68.38 | 3B+MLP 70.82
+  // We feed ~24 rows and do not claim a matched budget against RDL (PLAN.md 1.2).
+  //
+  //   python3 -m sweep src.experiments.relbench <this file>
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "005_trial_headline",
+  "results_dir": "src/experiments/relbench/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 9,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1"],
+      "cpus": 8,
+      "mem": "64G",
+      // 16h, well above the ~4h estimate. The 8-step smoke (118099) could not
+      // separate steady-state step rate from one-time flex compilation (first
+      // step 184s, first eval 121s, steady eval 44.6s/960 rows), so the rate is
+      // bounded rather than known. Partition MaxTime is 7 days; an over-long
+      // wall costs nothing if unused, whereas a job dying at the limit with no
+      // final test score costs the whole run.
+      "time": "16:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "dataset": "rel-trial",
+  "task": "study-outcome",
+
+  // -- construction (all four are cache keys; see the header) --
+  "max_nodes": 24,
+  "relation_cap": 3,
+  "max_value_chars": 4000,
+  "max_node_chars": null,
+
+  // A bundle: these vary together (an arm is a combination, not a cross).
+  // `bias_lr` is pinned to 004's winner and appears only on the arm that has
+  // bias parameters -- the two baselines carry 0, so the knob is inert there.
+  "__arms__": [
+    // 004 (job 118048, 12 runs, 3 seeds/arm) on rel-f1 driver-dnf, test roc_auc:
+    //   bias_lr 3e-2  0.7156 +/- 0.0035   <- picked
+    //   flat          0.7092 +/- 0.0219
+    //   graph no-bias 0.6948 +/- 0.0104
+    //   bias_lr 1e-2  0.6908 +/- 0.0027
+    // +2.5pp between the two bias_lr values -- a larger effect than any
+    // architectural gap in that sweep. NOTE 3e-2 sits at the top edge of the
+    // bracket, so the optimum may lie beyond it; carried here as "best tested",
+    // not "optimal", and it is a per-task value choice (PLAN.md 5.0 B), so
+    // rel-trial may well want a different one.
+    { "arm_name": "graph", "spd": true,  "magnetic": true,  "bias_lr": 3e-2 },
+    { "arm_name": "graph", "spd": false, "magnetic": false },
+    { "arm_name": "flat",  "spd": false, "magnetic": false }
+  ],
+
+  "seed": [0, 1, 2],
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "dtype": "bf16",
+  "lora": true,
+  "lora_r": 32,
+  "lr": 2e-4,
+  "num_epochs": 4,
+  "batch_size": 1,
+  "accumulation_steps": 32,
+  "eval_steps": 100,
+
+  "wandb_project": null
+}

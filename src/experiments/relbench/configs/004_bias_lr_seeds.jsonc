@@ -1,0 +1,89 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // M6b: does the bias channel help, once `bias_lr` is set deliberately?
+  //
+  // 003 ran the graph arm at `bias_lr = 5e-2` -- the default inherited from
+  // `config.py:203`, copied from tag_benchmarks. Every kgqa/graphqa config in
+  // this repo settled on 5e-3 after an explicit bracket, so 003's graph arm
+  // trained its 122K bias parameters at 167x the LoRA lr. Its three-arm result
+  // (all arms within ~1pp, spread well inside the ~1.9pp AUROC standard error
+  // on a 702-row test split) therefore cannot separate "the bias channel does
+  // not help here" from "the bias channel was never given a fair setting".
+  //
+  // This run fixes lr at 2e-4 for every arm and brackets `bias_lr` over
+  // {1e-2, 3e-2} on the graph-bias arm only, with 3 seeds everywhere so the
+  // arm means come with an error bar instead of a single draw.
+  //
+  //   graph  spd+magnetic  bias_lr 1e-2   x seed {0,1,2}    3 runs
+  //   graph  spd+magnetic  bias_lr 3e-2   x seed {0,1,2}    3 runs
+  //   graph  no biases                    x seed {0,1,2}    3 runs
+  //   flat   no biases                    x seed {0,1,2}    3 runs
+  //                                                        --------
+  //                                                        12 runs
+  //
+  // `bias_lr` is swept inside the bundle, not at the top level, so it does not
+  // cross with the two baseline arms. Those arms carry 0 graph-bias parameters
+  // (verified in 003's logs: "Custom Graph Biases: 0"), so the knob is inert
+  // for them -- they take the config default and it changes nothing.
+  //
+  // `seed` is the TRAINING seed only. The sampler is seeded by `data_seed`
+  // (config.py:176, the cache key), which is untouched, so all 12 runs read the
+  // same two already-built caches and the seed axis isolates training variance
+  // rather than resampling the neighborhoods:
+  //   graph -> rel-f1_driver-dnf_n64_recent_graph__4ba3508e18cf
+  //   flat  -> rel-f1_driver-dnf_n64_recent_flat__eaf7e4f93994
+  //
+  // Anchors (test AUROC, arXiv:2411.11829 Table 1): LightGBM 68.85, RDL 72.62,
+  // frozen Llama-3.2-1B 65.81. See PLAN.md 1.2 -- we feed ~64 rows against
+  // RDL's ~8,300, so this is NOT a matched-budget claim.
+  //
+  //   python3 -m sweep src.experiments.relbench <this file>
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "004_bias_lr_seeds",
+  "results_dir": "src/experiments/relbench/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "dataset": "rel-f1",
+  "task": "driver-dnf",
+  "max_nodes": 64,
+
+  // A bundle: these vary together (an arm is a combination, not a cross).
+  // `bias_lr` lives here so it brackets only the arm that has bias parameters.
+  "__arms__": [
+    { "arm_name": "graph", "spd": true,  "magnetic": true,  "bias_lr": 1e-2 },
+    { "arm_name": "graph", "spd": true,  "magnetic": true,  "bias_lr": 3e-2 },
+    { "arm_name": "graph", "spd": false, "magnetic": false },
+    { "arm_name": "flat",  "spd": false, "magnetic": false }
+  ],
+
+  "seed": [0, 1, 2],
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "dtype": "bf16",
+  "lora": true,
+  "lora_r": 32,
+  "lr": 2e-4,
+  "num_epochs": 4,
+  "batch_size": 1,
+  "accumulation_steps": 32,
+  "eval_steps": 100,
+
+  "wandb_project": null
+}

@@ -1,0 +1,66 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // M6: the first real number. rel-f1 / driver-dnf, full splits, three arms.
+  //
+  //   base            SPD + magnetic, multi-node          (the full stack)
+  //   no-spd+magnetic multi-node, both biases off         (bidirectional, no bias)
+  //   flat            one node, causal, identical bytes   (the matched control)
+  //
+  // The middle arm exists because `base` vs `flat` conflates two things: the
+  // structural bias channel AND bidirectional encoding of the content (a flat
+  // node is entirely the prompt node, so it is read causally). Only the middle
+  // arm isolates the bias channel. It shares `base`'s built cache -- the biases
+  // are computed at build time for every arm and simply not read here.
+  //
+  // Anchors (test AUROC, arXiv:2411.11829 Table 1): LightGBM 68.85, RDL 72.62,
+  // frozen Llama-3.2-1B 65.81. Gate for this run: 0.65-0.75. See PLAN.md 1.2 --
+  // we feed ~64 rows against RDL's ~8,300, so this is NOT a matched-budget claim.
+  //
+  //   python3 -m sweep src.experiments.relbench <this file>
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "003_f1_first_pair",
+  "results_dir": "src/experiments/relbench/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "dataset": "rel-f1",
+  "task": "driver-dnf",
+  "max_nodes": 64,
+
+  // A bundle: these three vary together (an arm is a combination, not a cross).
+  "__arms__": [
+    { "arm_name": "graph", "spd": true,  "magnetic": true  },
+    { "arm_name": "graph", "spd": false, "magnetic": false },
+    { "arm_name": "flat",  "spd": false, "magnetic": false }
+  ],
+
+  "seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "dtype": "bf16",
+  "lora": true,
+  "lora_r": 32,
+  "lr": 3e-4,
+  "num_epochs": 4,
+  "batch_size": 1,
+  "accumulation_steps": 32,
+  "eval_steps": 100,
+
+  "wandb_project": null
+}

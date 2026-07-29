@@ -1,0 +1,44 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // M6 smoke test: does the pipeline run end to end and produce a number?
+  //
+  // NOT a result. `max_steps: 8` and a strided train split mean the AUROC here
+  // carries no information about the model -- what it checks is that the readout
+  // fires, the label masking is right, and `task.evaluate` agrees with our own
+  // metric computation (evaluate.py raises if it does not).
+  //
+  //   python3 -m sweep src.experiments.relbench <this file>   # after data_prep
+  //
+  // The train caps are in the cache key, so this builds its own small cache and
+  // cannot be mistaken for -- or silently reused by -- a full-scale run.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "002_smoke",
+  "results_dir": "src/experiments/relbench/results",
+
+  "execution": { "mode": "local" },
+
+  "mode": "train",
+  "dataset": "rel-f1",
+  "task": "driver-dnf",
+  "max_nodes": 16,
+
+  "max_train_samples": 200,
+  "max_val_samples": 100,
+
+  "arm_name": ["graph", "flat"],
+  "seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",          // no flex compile on a 8-step run
+  "dtype": "bf16",
+  "lora": true,
+  "lora_r": 32,
+  "lr": 3e-4,
+  "batch_size": 1,
+  "accumulation_steps": 4,
+  "eval_steps": 4,
+  "max_steps": 8,
+
+  "wandb_project": null
+}
