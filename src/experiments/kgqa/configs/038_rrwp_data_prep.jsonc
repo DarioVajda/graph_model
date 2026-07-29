@@ -1,0 +1,89 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // RRWP data prep for the NeurIPS rebuttal (2026-07-25): rebuild the best
+  // WebQSP data config WITH the relative-random-walk-probability feature, so
+  // the WebQSP arm can be reported under the paper's full SPD+RRWP+MagLap
+  // encoding suite instead of the SPD+MagLap subset it has used until now.
+  //
+  // RRWP was dropped from the KGQA arm on a storage assumption that turned out
+  // to be worth checking. Measured against the existing build (Σ n² = 643.8M
+  // over the 22,730 rows of all three splits):
+  //
+  //   shortest_path_dists  int16, n²           1.29 GB
+  //   magnetic_V/lambdas   float32, n×128      1.28 GB
+  //   tokens/text/graphs                      ~0.80 GB
+  //   ─────────────────────────────────────────────────
+  //   current total                            3.4 GB
+  //   + rrwp               float32, n²×16     41.2 GB   <-- this config
+  //   ─────────────────────────────────────────────────
+  //   new total                               ~45 GB
+  //
+  // The 13x is entirely dtype and depth, not graph size: RRWP stores 16 float32
+  // per node pair where SPD stores one int16, over the identical n² footprint.
+  // That is ~0.1% of the 44 TB free on /shared/workspace, so it is affordable
+  // as-is; making it CHEAP (fp16, or steps < 16) is deliberately deferred —
+  // this build exists to answer the reviewers, not to be the permanent format.
+  //
+  // Data config = 029's question_node="isolated" arm verbatim (021's recipe +
+  // the question node), the Levi construction the paper describes. RRWP is the
+  // ONLY difference, so the training sweep it feeds (039) changes exactly one
+  // thing against a published 3-seed baseline: test F1 73.51 ± 0.74.
+  //
+  // rrwp joins data_config_key() only when enabled, so this builds a NEW cache
+  // (..._qnisolated_rw16) and every pre-existing build keeps its name and stays
+  // valid. Nothing here invalidates or rewrites the 135 GB already on disk.
+  //
+  // Run this BEFORE 039 — that sweep requires this cache to exist.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/038_rrwp_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "rrwp_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      // 128G, not 028's 64G: the RRWP map streams a (16, n, n, 16) fp32 GPU
+      // tensor per batch and Arrow-writes ~41 GB, on top of the in-RAM nx
+      // graph list the map indexes into.
+      "mem": "128G",
+      // 12h sufficed for the SPD+magnetic-only build; RRWP writes ~13x the
+      // bytes (map cache file + save_to_disk copy), so give it the full day.
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  // ── the RRWP knobs (everything below this block matches 028/029 exactly) ──
+  "rrwp": true,
+  "max_rw_steps": 16,                 // the paper's setting everywhere else
+                                      // (tag_benchmarks / template / graphqa_mag_khop);
+                                      // also RRWPBias's MLP input width, so data
+                                      // prep and model must agree.
+
+  "question_node": "isolated",
+
+  // data-config keys — must match 029's isolated arm exactly (aside from rrwp)
+  // so 039's cache lookups hit this build.
+  "dataset": "webqsp",
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 50,
+  "versions": 8,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

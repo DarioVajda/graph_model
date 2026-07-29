@@ -248,6 +248,13 @@ def build_parser():
     p.add_argument("--magnetic-q", type=float, default=d.magnetic_q)
     p.add_argument("--magnetic-m", type=int, default=d.magnetic_m,
                    help="# magnetic eigenvectors (data prep + collator; 0 = all N).")
+    p.add_argument("--rrwp", action=B, default=d.rrwp,
+                   help="relative random-walk-probability bias (data prep + model). "
+                        "Adds an (n, n, --max-rw-steps) float32 column: ~45 GB for a "
+                        "built WebQSP config at 16 steps, vs 3.4 GB without.")
+    p.add_argument("--max-rw-steps", type=int, default=d.max_rw_steps,
+                   help="RRWP random-walk steps (data prep + model; in the cache key "
+                        "only when --rrwp).")
 
     # ── train keys ───────────────────────────────────────────────────────────
     p.add_argument("--num-epochs", type=int, default=d.num_epochs)
@@ -338,6 +345,7 @@ def config_from_args(args):
         magnetic_shared=args.magnetic_shared,
         magnetic_content=args.magnetic_content, magnetic_content_dim=args.magnetic_content_dim,
         magnetic_dim=args.magnetic_dim, magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
+        rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
         num_epochs=args.num_epochs, batch_size=args.batch_size,
         accumulation_steps=args.accumulation_steps, lr=args.lr, bias_lr=args.bias_lr,
         eval_steps=args.eval_steps, max_steps=args.max_steps, seed=args.seed,

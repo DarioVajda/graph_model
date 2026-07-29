@@ -1,0 +1,104 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // WebQSP under the paper's FULL encoding suite (2026-07-25, NeurIPS rebuttal).
+  //
+  // The paper uses SPD+RRWP+MagLap throughout; the WebQSP work was done later
+  // with RRWP dropped, so the results the reviewers asked for are currently a
+  // strict subset of the paper's configuration. This sweep closes that gap:
+  // 029's question_node="isolated" arm with ONLY --rrwp added.
+  //
+  // Everything else is 029 verbatim — the Levi construction, the question node,
+  // 021's recipe, the same 3 seeds — so this is a genuine one-variable change
+  // against a published 3-seed baseline rather than a fresh configuration:
+  //
+  //   SPD+MagLap    (029, isolated)  test F1 .7381 / .7265 / .7407  = 73.51 ± .74
+  //   SPD+RRWP+MagLap  (this sweep)  test F1     ?  /     ?  /     ?
+  //
+  //   Flat text-serialization control: 74.93 ± .23
+  //   GNN-RAG on the same SR subgraphs (Table 15d): Hits@1 78.9 / F1 69.8
+  //
+  // NB the honest reporting obligation: whichever way this lands it is the
+  // paper-consistent number, and 029 stays in the writeup beside it as the
+  // RRWP ablation. Do not select between them after the fact.
+  //
+  // The `triplet` construction scores higher (74.49 ± .50, config 034) but is a
+  // second departure from the paper — deliberately NOT the base here, so the
+  // rebuttal changes exactly one thing.
+  //
+  // 3 seeds, ~2-3 GPU-h each. Requires 038_rrwp_data_prep.jsonc's cache.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/039_rrwp_webqsp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "rrwp_webqsp",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      // 192G, not 029's 64G: the built dataset is 42 GB instead of 3.4 GB and
+      // the 4 dataloader workers random-access it through the Arrow mmap, so
+      // the page-cache working set is an order of magnitude larger. The tensors
+      // themselves are cheap — (2, 512, 512, 16) fp32 is ~34 MB/batch. Sized
+      // above 128G because the 038 prep peaked at MaxRSS 132 GB, and 037 has
+      // prior art of OOM-killed seeds at 128G on the smaller dataset.
+      "mem": "192G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+
+  // ── the one variable under test ──────────────────────────────────────────
+  "rrwp": true,
+  "max_rw_steps": 16,                 // must match 038's build (RRWPBias's MLP
+                                      // input width == the stored column's last dim)
+
+  "mode": "train",
+  "question_node": "isolated",        // 029's best arm
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

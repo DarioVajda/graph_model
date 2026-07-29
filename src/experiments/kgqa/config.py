@@ -204,6 +204,19 @@ class RunConfig:
     magnetic_dim: int = 128                   # magnetic-bias MLP hidden width (model architecture)
     magnetic_q: float = 0.25                  # magnetic-Laplacian charge
     magnetic_m: int = 128                     # # magnetic eigenvectors (data prep + collator; 0 = all N)
+    # RRWP (Relative Random Walk Probabilities) — the third encoding of the
+    # paper's SPD+RRWP+MagLap suite, absent from the KGQA arm until now. It was
+    # dropped here for storage: the column is (n, n, max_rw_steps) float32 per
+    # row, ~32x SPD's bytes over the same n^2 footprint (16 float32 vs 1 int16),
+    # which takes a built WebQSP config from 3.4 GB to ~45 GB at max_rw_steps=16.
+    # Used by BOTH data prep (``compute_rrwp``) and the model (``RRWPBias``).
+    # Default OFF so every pre-existing cache key, built dataset and model
+    # architecture is bit-identical to before this knob existed.
+    rrwp: bool = False
+    max_rw_steps: int = 16                    # RRWP random-walk steps (data prep + model).
+                                              # 16 is the paper's setting everywhere else
+                                              # (tag_benchmarks/template/graphqa_mag_khop);
+                                              # only in the cache key when rrwp=True.
 
     # ── train keys ───────────────────────────────────────────────────────────
     num_epochs: int = 5
@@ -362,6 +375,10 @@ class RunConfig:
             # and adds the content down-projection (magnetic_content_dim).
             cfg.update(magnetic_content=True, magnetic_content_dim=self.magnetic_content_dim,
                        magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+        if self.rrwp:
+            # max_rw_steps is the RRWPBias MLP's INPUT width, so it must equal the
+            # stored column's last dim — data prep and model read the same field.
+            cfg.update(rrwp=True, max_rw_steps=self.max_rw_steps)
         return cfg
 
     def lora_config(self):
@@ -406,7 +423,8 @@ class RunConfig:
                 + ("" if self.naming_version == NAMING_VERSION else f"_nm{self.naming_version}")
                 + ("" if self.resolved_cvt_collapse("graph") else "_nocvt")
                 + ("" if self.question_node == "off" else f"_qn{self.question_node}")
-                + ("" if self.graph_construction == "levi" else f"_gc{self.graph_construction}"))
+                + ("" if self.graph_construction == "levi" else f"_gc{self.graph_construction}")
+                + ("" if not self.rrwp else f"_rw{self.max_rw_steps}"))
 
     def validate(self):
         """Reject accepted-but-unsupported combinations with a clear message.
@@ -515,6 +533,12 @@ class RunConfig:
             raise ValueError(f"bias_weight_decay must be >= 0; got {self.bias_weight_decay}.")
         if not (0 <= self.lora_dropout < 1):
             raise ValueError(f"lora_dropout must be in [0, 1); got {self.lora_dropout}.")
+        if self.max_rw_steps < 1:
+            raise ValueError(f"max_rw_steps must be >= 1; got {self.max_rw_steps}.")
+        if self.rrwp and self.mode.startswith("flat"):
+            raise ValueError(
+                "rrwp is a graph-arm knob (the flat serialization builds no graph to "
+                "walk); remove it from flat_* runs.")
         if self.magnetic and self.magnetic_shared:
             raise ValueError(
                 "spd/magnetic/magnetic_shared: magnetic and magnetic_shared are two "

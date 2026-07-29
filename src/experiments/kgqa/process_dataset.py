@@ -549,6 +549,14 @@ def process_split(split, records, entity_names, tokenizer, question_end, cfg, ou
     ds.compute_shortest_path_distances(cutoff=cfg.max_spd, use_gpu=cfg.use_gpu)
     ds.compute_magnetic_lap(q=cfg.magnetic_q, m=cfg.magnetic_m, use_gpu=cfg.use_gpu)
     ds.cast_float_features_to_fp32()
+    # RRWP goes LAST, after the fp32 cast. Its (n, n, max_rw_steps) float32 column
+    # is an order of magnitude larger than every other feature combined (~41 GB vs
+    # 3.4 GB for WebQSP at 16 steps), and BOTH `.map()` and `.cast()` rewrite the
+    # whole Arrow table — computing it earlier would make every later pass haul it
+    # disk -> RAM -> disk for nothing. compute_rrwp already emits float32, so it
+    # needs no cast and loses nothing by running after one.
+    if cfg.rrwp:
+        ds.compute_rrwp(max_rrwp_steps=cfg.max_rw_steps, use_gpu=cfg.use_gpu)
     ds.save(os.path.join(out_dir, split))
     return kept, len(graphs)
 
@@ -628,7 +636,8 @@ def run_data_prep_mode(cfg, splits=None):
                        "rcm": view.rcm,
                        "data_seed": view.data_seed, "model_name": view.model_name,
                        "max_spd": view.max_spd, "magnetic_q": view.magnetic_q,
-                       "magnetic_m": view.magnetic_m}, f, indent=2)
+                       "magnetic_m": view.magnetic_m,
+                       "rrwp": view.rrwp, "max_rw_steps": view.max_rw_steps}, f, indent=2)
 
         ds_splits = splits if splits is not None else role_splits(cfg, dataset)
         print(f"[data_prep] {dataset}: out_dir={out_dir} splits={ds_splits}")
