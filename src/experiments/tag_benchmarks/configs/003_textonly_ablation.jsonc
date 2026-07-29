@@ -1,0 +1,75 @@
+{
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Text-only GTLM ablation — the NO-BIAS variant on Cora and PubMed.
+  //
+  // Every structural bias is off (spd/rrwp/magnetic = false), so the model has no
+  // access to graph structure: it reads the concatenated node texts with plain
+  // (unbiased) attention. This is the control for the full-bias benchmark — the
+  // expectation is that accuracy/F1 drop, demonstrating the structural biases carry
+  // real signal.
+  //
+  // Grid (cartesian): 2 datasets × 3 seeds × 2 lr × 2 lora_r = 24 runs.
+  //   dataset_arm bundles the per-dataset knobs (neighbours, mapping, epochs) that
+  //   travel together; samples_per_node is omitted so each run adopts its cache's
+  //   value (cora/60 = 16, pubmed/30 = 4), cross-checked on load.
+  //
+  //   python3 -m sweep src.experiments.tag_benchmarks \
+  //           src/experiments/tag_benchmarks/configs/003_textonly_ablation.jsonc
+  //   python3 -m sweep.report src/experiments/tag_benchmarks/results/textonly_ablation
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  "name": "textonly_ablation",
+  "results_dir": "src/experiments/tag_benchmarks/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",    // one job per run
+      "max_concurrent": 8,            // 8 GPUs free (B200 + B300)
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],   // any free B200 or B300
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── the ablation: all structural biases OFF ────────────────────────────────
+  "spd": false,
+  "rrwp": false,
+  "magnetic": false,
+
+  // ── swept axes ─────────────────────────────────────────────────────────────
+  "seed": [42, 43, 44],
+  "lr": [6e-5, 2e-4],
+  "lora_r": [32, 64],                 // lora_alpha auto-derives to 2*r
+
+  // ── per-dataset config bundle (Cora: 20 epochs, PubMed: 4 epochs) ──────────
+  "dataset_arm": [
+    { "dataset": "cora",   "max_neighbors": 60, "text_mapping": "target_abstract", "num_epochs": 20 },
+    { "dataset": "pubmed", "max_neighbors": 30, "text_mapping": "target_abstract", "num_epochs": 4  }
+  ],
+
+  // ── fixed across every run ──────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "dtype": "bf16",
+  "lora": true,
+  "lora_dropout": 0.05,
+  "k_hop": 0,
+
+  "batch_size": 1,
+  "accumulation_steps": 32,
+  "bias_lr": 5e-2,                    // unused here (no bias params); kept at default
+  "eval_steps": 40,
+  "max_steps": -1,
+  "include_f1": true,                 // report F1 alongside accuracy
+  "val_subsample": 500,              // val graphs used for best-checkpoint selection
+  "test_subsample": null,            // score the full test split
+
+  "wandb_project": null
+}
