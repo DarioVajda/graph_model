@@ -1,0 +1,7 @@
+# Downloaded databases + built .gtds caches (see PLAN.md 3). raw_data must be
+# fetched on a node with outbound internet; compute nodes have none.
+raw_data/
+processed_data/
+# Regenerable sweep artifacts.
+results/
+logs/
