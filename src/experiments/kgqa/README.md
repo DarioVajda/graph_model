@@ -60,6 +60,16 @@ higher = better); the last column is our best run to date.
   question node; test Hit 83.6; arm mean 73.5 ± 0.8 F1). CWQ: `cwq_headline` seed 2
   (test Hit 60.2; arm mean 54.0 ± 1.0 F1). The flat text-serialization *control*
   is still higher on both (74.9 / 58.6 F1) — see [Results so far](#results-so-far).
+- **`graph_construction: "triplet"` is excluded from this column by decision, not
+  by oversight.** It is the highest-scoring WebQSP arm (74.49 ± 0.50 mean F1, config
+  034 — above the 74.1 cell above), but one node per raw triple hands the model the
+  flat serialization's content in the flat serialization's own units, sidestepping
+  the graph-native encoding this work exists to test. It stays a content-fair
+  *control*; do not promote it into "Ours".
+- **The WebQSP row is SPD+MagLap.** Adding RRWP (the paper's third encoding) does
+  not change it: 72.74 ± 1.03 F1 / 78.11 ± 1.31 Hits@1, i.e. flat-to-slightly-below
+  at 13× the storage — see
+  [RRWP encoding parity](#rrwp-encoding-parity-2026-07-25-complete--one-negative-result).
 - **GNN-RAG / GNN-RAG+RA / RoG**: from GNN-RAG Table 2 (Mavromatis & Karypis, 2024). Those use
   *dense/combined* GNN retrievers; the **retrieval-matched** baseline is GNN-RAG reading the
   SR sparse subgraph — paper **Table 15 row (d)** (verified against the PDF 2026-07-12):
@@ -495,6 +505,54 @@ signal), but "give it a RoPE-shaped distance signal" was the wrong lever.
 Both new knobs (`flat_shuffle_lines`, `node_position_mode`) stay in the
 codebase as tested, reversible, documented negative results; defaults are
 unchanged (`False` / `"reset"`).
+
+### RRWP encoding parity (2026-07-25, complete) — one negative result
+
+The GTLM paper uses **SPD + RRWP + MagLap** throughout, but the KGQA arm was
+built with RRWP dropped on an unverified assumption that its storage cost was
+prohibitive. That left the WebQSP results a strict *subset* of the paper's
+encoding — an inconsistency worth closing before quoting them externally.
+Configs: [`configs/038_rrwp_data_prep.jsonc`](configs/038_rrwp_data_prep.jsonc)
+(cache build), [`configs/039_rrwp_webqsp.jsonc`](configs/039_rrwp_webqsp.jsonc)
+(job 117232). `rrwp` / `max_rw_steps` default OFF in `RunConfig` and `_rw{T}`
+joins `data_config_key()` only when enabled, so every pre-existing cache stayed
+valid.
+
+039 is 029's `isolated` arm with **only** `rrwp` added — a genuine one-variable
+change against a published 3-seed baseline:
+
+| arm | test F1 | Hits@1 | Hit* |
+|---|---:|---:|---:|
+| `isolated`, SPD+MagLap (029) | **0.7351 ± 0.0076** | 0.7803 ± 0.0115 | 0.8325 |
+| `isolated`, +RRWP (039) | 0.7274 ± 0.0103 | 0.7811 ± 0.0131 | 0.8274 |
+
+Per-seed F1, paired by seed: 73.81→73.03, 72.65→71.60, 74.07→73.60 (paired delta
+−0.77 ± 0.29).
+
+**Verdicts:**
+
+1. **RRWP does not help WebQSP.** F1 −0.77, Hits@1 flat (+0.08). All three seeds
+   moved the same direction with a tight delta spread, but the delta is *under*
+   the within-arm seed noise (±0.8–1.0) — read this as neutral-to-slightly-
+   negative, not as a demonstrated regression. What it is not is an improvement.
+2. **The storage assumption was wrong; the decision it produced was right.**
+   Measured, not estimated: the RRWP column is n²×16 float32 = 41 GB, taking a
+   built WebQSP config from 3.4 GB to **42 GB** (13×). The multiplier is dtype
+   and depth, not graph size — 16 float32 per node pair where SPD stores one
+   int16 over the identical n² footprint. Prep is cheap in time (~13 min) but
+   training runs 30–60% slower. So: 13× the disk and a wall-clock tax for no
+   accuracy gain.
+3. **The encoding subset was not hiding anything.** The "these numbers
+   underperform because the encoding was crippled" reading is closed off with
+   data. Both configurations sit above retrieval-matched SR-GNN-RAG (69.8 F1)
+   and below the flat control (74.9); RRWP does not touch that gap.
+
+Ops note: training needs **≥192 G** (seed 2 peaked at MaxRSS 156 G; 128 G would
+have been OOM-killed), and the prep peaked at 132 G — the 64 G that older prep
+configs use is not enough. `TextGraphDataset.compute_rrwp` now sizes its Arrow
+`writer_batch_size` from the largest graph: at n=512 × 16 steps a row is 4.2 M
+floats, so the default 1000-row writer batch would have overflowed Arrow's
+2³¹-element array cap.
 
 ### Data-format v2 sweeps (historical)
 
