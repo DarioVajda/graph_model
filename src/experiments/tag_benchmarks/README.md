@@ -131,6 +131,12 @@ error. Pass `--samples-per-node` explicitly for `data_prep`; for `train` it may 
 omitted, in which case whatever the cache holds is adopted and recorded in the run's
 JSONL line.
 
-Three legacy directories are unreachable by the naming scheme and are effectively
-orphaned: `ogbn-arxiv_hops2_neighbors30` and `pubmed_hops2_neighbors30` (built before
-the mapping suffix existed) and `cora_hops2_neighbors60_target_abstract_SMALL`.
+Two legacy directories are unreachable by the naming scheme and are effectively
+orphaned: `ogbn-arxiv_hops2_neighbors30` (built before the mapping suffix existed) and
+`cora_hops2_neighbors60_target_abstract_SMALL`.
+
+The former `pubmed_hops2_neighbors30` was a third such orphan, but its contents were
+confirmed to be the `target_abstract` mapping (target node carries title + abstract,
+every neighbour title-only) at `samples_per_node=4`, so it was renamed to the canonical
+`pubmed_hops2_neighbors30_target_abstract` and is now reached normally. `ogbn-arxiv_hops2_neighbors30`
+is presumably recoverable the same way if its mapping is ever confirmed.
