@@ -546,12 +546,24 @@ class TextGraphDataset(Dataset):
             
             return {"rrwp": rrwp_batch}
 
+        # Arrow caps ONE written array at 2^31-1 elements, and the writer batch
+        # defaults to 1000 rows. RRWP is n^2 * steps floats per row, so a KGQA-sized
+        # graph (n=512, steps=16 -> 4.2M elems/row) overflows that default by ~2x.
+        # Size the writer batch off the LARGEST graph so the cap cannot be reached;
+        # this only changes how the column is CHUNKED on disk, never its values, and
+        # small-graph datasets (n=50, steps=16 -> 40k elems/row) still resolve to the
+        # 1000-row default, leaving existing callers byte-identical.
+        max_n = max((g.number_of_nodes() for g in self.graphs), default=1)
+        per_row = max(1, max_n * max_n * max_rrwp_steps)
+        writer_batch_size = max(1, min(1000, (2**31 - 1) // per_row))
+
         # 3. Stream data using larger batches to saturate the GPU
         self._hf_dataset = self._hf_dataset.map(
             _compute_batch_vectorized,
             with_indices=True,
             batched=True,
             batch_size=16, # Increased for better GPU utilization
+            writer_batch_size=writer_batch_size,
             desc=f"Batched GPU RRWP (steps: {max_rrwp_steps})"
         )
 
