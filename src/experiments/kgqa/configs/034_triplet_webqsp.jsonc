@@ -1,8 +1,8 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // Triplet-construction arm (2026-07-19): the best WebQSP GTLM recipe so far
-  // — 029's question_node="isolated" arm (test F1 .7351 ± .0074, itself 021's
-  // recipe verbatim) — with ONLY graph_construction flipped to "triplet".
+  // Triplet-construction arm (2026-07-19): a CONTROL, not a GTLM result —
+  // 029's question_node="isolated" arm (test F1 .7351 ± .0074, itself 021's
+  // recipe verbatim) with ONLY graph_construction flipped to "triplet".
   //
   // The triplet graph carries EXACTLY the flat (text-only LLM) arm's content:
   // the same select_triples(512) triple set, each triple one node whose text
@@ -11,6 +11,17 @@
   // graph-aware attention biases (SPD + magnetic on the entity-sharing
   // topology) contribute over identical content. Levi/isolated reference:
   // .7351 ± .0074 (029).
+  //
+  // *** DO NOT COUNT THIS ARM TOWARD GTLM'S REPORTED PERFORMANCE. *** It scores
+  // highest on WebQSP (test F1 .7449 ± .0050, vs .7351 for levi/isolated), and
+  // an earlier revision of this header called it "the best WebQSP GTLM recipe
+  // so far" — that framing is WRONG and was retracted 2026-07-25. Making one
+  // node per raw triple hands the model the flat serialization's content in the
+  // flat serialization's own units, which sidesteps the graph-native encoding
+  // whose advantage the paper argues for; winning that way defeats the purpose
+  // of the architecture. The number is real, it just isn't evidence for GTLM.
+  // Report the Levi arms (029 / 039) as GTLM's performance; this one stays a
+  // content-fair diagnostic.
   //
   // 3 seeds, B300 GPUs. Requires 033_triplet_data_prep.jsonc's cache.
   //
