@@ -1,0 +1,7 @@
+processed_datasets/
+results/
+logs/
+# The cached wikitext filler token stream (~80 MB of int32 for 20M tokens).
+# Rebuilt deterministically by `--mode data_prep`; the cache key pins the
+# tokenizer and the token count, so it never needs to be shared.
+raw_data/
