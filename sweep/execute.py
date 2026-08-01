@@ -63,6 +63,20 @@ _SBATCH_DEFAULTS = {
     "mem": "64G",
     "time": "24:00:00",
     "mounts": "/shared:/shared",
+    # GPUs per config, and therefore DDP ranks per config. 1 (the default) keeps
+    # the plain `python -m ...` invocation; >1 requests that many GPUs in the gres
+    # and launches under `torchrun --nproc_per_node`, which is what makes the
+    # experiment's Trainer go distributed. The experiment must have a
+    # distribution-aware train sampler for this to mean anything — a custom
+    # sampler returned unconditionally from `_get_train_sampler` gives every rank
+    # the SAME indices, i.e. duplicate gradients and no speedup.
+    "gpus_per_config": 1,
+    # Path (relative to the project root, or absolute) of an inductor compile cache to
+    # SHARE across this sweep's runs instead of the per-job default. Used only if it
+    # already exists, so a fresh checkout falls back to per-job compilation rather than
+    # failing — see slurm_launch.sh. Worth setting when every run compiles identical
+    # shapes and the compile is long; pointless otherwise.
+    "inductor_cache": None,
 }
 
 
@@ -198,17 +212,25 @@ def _dispatch_local(experiment_module, runs, paths, python_exe):
 
 
 # ── sbatch ───────────────────────────────────────────────────────────────────
-def _write_job_script(jobs_dir, label, argv_lines):
+def _write_job_script(jobs_dir, label, argv_lines, gpus_per_config=1):
     """Write a job script that runs each invocation with the venv `python`.
 
     The launcher puts the project .venv first on PATH, so a bare `python` here is
     the venv interpreter (avoids the `source activate` + `set -u` pitfall).
+
+    At ``gpus_per_config > 1`` the invocation goes through ``torchrun`` instead, so
+    the experiment's HF ``Trainer`` initialises a process group and runs DDP.
+    ``--standalone`` keeps rendezvous on the node (every run is single-node here);
+    a multi-node variant would need ``--nnodes`` and a rendezvous endpoint.
     """
     path = os.path.join(jobs_dir, f"{label}.sh")
+    n = int(gpus_per_config)
+    launcher = ("python" if n <= 1
+                else f"torchrun --standalone --nproc_per_node {n}")
     with open(path, "w") as f:
         f.write("#!/usr/bin/env bash\nset -uo pipefail\n")
         for argv in argv_lines:
-            f.write("python " + " ".join(shlex.quote(a) for a in argv) + "\n")
+            f.write(launcher + " " + " ".join(shlex.quote(a) for a in argv) + "\n")
     return path
 
 
@@ -243,14 +265,24 @@ def _srun_wrap(label, job_script, sb):
     sbatch allocation; the container gives the py3.10 base the .venv needs. HOME is
     forwarded so HF/wandb creds + the model cache resolve inside it.
     """
-    home = os.environ.get("HOME", "")
     inner = ["bash", LAUNCHER, label, job_script]
     srun = ["srun"]
     if sb.get("container"):
         srun += [f"--container-image={sb['container']}",
                  f"--container-mounts={sb.get('mounts', _SBATCH_DEFAULTS['mounts'])}"]
-    srun += ["env", f"HOME={home}", "PYTHONUNBUFFERED=1", *_launch_env(), *inner]
+    srun += [*_job_env(sb), *inner]
     return " ".join(shlex.quote(a) for a in srun)
+
+
+def _job_env(sb):
+    """The ``env ...`` prefix both wrap builders share."""
+    env = ["env", f"HOME={os.environ.get('HOME', '')}", "PYTHONUNBUFFERED=1", *_launch_env()]
+    cache = sb.get("inductor_cache")
+    if cache:
+        # Absolute at SUBMIT time: the launcher cds to the project root, but resolving
+        # here keeps the recorded sbatch command self-describing.
+        env.append(f"SWEEP_INDUCTOR_CACHE={os.path.abspath(cache)}")
+    return env
 
 
 def _array_wrap(labels, scripts, sb):
@@ -260,12 +292,11 @@ def _array_wrap(labels, scripts, sb):
     two indexed args are emitted raw (not shlex-quoted) so the shell expands them;
     everything else is quoted normally.
     """
-    home = os.environ.get("HOME", "")
     srun = ["srun"]
     if sb.get("container"):
         srun += [f"--container-image={sb['container']}",
                  f"--container-mounts={sb.get('mounts', _SBATCH_DEFAULTS['mounts'])}"]
-    srun += ["env", f"HOME={home}", "PYTHONUNBUFFERED=1", *_launch_env(), "bash", LAUNCHER]
+    srun += [*_job_env(sb), "bash", LAUNCHER]
     srun_str = " ".join(shlex.quote(a) for a in srun)
     labels_arr = " ".join(shlex.quote(x) for x in labels)
     scripts_arr = " ".join(shlex.quote(x) for x in scripts)
@@ -275,26 +306,54 @@ def _array_wrap(labels, scripts, sb):
     return "exec bash -c " + shlex.quote(body)
 
 
-def _gpu_args(gpus):
+def _parse_gpu_entry(entry):
+    """``"H100:2"`` -> ``("H100", 2)``; ``"H100"`` -> ``("H100", None)``; ``"2"`` -> ``(None, 2)``."""
+    text = str(entry).strip()
+    head, sep, tail = text.partition(":")
+    if sep:
+        return head, int(tail)
+    return (None, int(head)) if head.isdigit() else (head, None)
+
+
+def _gpus_per_config(sb):
+    """DDP ranks per config; also the GPU count in the gres request.
+
+    Single source of truth for "how many GPUs does one run get". It must agree
+    with any count embedded in ``gpus`` ("H100:2"), because two places naming the
+    same number silently diverge — a gres of 2 with ``--nproc_per_node 1`` wastes
+    a card, and the reverse hangs in NCCL waiting on a rank that has no GPU.
+    """
+    n = int(sb.get("gpus_per_config", _SBATCH_DEFAULTS["gpus_per_config"]))
+    if n < 1:
+        raise expand_mod.SweepError(
+            f"execution.sbatch.gpus_per_config must be >= 1, got {n!r}.")
+    gpus = sb.get("gpus")
+    entries = gpus if isinstance(gpus, (list, tuple)) else [gpus]
+    embedded = {c for _t, c in map(_parse_gpu_entry, entries) if c is not None}
+    if embedded - {n}:
+        # Only complain when the config actually said something different; the
+        # common "H100:1" + default 1 case passes through silently.
+        raise expand_mod.SweepError(
+            f"execution.sbatch.gpus {gpus!r} embeds GPU count(s) {sorted(embedded)} but "
+            f"gpus_per_config is {n}. Set the count in ONE place — prefer "
+            f"gpus_per_config, leaving gpus as the type list.")
+    return n
+
+
+def _gpu_args(gpus, per_config=1):
     """Render ``gpus`` to sbatch args.
 
     A string (``"B200:1"``) pins the type inside the gres request. A list
     (``["B200:1", "B300:1"]``) means "any of these types": Slurm gres can't
     express an OR, so it becomes a generic count plus a feature constraint —
     ``--gres gpu:1 --constraint GPU_BRD:B200|GPU_BRD:B300`` (each node carries a
-    ``GPU_BRD:<type>`` feature). The per-type counts must agree.
+    ``GPU_BRD:<type>`` feature). ``per_config`` always supplies the count.
     """
     if not isinstance(gpus, (list, tuple)):
-        return ["--gres", f"gpu:{gpus}"]
-    types, counts = [], set()
-    for entry in gpus:
-        gpu_type, _, count = str(entry).partition(":")
-        types.append(gpu_type)
-        counts.add(count or "1")
-    if len(counts) != 1:
-        raise expand_mod.SweepError(
-            f"execution.sbatch.gpus list must use one count across all types, got {gpus!r}.")
-    return ["--gres", f"gpu:{counts.pop()}",
+        gpu_type, _count = _parse_gpu_entry(gpus)
+        return ["--gres", f"gpu:{gpu_type}:{per_config}" if gpu_type else f"gpu:{per_config}"]
+    types = [t for t, _c in map(_parse_gpu_entry, gpus) if t]
+    return ["--gres", f"gpu:{per_config}",
             "--constraint", "|".join(f"GPU_BRD:{t}" for t in types)]
 
 
@@ -304,7 +363,7 @@ def _sbatch_argv(jobname, logpath, wrap, sb, array=None):
         raise expand_mod.SweepError("execution.sbatch.partition is required for sbatch mode.")
     if not sb.get("gpus"):
         raise expand_mod.SweepError("execution.sbatch.gpus is required for sbatch mode (e.g. 'B200:1').")
-    argv = ["sbatch", "-p", str(sb["partition"]), *_gpu_args(sb["gpus"]),
+    argv = ["sbatch", "-p", str(sb["partition"]), *_gpu_args(sb["gpus"], _gpus_per_config(sb)),
             "-c", str(sb.get("cpus", _SBATCH_DEFAULTS["cpus"])),
             "--mem", str(sb.get("mem", _SBATCH_DEFAULTS["mem"])),
             "-t", str(sb.get("time", _SBATCH_DEFAULTS["time"])),
@@ -322,6 +381,7 @@ def _sbatch_argv(jobname, logpath, wrap, sb, array=None):
 def _dispatch_sbatch(experiment_module, runs, paths, sb):
     """Submit the sweep as Slurm jobs (one sequential job, or one job per config)."""
     granularity = sb.get("granularity", _SBATCH_DEFAULTS["granularity"])
+    ngpu = _gpus_per_config(sb)
     sweep_name = paths["sweep_name"]
     # Slurm job names lead with the experiment so squeue groups them by experiment.
     job_prefix = _experiment_tag(experiment_module)
@@ -334,7 +394,7 @@ def _dispatch_sbatch(experiment_module, runs, paths, sb):
     jobs = []   # (jobname, sbatch_argv)
     if granularity == "single":
         lines = [argv_for(run, name) for run, name in zip(runs, paths["names"])]
-        job_script = _write_job_script(jobs_dir, sweep_name, lines)
+        job_script = _write_job_script(jobs_dir, sweep_name, lines, ngpu)
         wrap = _srun_wrap(sweep_name, job_script, sb)
         logpath = os.path.join(paths["logs_dir"], f"{sweep_name}.slurm.out")
         jobs.append((sweep_name, _sbatch_argv(f"{job_prefix}_{sweep_name}", logpath, wrap, sb)))
@@ -344,7 +404,7 @@ def _dispatch_sbatch(experiment_module, runs, paths, sb):
         entries = []   # (name, label, job_script)
         for run, name in zip(runs, paths["names"]):
             label = f"{sweep_name}_{name}"
-            job_script = _write_job_script(jobs_dir, label, [argv_for(run, name)])
+            job_script = _write_job_script(jobs_dir, label, [argv_for(run, name)], ngpu)
             entries.append((name, label, job_script))
 
         max_concurrent = sb.get("max_concurrent")

@@ -47,8 +47,29 @@ else
     echo "[launch] no login script at $LOGIN; skipping" >&2
 fi
 
-# Per-job compile cache so parallel jobs don't thrash a shared inductor cache.
-export TORCHINDUCTOR_CACHE_DIR="$REPO/.inductor_cache/$LABEL"
+# Inductor compile cache. Default is per-job so parallel jobs don't thrash a shared
+# one. But when every run of a sweep compiles the SAME shapes, that default makes each
+# job re-pay a cost that is pure duplication: measured on the context sweep, 13 distinct
+# cell shapes take ~86 min of Triton codegen + PTX compilation before step 1, and only
+# ~2 min of that is the GPU autotune benchmarking -- the rest is CPU-bound work whose
+# result is byte-identical across runs.
+#
+# So SWEEP_INDUCTOR_CACHE (set from execution.sbatch.inductor_cache) names a cache to
+# SHARE. It is used only if the directory already exists, which makes the sharing
+# opt-in AND self-healing: a fresh clone, or a config whose cache was never populated,
+# silently falls back to the per-job path and just compiles. Reproducibility never
+# depends on a cache being present.
+if [ -n "${SWEEP_INDUCTOR_CACHE:-}" ] && [ -d "${SWEEP_INDUCTOR_CACHE}" ]; then
+    export TORCHINDUCTOR_CACHE_DIR="${SWEEP_INDUCTOR_CACHE}"
+    echo "[launch] inductor cache: SHARED $TORCHINDUCTOR_CACHE_DIR"
+else
+    export TORCHINDUCTOR_CACHE_DIR="$REPO/.inductor_cache/$LABEL"
+    if [ -n "${SWEEP_INDUCTOR_CACHE:-}" ]; then
+        echo "[launch] inductor cache: ${SWEEP_INDUCTOR_CACHE} absent -> per-job $TORCHINDUCTOR_CACHE_DIR" >&2
+    else
+        echo "[launch] inductor cache: per-job $TORCHINDUCTOR_CACHE_DIR"
+    fi
+fi
 mkdir -p "$TORCHINDUCTOR_CACHE_DIR"
 
 echo "[launch] $(date '+%F %T') label=$LABEL host=$(hostname) script=$JOB_SCRIPT"
