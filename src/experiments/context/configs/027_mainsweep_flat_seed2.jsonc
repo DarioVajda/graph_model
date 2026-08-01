@@ -1,0 +1,123 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN SWEEP — the flat-LLM control. Matched to 021 in everything but the arm.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/022_mainsweep_flat.jsonc
+  //
+  // Same data (no rebuild — `flat_train` reads the same `.gtds` and serializes each
+  // graph to one ordinary token sequence at collate time), same 16,000 graphs, same
+  // 2 epochs, same 4,000 optimizer steps, same effective batch of 8, same LoRA rank
+  // and dropout, same lr, same supervised span of code_len + 1 tokens.
+  //
+  // WHAT DIFFERS, and it is architecture rather than information (README §A.11: the
+  // edge set and the verbalized-reference set are bijective at every k, so the graph
+  // channel is a re-encoding of what this arm already reads in text):
+  //   * strictly causal sdpa here vs bidirectional prefix attention in the graph arm
+  //   * no per-node RoPE reset — flat positions run 0..L for real
+  //   * "## Article {i}" headers cost tokens but give it segmentation
+  //   * 45.09M trainable params vs 45.95M (1.9%)
+  // State these in the paper rather than claiming a like-for-like architecture.
+  //
+  // FIXED HERE vs the completed runs: `metric_for_best_model` was `eval_loss` in the
+  // flat arm and `eval_em_accuracy` in the graph arm, so the two selected checkpoints
+  // on different quantities. Both now select on eval_em_accuracy. Completed runs are
+  // deliberately NOT retro-fitted.
+  //
+  // GPU. One A100_80GB, not an H100. The flat arm costs ~0.6x the graph arm on the
+  // same card (measured: decoy 1:12 vs 1:58; fan1 on H100 34:41 vs 1:00:48), and an
+  // H100 is ~1.93x an A100_80GB on this workload — so flat-on-A100_80GB lands within
+  // ~15% of graph-on-2xH100 and the scarce card goes to the long pole. 80 GB, not the
+  // 40 GB part: flat-arm activations at 16k tokens are unmeasured.
+  //
+  // No DDP here (gpus_per_config defaults to 1). accumulation_steps is therefore 8,
+  // not 021's 4, which is what makes the two arms' effective batch and step count
+  // identical: 1 x 8 x 1 rank == 1 x 4 x 2 ranks.
+  //
+  // ── SEED 2, submitted separately (2026-07-30 22:40) ─────────────────────────
+  // A third seed added after seeds 0/1 were already running. It is a separate file
+  // rather than an edit to 022_mainsweep_flat because re-running that config would resubmit the
+  // two in-flight jobs as well.
+  //
+  // HARDWARE IS DELIBERATELY IDENTICAL to seeds 0/1 (1x A100_80GB), not the B200s that
+  // happened to be free. Seed is supposed to be the ONLY thing that varies across the
+  // three runs; putting one on a different architecture would confound seed with
+  // hardware, and bf16 numerics differ enough between Blackwell and Hopper/Ampere that
+  // a divergent seed 2 could not be attributed. Every other knob is byte-identical to
+  // 022_mainsweep_flat -- verified programmatically at submit time, not by eye.
+  //
+  // ANALYSIS: this writes its own results dir, so the run records live in
+  // results/mainsweep_flat_s2/runs.jsonl and must be merged with results/mainsweep_flat/runs.jsonl.
+  // Every record carries `seed` and `data_config_key`, so the merge is safe.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "mainsweep_flat_s2",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      // STRING, not a list. The list form means "any of these types" and renders a
+      // `--constraint GPU_BRD:<t>` feature match -- which only works for BRAND names
+      // (B200, B300, H100, A100, L4). "A100_80GB" is a SKU, not a brand: the node
+      // carries GPU_BRD:A100 plus GPU_MEM:80GB, so GPU_BRD:A100_80GB matched nothing
+      // and sbatch rejected it with "Invalid feature specification". The string form
+      // pins the gres type directly (`--gres gpu:A100_80GB:1`), which is how the 80 GB
+      // part is selectable at all -- GPU_BRD:A100 alone would also match the 40 GB
+      // nodes, where flat-arm activations at 16k tokens may not fit.
+      "gpus": "A100_80GB",
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "72:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "flat_train",
+  "seed": 2,
+
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+
+  // Must match 021 and sbatch_mainsweep_data.sh exactly — these form the cache key,
+  // and the two arms MUST resolve to the same built dataset or they are not a
+  // controlled comparison.
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+
+  // The flat arm builds a stock AutoModelForCausalLM: no graph bias modules are
+  // constructed, so these only affect which dataset key is resolved.
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  // 16000 / (1 x 8 x 1 rank) = 2000 steps/epoch => 4000 steps, matching 021.
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 500,
+
+  "wandb_project": "GraphLLM"
+}

@@ -1,0 +1,58 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // End-to-end smoke: a 2x2 grid, a handful of graphs, a couple of optimizer
+  // steps. Proves the wiring (build -> train -> window -> checkpoint) without
+  // proving anything scientific.
+  //
+  //   python3 -m src.experiments.context --mode data_prep --node-counts 8,16 \
+  //       --token-counts 32,64 --n-train 32 --n-dev 8 --n-test 8 --magnetic-m 32
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/002_smoke.jsonc
+  //
+  // `compile_mode: "default"` on purpose: ~16 s of inductor compile per shape
+  // instead of ~320 s. Never use it for a real run — it costs 1.2-1.5x on the
+  // step, and it cannot lower the sub-128 blocks a K-hop mask would want.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "002_smoke",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "01:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // NB: the grid axes are STRINGS, not JSON lists. The sweep runner reads a
+  // list as a sweep AXIS, so "node_counts": [8, 16] would expand into two runs
+  // with one-value grids instead of one run with a two-value grid.
+  "node_counts": "8,16",
+  "token_counts": "32,64",
+  "n_train": 32,
+  "n_dev": 8,
+  "n_test": 8,
+  "magnetic_m": 32,
+  "max_train_len": 16384,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "max_steps": 4,
+  "num_epochs": 1,
+  "eval_steps": 2,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "num_workers": 0,
+  "graph_attn_impl": "flex",
+  "compile_mode": "default",
+  "dtype": "bf16",
+  "seed": 0,
+  "wandb_project": null
+}

@@ -1,0 +1,97 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §3.2 — LEARNABILITY CONTROL, graph arm.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/011_small_graph.jsonc
+  //
+  // Requires sbatch_chain_small.sh's caches.
+  //
+  // WHY THIS EXISTS. Phase A (009/010) put the two arms on byte-identical data
+  // and they diverged completely at the k=1 control:
+  //
+  //     k=1, same .../Llama-3.2-1B_h1_n64_t128_cap16384_tr2000_.../train.gtds
+  //       flat  arm: eval_em 0.975 at epoch 0.5 (125 steps)
+  //       graph arm: eval_em 0.025 at epoch 1.5 (375 steps), and FALLING
+  //                  (0.000 -> 0.035 -> 0.025)
+  //
+  // Flat proves the task is learnable and that 1000 graph-visits suffice. So the
+  // graph arm's floor is NOT a budget problem — unless the graph arm is simply
+  // far less sample-efficient. This control removes that last excuse by making
+  // the setting as generous as it can be:
+  //
+  //     N = 16 and 32 (14/30 distractors, not 62), T = 64 (L ~1.1k/2.1k),
+  //     n_train 8000 x 2 epochs = 16,000 visits = 16x what flat needed.
+  //
+  // If k=1 still floors here, the cause is architectural, and the standing
+  // hypothesis to test next is the PER-NODE RoPE RESET: flat gives every token a
+  // unique absolute position, so an induction head can do "find the earlier
+  // NODE-5678 and copy what follows". The graph arm restarts every node at
+  // position 0, so nodes are positionally identical and the bias channel is the
+  // only thing that can bind "the node I just read a pointer from" to "the node
+  // that defines that id". One literal match (README §3.1) never needed that
+  // binding; a two-step chase does.
+  //
+  // Read k=1 FIRST, exactly as in Phase A.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "small_graph",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      // A100 included deliberately: measured on this workload the flat arm ran
+      // 7.65 s/it on an A100-40GB while the graph arm ran 11.38 s/it on an H100.
+      // Queue time dominates card speed here.
+      "gpus": ["B200:1", "B300:1", "H100:1", "A100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": 0,
+
+  "hops": [1, 2, 3, 4],
+
+  // Must match sbatch_chain_small.sh exactly — these form the cache key.
+  "node_counts": "16,32",
+  "token_counts": "64",
+  "max_train_len": 16384,
+  "n_train": 8000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  // 8000 / 8 = 1000 steps/epoch, so 2 epochs = 2000 steps. eval_steps 250 keeps
+  // the eval overhead to 8 passes; at 125 it would cost ~25 min of pure eval.
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 250,
+
+  "wandb_project": "GraphLLM"
+}

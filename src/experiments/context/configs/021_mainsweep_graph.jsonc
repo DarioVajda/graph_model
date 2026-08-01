@@ -1,0 +1,157 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN SWEEP — the GTLM arm. See README §3.3 and §A.10 for the full design.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/021_mainsweep_graph.jsonc
+  //
+  // PREREQUISITES, in order — do not skip the gate:
+  //   1. ./src/experiments/context/sbatch_mainsweep_data.sh      (sharded build + merge)
+  //   2. ./.venv/bin/python -m src.experiments.context.analysis.audit_cells
+  //      must print GATE PASSED. It is the check the last experiment's mislabeled
+  //      statistic slipped past, and it now fails on an unbuilt cell rather than
+  //      reporting a clean bill of health for data it never opened.
+  //   3. A calibration run (--max-steps 100) to replace the estimated cost model (README §A.12) —
+  //      the cost model spans 3.3-7.0 s/graph and only a measurement closes it.
+  //
+  // WHAT IS NEW HERE. Every previous run pinned one k. This trains ONE model on a
+  // MIXTURE of k in {1,2,3,4} crossed with the whole (N, T) size matrix, then scores
+  // every (N, T, k) condition separately (023). The QUESTION node states the drawn k
+  // verbatim —
+  //
+  //     "Starting at NODE-02837, follow 3 'Continue at' references, ignoring any
+  //      decoy references. What is the access code there?"
+  //
+  // — so the model must READ the task off the input rather than assume a constant.
+  // That is a capability claim per-k specialists cannot make, and 13 cells x 4 k =
+  // 52 specialists per arm is not a maintainable experiment anyway.
+  //
+  // AXES and the reason for each exclusion (README §A.10):
+  //   N = 16,32,64,128    8 excluded: a k=4 chain occupies 5 of its 6 content nodes,
+  //                       chance is 17%, no dynamic range. NOT a leak — the original
+  //                       "N=16 leaks at k=4" claim was a mislabeled statistic and is
+  //                       withdrawn; N=16 is in.
+  //   T = 64,128,256,512  32 excluded: the fan_out=2 needle is 29 tokens, so a
+  //                       32-token node leaves 3 tokens of filler and pins every
+  //                       needle to offset 0. `validate()` now rejects it.
+  //   k = 1,2,3,4         0 excluded: hops=0 selects a DIFFERENT builder (a star with
+  //                       no content-content edges), so it is not this family. It is
+  //                       already done — 003_train_16k IS the k=0 experiment.
+  //   fan_out = 2         the SPD shortcut is absent. fan_out=1 (019/020) is the
+  //                       ablation, not the headline.
+  //
+  // 13 of 16 cells fit the 16,384 cap and form the training distribution; the other
+  // 3 are scored as length extrapolation. In-cap packed length spans 960..15,936
+  // tokens (16.6x).
+  //
+  // BUDGET. 16,000 distinct graphs x 2 epochs = 32,000 presentations. Scaled from
+  // the one calibrated point (8,000 x 2 solved k<=3 at a single small cell, breaking
+  // out at step ~1,500 of 2,000): split four ways across k, that budget gives each k
+  // about a quarter of what k=3 demonstrably needed, so the data scales with k rather
+  // than with cells — cells share everything but length, k genuinely changes the
+  // computation. Prefer distinct graphs over epochs: chain_long ran 2,000 graphs x 5
+  // epochs and was a hard null at k=2 while 8,000 x 2 hit ceiling.
+  //
+  // DDP. gpus_per_config 2 => `torchrun --nproc_per_node 2`. accumulation_steps is
+  // PER DEVICE, so 4 x 2 ranks = the same effective batch of 8 the completed
+  // single-GPU runs used, and the same 4,000 optimizer steps as the flat arm in 022.
+  // Do not raise it to 8 "to match" — that would double the effective batch.
+  //
+  // Key results by the log's `label=` line, NEVER by SLURM_ARRAY_TASK_ID.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "mainsweep_graph",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      // H100 only, and 2 of them per run. B200/B300 are all busy; the graph arm is
+      // the long pole, so it gets the scarce card while the flat arm takes A100_80GB
+      // (022) — measured, the two then finish within ~15% of each other.
+      "gpus": ["H100"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      // Estimate spans 30-62 h for 32,000 presentations at 3.3-7.0 s/graph, halved
+      // by the second GPU. The partition limit is 7 days, so this is generous on
+      // purpose rather than tuned to a number we have not measured yet.
+      "time": "72:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": [0, 1],
+
+  // THE new axis: k is a MIXTURE, drawn per graph, not a sweep axis. Writing it as
+  // a comma-joined string keeps it a scalar to sweep.expand — a JSON list here
+  // would expand into four separate runs, each on a one-k dataset, which is the
+  // per-k experiment this config exists to replace.
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+
+  // Must match sbatch_mainsweep_data.sh exactly — these form the cache key.
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+
+  // MEASURED, not inherited. RunConfig defaults to "max-autotune-no-cudagraphs", which
+  // flex_kernel documents as 1.47x fwd / 1.18x bwd and 002_smoke's header calls
+  // mandatory for a real run ("Never use `default` ... it costs 1.2-1.5x on the step").
+  // Both claims were A/B tested on THIS workload -- 024 (max-autotune) vs 025 (default),
+  // same card, same data, same 100 steps:
+  //
+  //     max-autotune  21.15 s/it (n=13 post-warmup, sd 6.21)
+  //     default       20.98 s/it (n=40 post-warmup, sd 8.19)
+  //     ratio         0.99x  -- no measurable difference
+  //
+  // Per-step sd is 6-8 s because each optimizer step draws 8 cells from a 16x length
+  // range, so anything under ~2 s/it is noise here. What IS large is the compile: at
+  // max-autotune the backward autotune scales as ~len^1.5, from 26 s at len 1,920 to
+  // 1,753 s at len 16,256, totalling ~2 h before step 1. `default` pays ~4 min.
+  //
+  // So `default` is chosen for RISK, not speed: with no step-time difference to buy,
+  // a cache miss costs 4 minutes instead of 2 hours -- and there are several ways to
+  // miss (different GPU arch, DDP interaction, stale directory). The shared-cache
+  // machinery (execution.sbatch.inductor_cache) still exists and still works; this run
+  // simply no longer depends on it.
+  "compile_mode": "default",
+
+  // 16000 / (1 x 4 x 2 ranks) = 2000 steps/epoch, so 2 epochs = 4000 steps.
+  // eval_steps 500 keeps the eval overhead to 8 passes over the 200-graph dev
+  // mixture; the stagnate-then-jump pattern needs a few evals of resolution, and
+  // every floored run so far has broken out within 5.
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 500,
+
+  "wandb_project": "GraphLLM"
+}

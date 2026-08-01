@@ -1,0 +1,108 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §3.2 — does the control's graph-arm WIN survive the hard cell?
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/015_hard8k_graph.jsonc
+  //
+  // Requires src/experiments/context/sbatch_chain_hard8k.sh to have built the
+  // `n64_t128 ... tr8000` caches first (CPU-only, ~40 min per hop count).
+  //
+  // The state of the 2x2 this closes:
+  //
+  //                       n_train=2000, 500 steps    n_train=8000, 2000 steps
+  //   N=16/32,T=64 (easy)          -                 011/012 -> GRAPH WINS
+  //   N=64,  T=128 (hard)   009/010 both floor       THIS (015/016)
+  //
+  // On the easy cell the graph arm reached EM 0.995 at k=2 by step ~500 and 1.000
+  // at k=4 by step ~1000, while flat needed step ~1500 for k=2 and never left the
+  // floor at k=4. That is the first real GTLM win in this experiment, and the open
+  // question is whether it is a property of the structure or of the small cell.
+  //
+  // Why not just read 013/014: those hold n_train=2000 and raise epochs to 5, so
+  // the model re-visits 2000 unique graphs five times. That tests budget, but at
+  // 5 epochs it also starts rewarding memorisation, and it still differs from the
+  // control in TWO ways (cell AND data size). This config matches the control's
+  // DATA exactly and changes only the cell — the genuine one-variable comparison.
+  //
+  // Budget: 8000/8 = 1000 steps/epoch. Measured 11.4 s/it for the graph arm at
+  // this cell, so the 6 h wall admits ~1890 steps. max_steps=1500 (~4.75 h) leaves
+  // headroom for evals and is already 2x where the control's graph arm had solved
+  // k=4. num_epochs=2 is kept because warmup is derived from steps_per_epoch *
+  // num_epochs (train.py:148) -- max_steps is what actually stops the run.
+  //
+  // The flat arm (016) gets max_steps=2000 rather than 1500: it is cheaper per step
+  // (8.05 s/it) and it needed ~1500 steps on the EASIER cell, so step-matching the
+  // arms here would hand the graph arm the win by starving flat. Compare the arms
+  // at matched steps AND report the wall-clock, which favours flat.
+  //
+  // Only k=1,2,4. k=1 is the sanity control, k=2 is where Phase A's flat arm
+  // collapsed, k=4 is where the control's graph advantage was largest. k=3 is
+  // omitted deliberately -- on the easy cell it was the slowest to break out for
+  // both arms, so it is the worst value to spend 4.75 h of H100 on first.
+  //
+  // Key results by the log's `label=` line, NEVER by SLURM_ARRAY_TASK_ID: the sweep
+  // does not order array tasks by the axis value (Phase A's graph index 1 was k=6).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "hard8k_graph",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1", "A100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": 0,
+
+  "hops": [1, 2, 4],
+
+  // Must match sbatch_chain_hard8k.sh exactly — these form the cache key.
+  "node_counts": "64",
+  "token_counts": "128",
+  "max_train_len": 16384,
+  "n_train": 8000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "graph_attn_impl": "flex",
+  "compile_mode": "default",
+  "k_hop": 0,
+  "bias_lr": 5e-3,
+  "bias_weight_decay": 0.0,
+
+  "num_epochs": 2,
+  "max_steps": 1500,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 250,
+
+  "wandb_project": "GraphLLM"
+}

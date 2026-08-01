@@ -1,0 +1,95 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §3.2 — does Phase A's floor survive a bigger budget?
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/013_chain_long_graph.jsonc
+  //
+  // The learnability control (011/012) reached EM 0.99 at k=1 in 250 steps and
+  // refuted the architectural reading of Phase A. But it moved TWO variables at
+  // once versus Phase A: the cell got easier (N 64->16/32, T 128->64, L 8k->~1-2k)
+  // AND the data got 4x bigger (2,000 -> 8,000 graphs). So "undertrained" and
+  // "harder cell" are still confounded.
+  //
+  // This holds the Phase A cell EXACTLY (N=64, T=128, n_train=2000, same cache key,
+  // no rebuild) and changes ONLY the budget: 5 epochs instead of 2, i.e. 10,000
+  // graph-visits instead of 4,000. If k=1 climbs off 0.04 here, the floor was the
+  // budget. If it does not, the difficulty of the cell is the operative variable.
+  //
+  // Only k=1 and k=2: k=1 is the control and k=2 is the first rung where Phase A's
+  // flat arm also collapsed (0.975 -> 0.015). Sweeping all six k at this cost buys
+  // nothing until one of them moves.
+  //
+  // Budget: 2000/8 = 250 steps/epoch x 5 = 1,250 steps. Measured 11.38 s/it on an
+  // H100 at this cell => ~3.95 h, inside the 6 h limit with headroom for 5 evals.
+  // Matching the control's 16,000 visits would need 8 epochs (~6.3 h) and does not
+  // fit — hence 5.
+  //
+  // Key results by the log's `label=` line, NEVER by SLURM_ARRAY_TASK_ID: the sweep
+  // does not order array tasks by the axis value (Phase A's graph index 1 was k=6).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "chain_long_graph",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1", "A100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": 0,
+
+  // The Phase A axis.
+  "hops": [1, 2],
+
+  // Must match 008_chain_data exactly — these form the cache key.
+  "node_counts": "64",
+  "token_counts": "128",
+  "max_train_len": 16384,
+  "n_train": 2000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "graph_attn_impl": "flex",
+  "compile_mode": "default",
+  "k_hop": 0,
+  "bias_lr": 5e-3,
+  "bias_weight_decay": 0.0,
+
+  // 2 epochs, not 1: the lookup task saturated by epoch 0.5, but the chain task
+  // is the harder one and under-training would read as "hard" when it is only
+  // "not yet learned". 2000 graphs / 8 accum = 250 steps/epoch.
+  "num_epochs": 5,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 250,
+
+  "wandb_project": "GraphLLM"
+}

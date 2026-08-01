@@ -1,0 +1,82 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §3.2 — the graph arm across the hop sweep.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/009_chain_graph.jsonc
+  //
+  // Requires 008_chain_data's caches (sbatch_chain_data.sh). One run per hop
+  // count, all six in parallel; a single cell (N=64, T=128, L=8,000) so the only
+  // thing varying is k.
+  //
+  // ONE SEED. Phase A is a scouting sweep to locate where hop count breaks the
+  // task; seeds are Phase B's job, once there is a band worth resolving.
+  //
+  // Read k=1 FIRST. It is the control: it should reproduce the README §3.1 ceiling. If it
+  // does not, the generator is wrong and no other k means anything.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "chain_graph",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": 0,
+
+  // The Phase A axis.
+  "hops": [1, 2, 3, 4, 6, 8],
+
+  // Must match 008_chain_data exactly — these form the cache key.
+  "node_counts": "64",
+  "token_counts": "128",
+  "max_train_len": 16384,
+  "n_train": 2000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "graph_attn_impl": "flex",
+  "compile_mode": "default",
+  "k_hop": 0,
+  "bias_lr": 5e-3,
+  "bias_weight_decay": 0.0,
+
+  // 2 epochs, not 1: the lookup task saturated by epoch 0.5, but the chain task
+  // is the harder one and under-training would read as "hard" when it is only
+  // "not yet learned". 2000 graphs / 8 accum = 250 steps/epoch.
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 125,
+
+  "wandb_project": "GraphLLM"
+}

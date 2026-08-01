@@ -1,0 +1,90 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 3: score trained checkpoints over all 25 cells (teacher-forced EM).
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/004_grid.jsonc
+  //   python3 -m src.experiments.context.analysis.plot \
+  //       src/experiments/context/results/grid/runs.jsonl
+  //
+  // FILL IN checkpoint_path BEFORE RUNNING. The train sweep records the exact
+  // best-checkpoint directory per seed in its runs.jsonl:
+  //
+  //   jq -r '.checkpoint_path' src/experiments/context/results/train_16k/runs.jsonl
+  //
+  // The values below are the shape those paths take (sweep_id + run name, then
+  // the best step) — the `checkpoint-NNN` component is chosen by early
+  // stopping, so it cannot be predicted here.
+  //
+  // Forward-only, so memory is modest even at the 64k cell; the cost is one
+  // flex compile per shape, and the grid has 25 of them (one per cell).
+  //
+  // Every job compiles from cold. TORCHINDUCTOR_CACHE_DIR is not set anywhere
+  // in this repo, so inductor caches into the CONTAINER's /tmp, which is
+  // job-private and discarded at exit — there is no reuse across jobs, across
+  // seeds, or from the train runs that just compiled 22 of these same shapes.
+  // (An earlier version of this comment claimed the on-disk cache made re-runs
+  // free; it does not, for that reason.)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "grid",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "grid",
+
+  "checkpoint_path": [
+    "./checkpoints/context/train_16k_0000_seed0/checkpoint-250",
+    "./checkpoints/context/train_16k_0001_seed1/checkpoint-250",
+    "./checkpoints/context/train_16k_0002_seed2/checkpoint-250"
+  ],
+
+  // ── must match the built data + the trained model ────────────────────────
+  // NB: the grid axes are STRINGS, not JSON lists. The sweep runner reads a
+  // list as a sweep AXIS, so "node_counts": [8, 16] would expand into two runs
+  // with one-value grids instead of one run with a two-value grid.
+  "node_counts": "8,16,32,64,128",
+  "token_counts": "32,64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 4000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+
+  // "default", NOT the RunConfig default of max-autotune-no-cudagraphs, for the
+  // same reason 003 sets it: T0 (calibration_b200) measured ~320 s of autotune
+  // per shape. Here that is 25 shapes = ~2.2 h of compile against ~30 min of
+  // actual forward work, paid independently by each of the 3 seed jobs since
+  // nothing is cached across them (see header). "default" compiles in ~60 s a
+  // shape, turning a ~2.7 h job into ~1 h.
+  // Safe here: k_hop=0 forces block_size 128, so the sub-128 tiles that would
+  // require an autotune mode never arise.
+  "compile_mode": "default"
+}

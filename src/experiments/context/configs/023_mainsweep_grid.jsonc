@@ -1,0 +1,91 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN SWEEP — grid evaluation of the trained GTLM checkpoints.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/023_mainsweep_grid.jsonc
+  //
+  // ***  DO NOT SUBMIT UNTIL 021 HAS FINISHED.  ***
+  // `checkpoint_path` below is a PLACEHOLDER. Fill it from the two run records:
+  //     grep -h checkpoint_path src/experiments/context/results/mainsweep_graph/runs.jsonl
+  // one entry per seed, in the same order as the "seed" axis. Submitting with the
+  // placeholder scores a directory that does not exist and fails in seconds — which
+  // is the intended failure, not a silent wrong result.
+  //
+  // The flat arm does NOT need a config here: `run_flat_train_mode` scores the full
+  // grid in its own job and appends to results/flat_trained_grid.jsonl. Only the
+  // graph arm's grid is a separate pass.
+  //
+  // WHAT THIS PRODUCES. One record per (N, T, k) — 16 cells x 4 k = 64 conditions,
+  // each with EM, a Wilson interval, and the distractor/malformed decomposition, at
+  // n_test = 200 (+-4.2pp at p=0.9). `hops` is written to every record, so a
+  // single-k grid and this mixture grid are readable by the same analysis code.
+  //
+  // Three of the 16 cells — (64,512), (128,256), (128,512) — are OVER the 16,384
+  // training cap and are flagged `in_train_distribution: false`. They are the length
+  // extrapolation rows, up to 64,576 tokens, and they are the slow part of this job.
+  //
+  // Report `code_acc` from here, not the `eval_em_accuracy` logged during training:
+  // only the latter exists mid-run, and they are not the same metric.
+  //
+  // PAIRING. Test splits at different k share blueprint ids and the chain is
+  // `slot_order[:k+1]`, a prefix — so the same blueprint yields NESTED chains across
+  // k (same start node, deeper answer). The k-curve is paired at no cost; keep it
+  // that way if these splits are ever rebuilt.
+  //
+  // 1 GPU: this is inference only, no DDP. gpus_per_config defaults to 1.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "mainsweep_grid",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100", "A100_80GB"],
+      "cpus": 8,
+      // The (128,512) cell is 64,576 tokens at batch 1. 128G held for the completed
+      // grids at this size; the k axis multiplies the COUNT of passes, not the peak.
+      "mem": "128G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "grid",
+
+  // PLACEHOLDER — replace both entries with the real paths before submitting.
+  // One per seed, matching 021's "seed": [0, 1].
+  "checkpoint_path": [
+    "./checkpoints/context/mainsweep_graph_0000_seed0/FILL_ME",
+    "./checkpoints/context/mainsweep_graph_0001_seed1/FILL_ME"
+  ],
+
+  // Must match 021 exactly — these resolve which built dataset is scored.
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex"
+}

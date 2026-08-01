@@ -1,0 +1,101 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // The main training run: ONE model on the (N, T) mixture capped at 16,384
+  // packed tokens, 3 seeds. The grid is scored afterwards by 004_grid.jsonc.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/003_train_16k.jsonc
+  //
+  // Requires 001_data_prep.jsonc's cache (same construction knobs -> same
+  // data_config_key; changing any of them here silently builds nothing and the
+  // run fails with the data_prep command in the error).
+  //
+  // Recipe is KGQA's 039 with the length-driven changes: batch 1 (a 16k-token
+  // graph is a batch), accumulation 8, max_spd 8 (a star has nothing past 2),
+  // rrwp off. k_hop stays 0 — a dense prefix is what the dilution claim is
+  // about, and on a star k_hop=2 is dense anyway (diameter 2).
+  //
+  // BEFORE LAUNCHING: run the T0 calibration (README §A.12) — every number below
+  // that depends on cost (num_epochs, time, mem) is interpolated from a
+  // benchmark table that predates bias/decoder checkpointing, k=0 column, and
+  // carries a +-2x band.
+  //
+  // AFTER TRAINING: check the 128x512 cell FIRST (README §A.12). If it is at
+  // ceiling there is no contour to find and the grid should be extended rather
+  // than completed.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "train_16k",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "cpus": 8,
+      // 128G: the 16k-token Arrow rows are large and 4 workers random-access the
+      // built dataset through the mmap, so the page-cache working set is what
+      // sizes this, not the tensors (an (N,N,2) fp32 magnetic basis is ~131 KB).
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": [0, 1, 2],
+
+  // ── data (must match 001_data_prep exactly — these form the cache key) ────
+  // NB: the grid axes are STRINGS, not JSON lists. The sweep runner reads a
+  // list as a sweep AXIS, so "node_counts": [8, 16] would expand into two runs
+  // with one-value grids instead of one run with a two-value grid.
+  "node_counts": "8,16,32,64,128",
+  "token_counts": "32,64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 4000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  // ── model ────────────────────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  // "default", NOT max-autotune, and this is measured rather than assumed. T0
+  // (calibration_b200) puts the mixture at 1.27 s/it => 4.2 h of steps over
+  // 12,000 graph-visits. max-autotune buys 1.2-1.5x on the step (~1.1 h saved)
+  // for ~320 s of compile on each of 22 bucketed shapes (~1.96 h spent) — a net
+  // LOSS of ~0.9 h, paid again by every parallel seed since each job compiles
+  // its own. It would only start paying on a run several times longer.
+  // Safe here: k_hop=0 forces block_size 128, so the sub-128 tiles that require
+  // an autotune mode never come up.
+  "compile_mode": "default",
+
+  // ── schedule ─────────────────────────────────────────────────────────────
+  "num_epochs": 3,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "bias_weight_decay": 0.0,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 250,
+
+  "wandb_project": "GraphLLM"
+}

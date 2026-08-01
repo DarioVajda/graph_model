@@ -1,0 +1,87 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §3.1 — the TRAINED flat arm, at matched budget.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/007_flat_train.jsonc
+  //
+  // Stage 0 (pretrained flat) vs the README §3.1 graph grid confounds representation with
+  // training. This is the apples-to-apples arm: same data, same LoRA recipe, same
+  // 16,384 cap, same teacher-forced EM, same 25 test cells. Only the input
+  // representation differs — flat serialization instead of graph nodes, and
+  // therefore REAL positions 0..65,281 instead of per-node RoPE reset at T.
+  //
+  // Trains and scores the full grid in ONE job: the model is already resident, so
+  // a separate scoring job would only reload it.
+  //
+  // TWO DELIBERATE DEPARTURES from 003_train_16k, both measured in README §3.1:
+  //
+  //   * num_epochs 1, not 3. Dev EM was 1.0000 by epoch 0.5 and never moved; the
+  //     remaining 2.5 epochs were measured waste (~2.9 h/seed).
+  //   * metric_for_best_model is eval_loss, not eval_em_accuracy (set in
+  //     flat.run_flat_train_mode). In README §3.1 EM tied at ceiling across all six evals,
+  //     so "best" broke toward the EARLIEST and the grid scored an epoch-0.5
+  //     model. eval_loss was still improving monotonically.
+  //
+  // No flex, no compile: this arm is plain SDPA over one flat sequence.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "flat_train",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "flat_train",
+  "seed": [0, 1, 2],
+
+  // ── data (must match 001_data_prep exactly — these form the cache key) ────
+  // NB: the grid axes are STRINGS, not JSON lists (a list is read as a sweep AXIS).
+  "node_counts": "8,16,32,64,128",
+  "token_counts": "32,64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 4000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  // ── model: LoRA only, no graph bias in this arm ──────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  // Kept only so data_config_key resolves to the dataset README §3.1 built; the flat arm
+  // never reads a graph tensor.
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  // ── schedule (matched to 003 except num_epochs; see header) ──────────────
+  "num_epochs": 1,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  // 4000 graphs / 8 accum = 500 optimizer steps in 1 epoch, so 125 gives 4 evals.
+  "eval_steps": 125,
+
+  "wandb_project": "GraphLLM"
+}

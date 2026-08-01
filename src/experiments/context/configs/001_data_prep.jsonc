@@ -1,0 +1,57 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Build every `.gtds` the context experiment needs: the capped training
+  // mixture, the dev mixture, and all 25 grid cells.
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/001_data_prep.jsonc
+  //
+  // CPU only and idempotent — a split already on disk is skipped, so re-running
+  // after adding a cell builds only the new one.
+  //
+  // First run also downloads and caches the wikitext-103 filler stream into
+  // raw_data/ (~80 MB of int32 for 20M tokens, a few minutes). Everything after
+  // that reads the cache, so the build is reproducible offline.
+  //
+  // Cost: ~0.7 s/graph at the 128x512 cell, well under 0.1 s in the mixture, so
+  // roughly 20-30 minutes for the whole tree. Feature computation (SPD +
+  // magnetic) dominates nothing at these node counts.
+  //
+  // The bias flags ARE part of the cache key here: every split stores the
+  // features its arm consumes, and `rrwp` is deliberately off (a 5x storage
+  // multiplier for a near-degenerate signal on a star — README §A.5).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "001_data_prep",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "local"                   // no GPU needed; runs here, sequentially
+  },
+
+  "mode": "data_prep",
+
+  // ── the grid (N counts QUESTION + PROMPT, so a cell is (N-2)*T content tokens)
+  // NB: the grid axes are STRINGS, not JSON lists. The sweep runner reads a
+  // list as a sweep AXIS, so "node_counts": [8, 16] would expand into two runs
+  // with one-value grids instead of one run with a two-value grid.
+  "node_counts": "8,16,32,64,128",
+  "token_counts": "32,64,128,256,512",
+
+  // ── sizes ────────────────────────────────────────────────────────────────
+  "max_train_len": 16384,             // 22 of 25 cells; the other 3 are eval-only
+  "n_train": 4000,
+  "n_dev": 200,
+  "n_test": 200,                      // per cell; +-6.9pp Wilson at p=0.5
+
+  // ── construction knobs (all part of data_config_key) ─────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "code_len": 3,                      // tokens per access code, exact
+  "id_pool": 4096,
+  "corpus_tokens": 20000000,
+  "data_seed": 42,
+  "spd": true,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_m": 128,                  // >= max(node_counts): no eigenbasis truncation
+  "magnetic_q": 0.25,
+  "max_spd": 8                        // nothing on a star exceeds 2
+}

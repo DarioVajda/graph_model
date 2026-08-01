@@ -1,0 +1,141 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §A.10 — MATCHED fan_out=1 CONTROL at N=32 (the baseline 017/018 is read against): does the graph arm still help once SPD can
+  // no longer identify the answer?
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/019_fan1_n32_graph.jsonc
+  //
+  // Requires src/experiments/context/sbatch_chain_decoy.sh to have built the
+  // `_fan2` caches, and the Phase 2 gate (diag_decoy.py) to have passed.
+  //
+  // WHY. At fan_out=1 every content node has exactly one successor, so the content
+  // subgraph is FUNCTIONAL and the answer is the UNIQUE node at SPD == hops from
+  // the start — measured on the built data, 100% of graphs. The graph arm never
+  // traverses: it binds the start by name and reads the answer off the distance
+  // bias. O(1) in k against the flat arm's O(k) text walk. That is exactly what
+  // the learnability control showed:
+  //
+  //     k          1      2      3      4
+  //     graph   1.000  1.000  1.000  1.000     <- FLAT in k: k costs it nothing
+  //     flat    1.000  0.995  0.145  0.135     <- degrades, as O(k) predicts
+  //
+  // So 011/012 measured retrieval-with-a-shortcut, not multi-hop reasoning.
+  //
+  // WHAT CHANGES. fan_out=2: each content node emits 1 real "Continue at" pointer
+  // and 1 explicitly-labelled "Decoy reference". Both enter the DiGraph
+  // identically and every node has the same out-degree, so neither edge type nor
+  // degree leaks the chain. ~2**k nodes then share distance k, so structure can
+  // PRUNE the candidate set but cannot identify the answer; only the text
+  // resolves it. Naming the decoy in the text is deliberate — the goal is not
+  // ambiguity but to move the disambiguating signal out of the topology and into
+  // the text, where BOTH arms can read it.
+  //
+  // THE CELL IS 011/012 EXACTLY, so fan_out is the only variable and the
+  // already-paid-for fan_out=1 runs are the control.
+  //
+  // PREDICTION, written down before the run. The candidate set at distance k is
+  // 2/4/8/16 of 30 content nodes, so the graph advantage should
+  // DECAY with k — a different signature from the flat-in-k result at fan_out=1.
+  //   graph ~= flat everywhere      -> the fan_out=1 win was entirely SPD lookup
+  //   graph > flat, gap shrinking   -> structure prunes; the predicted result
+  //   graph > flat, gap flat in k   -> something beyond pruning; mechanism wrong
+  //
+  // Key results by the log's `label=` line, NEVER by SLURM_ARRAY_TASK_ID: the
+  // sweep does not order array tasks by the axis value.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "fan1_n32_graph",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      // A100 included deliberately: measured on this workload the flat arm ran
+      // 7.65 s/it on an A100-40GB while the graph arm ran 11.38 s/it on an H100.
+      // Queue time dominates card speed here.
+      "gpus": ["B200:1", "B300:1", "H100:1", "A100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": 0,
+
+  "hops": [1, 2, 3, 4],
+
+  // THE variable. 1 = the functional-graph build where SPD identifies the
+  // answer outright; 2 = one real pointer + one labelled decoy per node.
+  "fan_out": 1,
+
+  // Must match sbatch_chain_decoy.sh exactly — these form the cache key.
+  //
+  // N=32 ONLY, not 011/012's "16,32" — but NOT for the reason first recorded here.
+  // CORRECTED 2026-07-30. The original note claimed the answer was "ALONE at
+  // distance k in 36% of k=4 graphs" at N=16, and rejected N=16 on that basis.
+  // The statistic was mislabeled: diag_decoy.py counted graphs whose distance-k
+  // SHELL is a singleton (34.5%) and never checked that the singleton IS the
+  // answer (9%). Remeasured on 200 test graphs per cell against an oracle that
+  // sees every distance and no text, playing the best distance-only strategy:
+  //
+  //     cell       P(answer in shell_k)  mean|shell_k|  SPD-only  chance    leak
+  //     N=16 k=3          59.0%              3.20        19.0%     7.1%  +11.8pp
+  //     N=32 k=3          81.5%              5.34        15.6%     3.3%  +12.2pp
+  //     N=16 k=4          27.0%              1.79        16.2%     7.1%   +9.1pp
+  //     N=32 k=4          52.5%              5.63         9.9%     3.3%   +6.5pp
+  //
+  // Excess over chance is comparable at both cells: N=16 does NOT leak more than
+  // N=32 and was never disqualified by leakage. What small N actually costs is
+  // SIGNAL. At N=16/k=4 a decoy shortcuts the answer to below distance k in 73%
+  // of graphs, so the structural channel is mostly noise there and a graph~=flat
+  // result would be uninterpretable — you could not separate "the model failed"
+  // from "there was nothing in the topology to use". N=32 keeps the answer inside
+  // the distance-k shell for 52.5% of k=4 graphs, with ~5.6 candidates of 30.
+  //
+  // The bound worth carrying into the write-up: at N=32/k=3 a distance-only oracle
+  // scores 15.6% and the graph arm scored 0.990. The win is not topology
+  // identifying the answer.
+  //
+  // Because the cell therefore differs from 011/012, the matched fan_out=1 control
+  // is rebuilt at N=32 too (019/020); using the old N=16,32 runs as the control
+  // would confound cell size with fan-out.
+  "node_counts": "32",
+  "token_counts": "64",
+  "max_train_len": 16384,
+  "n_train": 8000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  // 8000 / 8 = 1000 steps/epoch, so 2 epochs = 2000 steps. eval_steps 250 keeps
+  // the eval overhead to 8 passes; at 125 it would cost ~25 min of pure eval.
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 250,
+
+  "wandb_project": "GraphLLM"
+}

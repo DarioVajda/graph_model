@@ -1,0 +1,112 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN SWEEP — calibration, LIGHT COMPILE. The A/B partner of 024.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/025_mainsweep_calibrate_default.jsonc
+  //
+  // Identical to 024 in every respect except `compile_mode`, and graph arm only
+  // (the flat arm builds a stock sdpa model, compiles nothing, and is unaffected).
+  //
+  // WHAT IS BEING TESTED. `flex_kernel.DEFAULT_COMPILE_MODE` is
+  // "max-autotune-no-cudagraphs", documented as 1.47x fwd / 1.18x bwd against the
+  // plain inductor heuristic at "~320 s one-time compile per distinct shape", and
+  // 002_smoke's header says of `compile_mode: "default"`: "Never use it for a real
+  // run — it costs 1.2-1.5x on the step". Neither figure was measured on THIS
+  // workload, and 024 has since shown the compile side of that trade to be far worse
+  // than 320 s/shape:
+  //
+  //     backward autotune, measured on 024   len 1,920 ->   25.7 s
+  //                                          len 8,192 ->  321.4 s
+  //                                          len 16,256 -> 1752.8 s
+  //
+  // Forward autotune is flat at ~8-10 s at every size; the backward scales as about
+  // len^1.5, so the 13-cell grid costs ~2 h of GPU benchmarking before step 1. That
+  // is a real number to weigh against a step-time gain that is currently only a
+  // docstring claim.
+  //
+  // THE DECISION THIS FEEDS is not "which is faster over 100 steps" — over so short a
+  // run the fixed compile dominates and light compile wins trivially. It is:
+  //
+  //     total(mode) = compile(mode) + 4000 steps x s_per_step(mode)
+  //
+  // and, critically, `compile` is ~0 for max-autotune in 021 because it inherits
+  // 024's cache (execution.sbatch.inductor_cache). So the honest comparison for the
+  // real run is 4000 x s_per_step alone, with light compile carrying its own ~4 min.
+  // Which wins depends entirely on the step-time ratio this job measures.
+  //
+  // NO SHARED CACHE HERE, deliberately: inductor keys its cache on the compile
+  // config, so pointing this at 024's cache would miss on every shape anyway, and
+  // keeping it per-job means the compile time measured here is the true cost of the
+  // light setting from cold.
+  //
+  // Note the block-size gate does NOT bite at k_hop=0: `flex_block_size` returns 128
+  // regardless of mode, and only a K-hop mask would want the sub-128 blocks that
+  // non-autotune inductor cannot lower. So this is a like-for-like kernel comparison,
+  // not a comparison of two different maskings.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "mainsweep_calibrate_default",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      // Same card as 024 or the step times are not comparable.
+      "gpus": ["H100"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": 0,
+
+  // THE variable. 024 leaves this unset and so inherits
+  // RunConfig.compile_mode = "max-autotune-no-cudagraphs".
+  "compile_mode": "default",
+
+  "max_steps": 100,
+  "eval_steps": 100000,
+
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "wandb_project": null
+}

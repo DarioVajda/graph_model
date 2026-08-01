@@ -1,0 +1,120 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN SWEEP — cost calibration. Run this BEFORE 021/022, not instead of them.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/024_mainsweep_calibrate.jsonc
+  //
+  // WHY. The budget in README §A.12 is a power-law extrapolation from two
+  // anchors that differ in BOTH the GPU and the compile mode:
+  //
+  //     train_16k       B200, compile_mode "default",  5,418 tok, 1.31 s/graph
+  //     fan1_n32_graph  H100, max-autotune,            1,984 tok, 0.228 s/graph
+  //
+  // Fitting cost ∝ L^a across those gives a = 1.34..1.74 depending on how much of the
+  // gap is attributed to the card versus the 1.2-1.5x non-autotune penalty, and the
+  // implied cost at the sweep's 8,042-token mean spans 1.6-3.3 s/graph — a 2x band,
+  // i.e. 14-30 h per run before DDP. No amount of further arithmetic narrows that;
+  // only a measurement on THIS grid, THIS card and THIS compile mode does.
+  //
+  // It also closes a second gap: the flat arm has never run on the full grid at all
+  // (job 119422 died in 43 s on the argparse bug and was never resubmitted), so there
+  // is no flat-arm constant at 8k tokens to extrapolate from in the first place.
+  //
+  // WHAT TO READ OFF IT. Wall-clock seconds per graph, from the job's Elapsed and
+  // steps x batch x accum x ranks -- NOT tqdm's displayed rate, which is smoothed and
+  // reads ~27% fast (train_16k showed 7.67 s/it against a true 10.50).
+  //
+  //     s/graph = Elapsed_seconds / (max_steps x batch_size x accumulation_steps x ranks)
+  //
+  // Then: full run hours = s/graph x n_train x num_epochs / 3600. Two things follow
+  // from that number and should be decided BEFORE 021 goes in:
+  //   * n_train. 16,000 was cut down from 24,000 on the inflated estimate. If this
+  //     lands near the optimistic end, put it back — data volume is the lever that
+  //     matters for k=3/k=4: k values differ in required computation, while cells share
+  //     the task and should transfer.
+  //   * batch_size. 1 wastes an 80 GB card on the 960..4,000-token cells. Batching is
+  //     already supported (CellGroupedSampler keeps batches cell-homogeneous), so
+  //     batch_size 2 / accumulation_steps 2 is a free config-only change IF the
+  //     15,936-token cell fits. That cell is why this must be measured rather than
+  //     assumed: one batch_size applies to every cell, so the largest sets the ceiling.
+  //
+  // COST OF THE CALIBRATION ITSELF. max_steps 100 with warmup, plus ~320 s of
+  // inductor autotune per distinct shape. The compile is NOT wasted: slurm_launch.sh
+  // keys TORCHINDUCTOR_CACHE_DIR on the job label, so it does not carry over to
+  // 021 — budget ~1 h and read it as the floor on any run's startup, not as overhead
+  // this config invents.
+  //
+  // Both arms, both cards, one seed each. Four runs, all concurrent.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "mainsweep_calibrate",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      // Both arms on H100 here ON PURPOSE, even though 022 will run the flat arm on
+      // A100_80GB. The point is to measure the two ARMS against each other on one
+      // card; the card ratio is already known (H100 ~1.93x A100_80GB, measured on
+      // 119585 vs 119585_3). Mixing both unknowns into one run would measure neither.
+      "gpus": ["H100"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The axis: the graph arm and the flat control, on identical data.
+  "mode": ["train", "flat_train"],
+  "seed": 0,
+
+  // 100 optimizer steps x 1 x 8 = 800 graph presentations. Enough to average over
+  // the cell mixture (13 cells, so ~60 batches each) without training anything.
+  "max_steps": 100,
+  // No eval during calibration: eval is a different kernel path at a different batch
+  // size and would contaminate the s/graph figure being measured.
+  "eval_steps": 100000,
+
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+
+  // Identical to 021/022 — this must exercise the REAL grid, or it measures nothing.
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "wandb_project": null
+}

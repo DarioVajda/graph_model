@@ -1,0 +1,63 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §3.2 — build the k-hop pointer-chasing datasets.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/008_chain_data.jsonc
+  //
+  // One dataset per hop count. `hops` IS a sweep axis here (unlike the grid
+  // axes), so this expands to 6 independent data_prep jobs that run in parallel —
+  // each builds its own .gtds tree keyed by `_h{hops}`.
+  //
+  // The grid is pinned to a SINGLE cell, N=64 T=128 (L=8,000, comfortably
+  // in-cap). Phase A asks one question — where does hop count break the task? —
+  // and the README §3.1 grid already established that N and T do nothing on their own.
+  // Phase B re-opens the N x T grid at whichever k lands in the sensitive band.
+  //
+  // n_train is 2000 rather than 4000: README §3.1 saturated at epoch 0.5 with 4000, so
+  // the lookup task needed far less than it got. If a hop count turns out to be
+  // data-starved rather than hard, that shows up as a gap between train and dev
+  // and is cheap to re-run.
+  //
+  // k=1 is the control: it should reproduce the README §3.1 ceiling. If it does not, the
+  // generator is wrong and nothing else in Phase A means anything.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "chain_data",
+  "results_dir": "src/experiments/context/results",
+
+  // local: this build is CPU-bound (tokenizer work), and the sweep runner's
+  // sbatch mode requires a GPU it would never use. sbatch_chain_data.sh submits
+  // one CPU-only compute-node job per hop count instead — never run this on the
+  // login node.
+  "execution": {
+    "mode": "local"
+  },
+
+  "mode": "data_prep",
+
+  // The Phase A hop sweep. A LIST here is intentional — this is a real axis.
+  "hops": [1, 2, 3, 4, 6, 8],
+
+  // Single cell. STRINGS, so they stay grids rather than becoming axes.
+  "node_counts": "64",
+  "token_counts": "128",
+  "max_train_len": 16384,
+  "n_train": 2000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  // >= max(node_counts); the chain graph is DIRECTED, so unlike the star this is
+  // the first version of the task where the magnetic (directed) basis carries
+  // real information.
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

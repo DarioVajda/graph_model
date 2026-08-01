@@ -1,0 +1,67 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // README §3.1 — the flat-text arm, PRETRAINED (no training, no LoRA).
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/006_flat_zeroshot.jsonc
+  //
+  // Scores the same 25 test splits the graph arm scored in README §3.1, serialized to one
+  // ordinary token sequence: content nodes in shuffled order under "## Article i"
+  // headers, then the QUESTION node, then "Answer:".
+  //
+  // WHY THIS IS NOT MERELY A BASELINE: per-node RoPE reset caps the graph arm's
+  // position ids at T, so its 64,640-token cell is 126 segments each positioned
+  // 0..511. Flat runs 0..65,281 for real — this is the only arm that puts the
+  // length axis under test.
+  //
+  // No checkpoint and no data rebuild: `.gtds` already stores per-node text, so
+  // serialization happens at collate time over the very same items.
+  //
+  // Cost: forward-only, one graph at a time, 25 cells x 200 items. No compile
+  // (SDPA, not flex), so nothing is paid per shape.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "flat_zeroshot",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "cpus": 8,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "flat_grid",
+
+  // ── must match the built data (these form the .gtds cache key) ────────────
+  // NB: the grid axes are STRINGS, not JSON lists. The sweep runner reads a
+  // list as a sweep AXIS, so "node_counts": [8, 16] would expand into two runs
+  // with one-value grids instead of one run with a two-value grid.
+  "node_counts": "8,16,32,64,128",
+  "token_counts": "32,64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 4000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  // The flat arm has no graph bias at all; these keys only keep data_config_key
+  // pointing at the dataset that README §3.1 built.
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "dtype": "bf16"
+}

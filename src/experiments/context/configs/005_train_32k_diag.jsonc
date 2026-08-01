@@ -1,0 +1,90 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // The extrapolation diagnostic (README §A.6).
+  //
+  // 003 caps training at 16,384 tokens, which leaves 3 of 25 cells outside the
+  // training distribution — so a drop there is ambiguous between attention
+  // dilution and length extrapolation. Raising the cap to 32,768 pulls
+  // 64x512 (31,808) and 128x256 (32,320) IN, leaving only 128x512 outside.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/005_train_32k_diag.jsonc
+  //
+  // Reading it, against 003's numbers on the same three cells:
+  //   * unchanged  -> the drop is DILUTION; the 16k heatmap stands as-is.
+  //   * recovers   -> the drop was (partly) EXTRAPOLATION; annotate the 16k
+  //                   figure's top-right accordingly.
+  //
+  // One seed is enough: this is a directional check against a 3-seed baseline,
+  // not a headline number.
+  //
+  // NB this needs its own data build (max_train_len is in the cache key — the
+  // mixture is different), and it only fits in memory because of the windowed
+  // loss (README §A.8). Verify against T0's calibration before launching; if
+  // it OOMs, raise accumulation_steps and keep batch_size at 1, and if it still
+  // OOMs drop the cap to 24576 — which still recovers 128x256.
+  //
+  //   python3 -m src.experiments.context --mode data_prep --max-train-len 32768
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "train_32k_diag",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "cpus": 8,
+      "mem": "192G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "seed": 0,
+
+  // ── the one variable under test ──────────────────────────────────────────
+  "max_train_len": 32768,
+
+  // ── everything else is 003 verbatim ──────────────────────────────────────
+  // NB: the grid axes are STRINGS, not JSON lists. The sweep runner reads a
+  // list as a sweep AXIS, so "node_counts": [8, 16] would expand into two runs
+  // with one-value grids instead of one run with a two-value grid.
+  "node_counts": "8,16,32,64,128",
+  "token_counts": "32,64,128,256,512",
+  "n_train": 4000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+
+  "num_epochs": 3,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "bias_weight_decay": 0.0,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 250,
+
+  "wandb_project": "GraphLLM"
+}
