@@ -104,7 +104,7 @@ as decisions land.
 
 | | Decision / step | Status | What it gates |
 |---|---|---|---|
-| **D1** | Edge encoding — node-pair extrapolation vs Levi | open | schema, relbench, molecules |
+| **D1** | Edge encoding — node-pair extrapolation vs Levi | ✅ Decision: **Levi** | schema, relbench, molecules |
 | **D2** | Magnetic sharing granularity | open — must be re-profiled on D4's backbone | trunk cost for its whole life |
 | **D3** | Remaining constants | **decided**, evidence in `CLAUDE_CONTEXT.md` | — |
 | **D4** | Backbone + trainable surface | leaning Llama-3.1-8B-Instruct, arm B; arms A/B/C settled in Phase 1 | D2, §6, everything at scale |
@@ -149,64 +149,11 @@ experiment packages.**
 
 ---
 
-#### D1 — Edge encoding: extrapolate node-pair biases to edges, instead of the Levi transform
-
-*(Details to be worked out; recorded here at the fidelity decided on 2026-08-01.)*
+#### ✅ D1 — Edge encoding: extrapolate node-pair biases to edges, instead of the Levi transform – **Dismissed**
 
 **Motivation.** We currently encode typed/text-bearing edges by converting the graph to a
 **Levi graph** — every edge becomes a node — as in KGQA. That preserves the edge's full
 text (it becomes a node's text) but pays for it twice:
-
-* the node-level bias becomes `O((N+E)²)` instead of `O(N²)`, and `E` is itself `O(N²)`
-  in the worst case, so the bias term can approach `O(N⁴)`;
-* the magnetic eigendecomposition goes `O(N³) → O((N+E)³)`.
-
-`src/models/bias.py` has **no edge-type channel at all** — SPD, RRWP, magnetic, RWSE and
-Laplacian are all topology-only. Levi is currently the *only* way an edge type reaches
-the model. Three of the four target domains need edge types (relbench: typed foreign
-keys; molecules: bond types/stereochemistry; KGs: relations), so this cannot stay ad hoc.
-
-**The proposal.** Keep the **original** `N` nodes as graph nodes. Compute the structural
-biases once on the `N × N` node pairs, as today. Keep the edge's full text as its own
-token span in the sequence — so nothing is compressed and the textual edge feature is
-fully preserved — but derive that span's bias **by extrapolation from the endpoint
-entries** of the `N × N` node-pair bias, rather than by giving the edge its own row in
-the spectrum.
-
-**Why it should be a strict generalisation.** A token currently maps to exactly one node
-(`node_ids`, `(B, kv_len)`), and `expand_node_to_token_bias` broadcasts the `(B,H,N,N)`
-node bias to token level. The generalisation is a token→*node-pair* mapping: an edge
-token's span is associated with `(u, v)`, and its bias against any other span is a
-reduction over the relevant endpoint entries. With edge encoding **explicitly disabled at
-model init**, every token maps to a single node, the reduction is the identity, and the
-forward pass is bit-identical to today's. That preserves everything already built and
-published, and makes the new capability a config flag rather than a fork of the model.
-
-**Expected saving.** Node-level bias `O((N+E)²·M·m) → O(N²·M·m)`; eigendecomposition
-`O((N+E)³) → O(N³)`. The token-level `O(L²)` expansion is **unchanged** — edge text sits
-in the sequence either way — so this removes the *bias* blowup, not the sequence-length
-cost. Given `CLAUDE_CONTEXT.md` §4.5's finding that the `O(N²·m)` magnetic einsums (not attention) are the
-dominant added cost, this targets the right term.
-
-**Open design questions (to resolve later):**
-
-* What reduction maps `{b(u,·), b(v,·)}` to an edge span's bias — mean, max, learned gate,
-  or separate source/target channels? Does an edge↔edge pair `(u,v) × (w,x)` use a 4-way
-  reduction?
-* Does the permutation-equivariance proof survive? It should — the reduction depends only
-  on endpoint *identities*, never on serialization order — but it needs the same
-  float64-level numerical test every other feature here carries.
-* Backward-compatibility test at float64 with edge encoding off (non-negotiable; this is
-  the invariant that makes the whole thing safe).
-* Directed `(u,v)` is ordered so there is no endpoint-swap ambiguity; undirected graphs
-  need a canonical rule or a symmetric reduction.
-* Data path: `node_ids` needs an edge-slot extension (`edge_endpoints (B, E_slots, 2)`
-  and token→slot ids), plus edge-aware analogues of the structural mask and k-hop gate.
-
-**How it gets tested.** The head-to-head is **KGQA**, which is already Levi: identical
-data, Levi vs. extrapolated-edge, measured on WebQSP F1/Hits@1 against the established
-`spd+magnetic` numbers (0.7278 ± 0.0033 F1) and the ±0.4–1.0 F1 seed-noise bar. Then
-relbench and molecules, where edge types are load-bearing rather than optional.
 
 ---
 
