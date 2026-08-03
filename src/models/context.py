@@ -30,6 +30,7 @@ class GraphContext:
     node_ids_flex:   Optional[torch.Tensor] = None   # (B, kv_len) int32, flex path
     shared_node_bias: Optional[torch.Tensor] = None  # (B, H, N, N)
     node_start_indices: Optional[torch.Tensor] = None  # (B, N) first-token pos per node (magnetic_content)
+    group_bias:      Optional[Any] = None            # bias.GroupBiasCache (magnetic_groups)
 
     def install_on(self, attn_modules) -> None:
         """Attach this context to each attention module so the registered

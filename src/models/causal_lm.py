@@ -26,7 +26,10 @@ from transformers.utils import logging
 
 from .structural_mask import build_dense_structural_mask
 from .dispatch import GRAPH_ATTN_IMPLS, GTLM_ATTN_FN_NAMES, build_flex_block_mask, flex_block_size
-from .bias import build_shared_bias_modules, compute_shared_node_bias
+from .bias import (
+    GroupBiasCache, build_group_bias_modules, build_shared_bias_modules,
+    compute_shared_node_bias,
+)
 from .context import GraphContext
 from .io import load_bias_parameters
 
@@ -109,6 +112,12 @@ class GraphCausalLMMixin:
         # shared type is enabled. The attribute name contains "graph_bias" so
         # the standard active-params substring unfreezes it too.
         self.shared_graph_bias = build_shared_bias_modules(config.num_attention_heads, config.head_dim, config)
+        # Layer-grouped magnetic bias (magnetic_groups): G instances owned here,
+        # one per group of layers. See bias.GroupBiasCache for why placement at
+        # the top level plus an owner/follower rule is what makes compute-once-
+        # per-group legal under per-layer gradient checkpointing.
+        self.group_graph_bias = build_group_bias_modules(
+            config.num_attention_heads, config.head_dim, config, config.num_hidden_layers)
         self.config.architectures = [type(self).__name__]
         self._graph_bias_cache: dict = {}
         # magnetic_content reads each layer's live residual-stream hidden state.
@@ -306,6 +315,20 @@ class GraphCausalLMMixin:
         if getattr(self.config, "magnetic_content", False) and magnetic is not None:
             node_start_indices = _node_start_indices(node_ids, magnetic_V.shape[1])
 
+        # Grouped bias: one cache per forward, consulted lazily by each layer.
+        # Features are bound into it now so the backward-time rematerialisation
+        # cannot pick up a later batch's inputs.
+        group_bias = None
+        if self.group_graph_bias is not None:
+            group_bias = GroupBiasCache(
+                self.group_graph_bias,
+                num_layers=self.config.num_hidden_layers,
+                dtype=embed_dtype, device=device, num_nodes=num_nodes,
+                features=features,
+                training=self.training and torch.is_grad_enabled(),
+                cache_dict=self._graph_bias_cache,
+            )
+
         ctx = GraphContext(
             node_ids=node_ids,
             num_nodes=num_nodes,
@@ -316,6 +339,7 @@ class GraphCausalLMMixin:
             node_ids_flex=node_ids_flex,
             shared_node_bias=shared_node_bias,
             node_start_indices=node_start_indices,
+            group_bias=group_bias,
         )
         ctx.install_on(self._iter_attn_modules())
 

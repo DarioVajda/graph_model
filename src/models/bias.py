@@ -514,3 +514,128 @@ def compute_shared_node_bias(
         if b is not None:
             node_bias = b if node_bias is None else node_bias + b
     return node_bias
+
+
+# ── Layer-grouped bias (magnetic_groups) ──────────────────────────────────────
+
+def layer_group_map(num_layers: int, num_groups: int) -> list[int]:
+    """Layer index → group index, as evenly as possible.
+
+    ``l * G // L`` keeps groups contiguous, uses every group when ``G <= L`` (so
+    no module is left without a gradient, which DDP would reject), and sizes them
+    within one layer of each other. ``G == L`` gives one group per layer; ``G == 1``
+    gives a single group.
+    """
+    if not 1 <= num_groups <= num_layers:
+        raise ValueError(f"num_groups={num_groups} must be in [1, {num_layers}].")
+    return [l * num_groups // num_layers for l in range(num_layers)]
+
+
+def build_group_bias_modules(
+    num_heads: int, head_dim: int, bias_config, num_layers: int,
+) -> Optional[nn.ModuleList]:
+    """Instantiate ``magnetic_groups`` copies of :class:`MagneticBias` (or None).
+
+    Owned by the causal-LM mixin under an attribute whose name contains
+    ``graph_bias``, so the standard active-params substring unfreezes them.
+    """
+    num_groups = getattr(bias_config, "magnetic_groups", 0)
+    if not num_groups:
+        return None
+    layer_group_map(num_layers, num_groups)          # validate G against L
+    return nn.ModuleList(
+        [MagneticBias(num_heads, head_dim, bias_config) for _ in range(num_groups)])
+
+
+class GroupBiasCache:
+    """One magnetic bias per layer *group*, computed once per group per pass.
+
+    Placement is what makes this legal under HF's per-layer gradient
+    checkpointing, whose contract is that a region's recompute must save the same
+    tensors its forward did. Each group has one **owner** — its lowest layer:
+
+    * the owner's region computes the bias *with grad*, in the forward and again
+      automatically in its own recompute, so its saved-tensor frame matches;
+    * every **follower** region only ever reads a value, so no bias intermediates
+      enter its frame in either direction.
+
+    Backward runs layers in reverse, so followers are reached before the owner.
+    The first one rematerialises the value under ``no_grad`` — adding nothing to
+    its own frame — and hands it on as a **leaf that requires grad**, so the ops
+    after it save exactly what they saved in the forward. That leaf's ``.grad`` is
+    discarded: gradient reaches the parameters through the graph node the owner
+    built in the forward, which every consumer in the group is attached to.
+
+    Each group's tensor is released once its last consumer has taken it, so peak
+    residency is one ``(B, H, N, N)`` tensor rather than ``G`` of them. The
+    owner's intermediates live inside its layer's checkpoint region and are
+    therefore transient too.
+
+    In eval / generation there is no backward, so the whole scheme collapses to
+    "compute once per group and keep" — matching the shared-bias path, and
+    reusing ``cache_dict`` across autoregressive decode steps.
+    """
+
+    def __init__(
+        self,
+        modules: nn.ModuleList,
+        *,
+        num_layers: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        num_nodes: Optional[torch.Tensor],
+        features: dict,
+        training: bool,
+        cache_dict: Optional[dict] = None,
+    ):
+        self.modules = modules
+        self.group_of = layer_group_map(num_layers, len(modules))
+        self.size = [self.group_of.count(g) for g in range(len(modules))]
+        self.owner_of = [self.group_of.index(g) for g in range(len(modules))]
+        # Features are bound HERE, not read back from a mutable GraphContext: the
+        # backward rematerialisation must see this batch's inputs even if another
+        # forward has run in between (e.g. an adapters-off teacher pass).
+        self.dtype, self.device = dtype, device
+        self.num_nodes = num_nodes
+        self.features = dict(features)
+        self.training = training
+        self.cache_dict = cache_dict
+        self.live: list[Optional[torch.Tensor]] = [None] * len(modules)
+        self.taken = [0] * len(modules)
+
+    def _compute(self, g: int) -> torch.Tensor:
+        return self.modules[g](
+            dtype=self.dtype, device=self.device, num_nodes=self.num_nodes,
+            spd=self.features.get("spd"), laplacian=self.features.get("laplacian"),
+            rwse=self.features.get("rwse"), rrwp=self.features.get("rrwp"),
+            magnetic=self.features.get("magnetic"),
+        )
+
+    def get(self, layer_idx: int) -> Optional[torch.Tensor]:
+        g = self.group_of[layer_idx]
+
+        if not self.training:
+            # No backward: compute once per group and hold, across decode steps.
+            key = f"group_node_bias_{g}"
+            if self.cache_dict is not None and key in self.cache_dict:
+                return self.cache_dict[key]
+            b = self._compute(g)
+            if self.cache_dict is not None:
+                self.cache_dict[key] = b
+            return b
+
+        if layer_idx == self.owner_of[g]:
+            b = self._compute(g)                       # always, both directions
+        else:
+            b = self.live[g]
+            if b is None:                              # backward: owner not yet reached
+                with torch.no_grad():
+                    value = self._compute(g)
+                b = value.detach().requires_grad_(True)
+
+        self.live[g] = b
+        self.taken[g] += 1
+        if self.taken[g] == self.size[g]:              # last consumer of this pass
+            self.taken[g] = 0
+            self.live[g] = None                        # drop our only strong ref
+        return b

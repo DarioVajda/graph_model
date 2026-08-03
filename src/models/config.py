@@ -23,6 +23,7 @@ class GraphConfigMixin:
         max_rw_steps: int = 8,
         magnetic: bool = False,
         magnetic_shared: bool = False,
+        magnetic_groups: int = 0,
         magnetic_content: bool = False,
         magnetic_dim: int = 32,
         magnetic_content_dim: int = 128,
@@ -45,6 +46,26 @@ class GraphConfigMixin:
         self.max_rw_steps = max_rw_steps
         self.magnetic = magnetic
         self.magnetic_shared = magnetic_shared
+        # Layer-grouped magnetic bias: G instances, layer l served by group
+        # l*G // num_hidden_layers. One knob spanning the whole sharing spectrum —
+        # G = num_hidden_layers is per-layer `magnetic`, G = 1 is `magnetic_shared`
+        # (both verified numerically equivalent in tests/models/test_bias_sharing.py).
+        # 0 disables. Mutually exclusive with `magnetic` / `magnetic_shared`, which
+        # keep their own legacy code paths so existing checkpoints still load.
+        self.magnetic_groups = magnetic_groups
+        n_layers = getattr(self, "num_hidden_layers", None)
+        if magnetic_groups:
+            if sum(map(bool, (magnetic, magnetic_shared, magnetic_content))) > 0:
+                raise ValueError(
+                    "magnetic_groups is mutually exclusive with magnetic / "
+                    "magnetic_shared / magnetic_content; got magnetic_groups="
+                    f"{magnetic_groups} alongside magnetic={magnetic}, "
+                    f"magnetic_shared={magnetic_shared}, "
+                    f"magnetic_content={magnetic_content}.")
+            if n_layers is not None and not 1 <= magnetic_groups <= n_layers:
+                raise ValueError(
+                    f"magnetic_groups={magnetic_groups} must be in [1, "
+                    f"num_hidden_layers={n_layers}].")
         # Content-conditioned magnetic bias (per-layer). Reuses the magnetic
         # spectral machinery and consumes the same magnetic_V / magnetic_lambdas
         # features, plus the live hidden states (see MagneticContentBias). Its

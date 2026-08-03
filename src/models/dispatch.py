@@ -251,6 +251,13 @@ def compute_node_bias(
     if shared is not None:
         shared = shared.to(dtype)
         node_bias = shared if node_bias is None else node_bias + shared
+
+    # Grouped bias (magnetic_groups): computed once per group of layers. Also
+    # outside the closure above — the group cache runs its own owner/follower
+    # scheme against the enclosing per-layer checkpoint region.
+    if ctx.group_bias is not None:
+        grouped = ctx.group_bias.get(module.graph_bias.layer_idx).to(dtype)
+        node_bias = grouped if node_bias is None else node_bias + grouped
     return node_bias
 
 
