@@ -121,6 +121,10 @@ def main():
     ap.add_argument("--n-dev", type=int, default=200)
     ap.add_argument("--n-test", type=int, default=200)
     ap.add_argument("--data-seed", type=int, default=42)
+    # Part of data_config_key(), so it has to be settable or the audit silently
+    # reads a different build than the one about to be trained on (bias_sharing's
+    # 4k-capped tree is the first consumer that is not the 16k default).
+    ap.add_argument("--max-train-len", type=int, default=16384)
     ap.add_argument("--magnetic-m", type=int, default=128)
     ap.add_argument("--limit", type=int, default=200, help="graphs sampled per cell")
     ap.add_argument("--out", default=None, help="write the table as JSON here")
@@ -130,7 +134,8 @@ def main():
     cfg = RunConfig(node_counts=ints(args.node_counts), token_counts=ints(args.token_counts),
                     hop_counts=ints(args.hop_counts), fan_out=args.fan_out,
                     n_train=args.n_train, n_dev=args.n_dev, n_test=args.n_test,
-                    data_seed=args.data_seed, magnetic_m=args.magnetic_m,
+                    data_seed=args.data_seed, max_train_len=args.max_train_len,
+                    magnetic_m=args.magnetic_m,
                     mode="data_prep").validate()
 
     print(f"\ndata: {os.path.join(OUTPUT_ROOT, cfg.data_config_key())}\n")

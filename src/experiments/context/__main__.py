@@ -101,6 +101,10 @@ def build_parser():
     p.add_argument("--rrwp", action=B, default=d.rrwp)
     p.add_argument("--max-rw-steps", type=int, default=d.max_rw_steps)
     p.add_argument("--magnetic", action=B, default=d.magnetic)
+    p.add_argument("--magnetic-groups", type=int, default=d.magnetic_groups,
+                   help="Layer-sharing granularity of the magnetic bias: G instances "
+                        "instead of one per layer (0 = per-layer, 1 = one for the "
+                        "whole stack). Model-side only; the dataset is unchanged.")
     p.add_argument("--magnetic-dim", type=int, default=d.magnetic_dim)
     p.add_argument("--magnetic-q", type=float, default=d.magnetic_q)
     p.add_argument("--magnetic-m", type=int, default=d.magnetic_m)
@@ -188,7 +192,8 @@ def config_from_args(args):
         lora_dropout=args.lora_dropout, active_params=tuple(args.active_params),
         spd=args.spd, max_spd=args.max_spd,
         rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
-        magnetic=args.magnetic, magnetic_dim=args.magnetic_dim,
+        magnetic=args.magnetic, magnetic_groups=args.magnetic_groups,
+        magnetic_dim=args.magnetic_dim,
         magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
         k_hop=args.k_hop, k_hop_directed=args.k_hop_directed,
         graph_attn_impl=args.graph_attn_impl, dtype=args.dtype,

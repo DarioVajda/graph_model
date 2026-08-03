@@ -43,6 +43,9 @@ def _save_train_record(cfg, run_name, sizes, results, runs_jsonl, sweep_meta=Non
         "task": cfg.task, "graph_type": cfg.graph_type, "arm": cfg.arm(),
         "question_node": cfg.question_node,
         "spd": cfg.spd, "rrwp": cfg.rrwp, "magnetic": cfg.magnetic,
+        # Bias sharing granularity (0 = legacy per-layer). A first-class column:
+        # a G sweep is otherwise only distinguishable by parsing the run name.
+        "magnetic_groups": cfg.magnetic_groups,
         "seed": cfg.seed,
         # ── hyperparameters ──
         "model_name": cfg.model_name, "impl": cfg.impl, "dtype": cfg.dtype,

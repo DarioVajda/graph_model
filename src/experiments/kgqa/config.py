@@ -191,6 +191,13 @@ class RunConfig:
     # `magnetic` in practice (both consume the same data; combining them just
     # double-counts the term) — the bias ablation sweep never sets both True.
     magnetic_shared: bool = False
+    # Layer-sharing granularity for the magnetic bias (see GroupBiasCache in
+    # src/models/bias.py). 0 = today's per-layer instance. G >= 1 replaces it with
+    # G instances, layer l served by group l*G//num_layers, so G = num_layers is
+    # per-layer and G = 1 is one instance for the whole stack. Purely a model-side
+    # knob: feature generation, the dataset cache key and the arm label are
+    # untouched, so a G sweep trains on byte-identical data to the baseline.
+    magnetic_groups: int = 0
     # Content-conditioned magnetic bias (see MagneticContentBias in
     # src/models/bias.py): reuses the magnetic spectral machinery and eigenvector
     # DATA, then widens the final projection with a live per-node semantic summary
@@ -367,7 +374,11 @@ class RunConfig:
         if self.spd:
             cfg.update(spd=True, max_spd=self.max_spd)
         if self.magnetic:
-            cfg.update(magnetic=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+            # magnetic_groups replaces the per-layer instance with G grouped ones;
+            # same features, same data, different sharing granularity.
+            share = ({"magnetic_groups": self.magnetic_groups} if self.magnetic_groups
+                     else {"magnetic": True})
+            cfg.update(**share, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
         if self.magnetic_shared:
             cfg.update(magnetic_shared=True, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
         if self.magnetic_content:
@@ -545,4 +556,19 @@ class RunConfig:
                 "placements of the same term (per-layer vs. once-per-forward) — enable "
                 "at most one. `spd=magnetic=magnetic_shared=False` is the valid "
                 "no-graph-bias ('none') arm.")
+        if self.magnetic_groups:
+            # magnetic_groups is the granular form of the same term; it needs
+            # `magnetic` on (that is what emits the eigenvector features) and then
+            # supersedes it model-side. It cannot coexist with the other placements.
+            if not self.magnetic:
+                raise ValueError(
+                    "magnetic_groups requires magnetic=True: `magnetic` gates the "
+                    "eigenvector features the grouped bias consumes; magnetic_groups "
+                    "only changes how many layers share one instance.")
+            if self.magnetic_shared or self.magnetic_content:
+                raise ValueError(
+                    "magnetic_groups is the granular form of magnetic_shared and "
+                    "cannot combine with magnetic_shared or magnetic_content "
+                    "(magnetic_shared == magnetic_groups=1; magnetic_content is "
+                    "layer-dependent and cannot be shared across layers).")
         return self

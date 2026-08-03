@@ -177,6 +177,13 @@ class RunConfig:
     rrwp: bool = True
     max_rw_steps: int = 16                      # random-walk steps (data + model)
     magnetic: bool = True
+    # Layer-sharing granularity for the magnetic bias (see GroupBiasCache in
+    # src/models/bias.py). 0 = today's per-layer instance. G >= 1 replaces it with
+    # G instances, layer l served by group l*G//num_layers, so G = num_layers is
+    # per-layer and G = 1 is one instance for the whole stack. Purely a model-side
+    # knob: it does not touch feature generation, the dataset cache key or the arm
+    # label, so a G sweep trains on byte-identical data to the baseline.
+    magnetic_groups: int = 0
     magnetic_dim: int = 32                      # model bias-MLP hidden width
     magnetic_q: float = 0.25                    # magnetic-Laplacian charge (data)
     magnetic_m: int = 0                         # eigenvectors kept (0 -> all N)
@@ -266,7 +273,11 @@ class RunConfig:
         if self.rrwp:
             cfg.update(rrwp=True, max_rw_steps=self.max_rw_steps)
         if self.magnetic:
-            cfg.update(magnetic=True, magnetic_dim=self.magnetic_dim,
+            # magnetic_groups replaces the per-layer instance with G grouped ones;
+            # same features, same data, different sharing granularity.
+            share = ({"magnetic_groups": self.magnetic_groups} if self.magnetic_groups
+                     else {"magnetic": True})
+            cfg.update(**share, magnetic_dim=self.magnetic_dim,
                        magnetic_q=self.magnetic_q)
         return cfg
 

@@ -235,6 +235,11 @@ def build_parser():
     p.add_argument("--spd", action=B, default=d.spd)
     p.add_argument("--max-spd", type=int, default=d.max_spd)
     p.add_argument("--magnetic", action=B, default=d.magnetic)
+    p.add_argument("--magnetic-groups", type=int, default=d.magnetic_groups,
+                   help="Layer-sharing granularity of the magnetic bias: G instances "
+                        "instead of one per layer (0 = per-layer, 1 = one for the "
+                        "whole stack, i.e. --magnetic-shared). Requires --magnetic; "
+                        "model-side only, the dataset is unchanged.")
     p.add_argument("--magnetic-shared", action=B, default=d.magnetic_shared,
                    help="once-per-forward magnetic variant, shared across layers "
                         "(mutually exclusive with --magnetic).")
@@ -342,6 +347,7 @@ def config_from_args(args):
         use_gpu=args.use_gpu, analyse_dataset=args.analyse_dataset,
         model_name=args.model_name,
         spd=args.spd, max_spd=args.max_spd, magnetic=args.magnetic,
+        magnetic_groups=args.magnetic_groups,
         magnetic_shared=args.magnetic_shared,
         magnetic_content=args.magnetic_content, magnetic_content_dim=args.magnetic_content_dim,
         magnetic_dim=args.magnetic_dim, magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,

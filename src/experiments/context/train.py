@@ -156,6 +156,9 @@ def _save_train_record(cfg, run_name, results, runs_jsonl, sweep_meta=None):
         "spd": cfg.spd, "max_spd": cfg.max_spd,
         "rrwp": cfg.rrwp, "max_rw_steps": cfg.max_rw_steps,
         "magnetic": cfg.magnetic, "magnetic_dim": cfg.magnetic_dim,
+        # Bias sharing granularity (0 = legacy per-layer). A first-class column:
+        # a G sweep is otherwise only distinguishable by parsing the run name.
+        "magnetic_groups": cfg.magnetic_groups,
         "magnetic_q": cfg.magnetic_q, "magnetic_m": cfg.magnetic_m,
         "node_counts": list(cfg.node_counts), "token_counts": list(cfg.token_counts),
         "max_train_len": cfg.max_train_len, "n_train": cfg.n_train,

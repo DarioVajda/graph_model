@@ -93,6 +93,9 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         # data keys (dataset-resolvable knobs may be per-dataset mappings)
         "rel_mode": cfg.rel_mode, "max_nodes": cfg.max_nodes, "n_max": cfg.n_max,
         "versions": cfg.versions, "magnetic_m": cfg.magnetic_m, "data_seed": cfg.data_seed,
+        # Bias sharing granularity (0 = legacy per-layer). A first-class column:
+        # a G sweep is otherwise only distinguishable by parsing the run name.
+        "magnetic_groups": cfg.magnetic_groups,
         "data_format_version": cfg.data_format_version,
         "cvt_collapse": cfg.resolved_cvt_collapse("graph"),
         "question_node": cfg.question_node,
