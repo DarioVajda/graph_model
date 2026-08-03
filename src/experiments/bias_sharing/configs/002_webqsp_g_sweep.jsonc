@@ -1,0 +1,103 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // D2 (PLAN §3.1) — magnetic bias SHARING GRANULARITY on WebQSP.
+  //
+  // Sweeps `magnetic_groups` G (see 001 for the mechanism). This is the
+  // sub-experiment that matters most for the trunk decision: WebQSP is the only
+  // one of the three on REAL data with a published headline, and it runs on the
+  // FLEX backend, where the grouped bias tensor is captured into a compiled
+  // score_mod. Flex gradient equivalence is pinned on GPU in
+  // tests/models/test_bias_sharing.py::test_matches_reference_flex.
+  //
+  // RECIPE: 029_question_node_webqsp, `isolated` arm only — the best
+  // graph-native WebQSP result to date and the one behind the README's "Ours"
+  // column (74.07 F1 / 79.05 Hits@1 / 83.60 Hit, seed 2; arm mean 73.5 ± 0.8).
+  // `triplet` graph_construction is deliberately NOT the reference here: it
+  // scores higher (74.49) but is excluded from GTLM claims by decision.
+  //
+  // Everything except `magnetic_groups` is 029 verbatim, and `magnetic_groups`
+  // touches nothing on the data path (train.py gates the collator's magnetic_m
+  // on `magnetic`, which stays true), so every arm reads byte-identical inputs.
+  //
+  // `magnetic_groups: 0` is the legacy per-layer path = the headline arm, rerun
+  // here for the same-hardware step-time baseline. G=16 must match it.
+  //
+  // 6 arms x 3 seeds = 18 runs, ~4 GPU-h each.
+  // Requires 028_question_node_data_prep.jsonc's caches (already built).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_sharing/configs/002_webqsp_g_sweep.jsonc
+  //   python3 -m sweep.report src/experiments/bias_sharing/results/002_webqsp_g_sweep
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "002_webqsp_g_sweep",
+  "results_dir": "src/experiments/bias_sharing/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 9,
+      "partition": "frida",
+      "account": "povejmo",
+      // ONE GPU TYPE across this sub-experiment, which is what makes step time
+      // comparable between arms — but NOT the same type as 001/003. H100 (ixh) is
+      // a single 8-GPU node and 001 saturates it; B200 had free capacity at
+      // submission, and it is also the hardware 029 itself ran on, so these step
+      // times stay comparable to the recipe's own history. Do not compare s/it
+      // ACROSS sub-experiments.
+      "gpus": "B200",
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1, 2],
+  "magnetic_groups": [0, 1, 2, 4, 8, 16],
+
+  // ── 029's isolated arm, verbatim ──────────────────────────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (historical protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
