@@ -442,7 +442,8 @@ next to the timings.
 ### 6.4 Results
 
 Measured on one A100_80GB, `002_webqsp_g_sweep`'s recipe, one fwd+bwd micro-step.
-Reproduce with `python3 -m src.experiments.bias_sharing.bench.report`.
+Recompute with `python3 -m src.experiments.bias_sharing.bench.report` against a
+`results/bench/speed.jsonl` produced by `bench/sbatch_speed.sh`.
 
 #### Node scaling
 
@@ -678,24 +679,49 @@ its published single-layer decomposition at N=512 is:
 | `frozen` (+ gather) | 85.4 ms (**+66**) | 68.0 ms (+30) |
 | `full` (+ scatter) | 83.2 ms | 300.0 ms (**+232**) |
 
-≈ **71% backward atomic scatter, 29% forward gather**, with the bias machinery 85%
+≈ **71% backward atomic scatter, 29% forward gather** there, with the bias machinery 85%
 of the layer. The scatter is not a bandwidth problem — it is **same-address
 contention**: every token pair of a node pair adds into one address in the
 `(B,H,N,N)` bias gradient, so conflicts scale as **tokens-per-node²** (2.99 on
 WebQSP, so ~9 threads serialize per address). The root cause is that `score_mod`
 does per-**token**-pair work for per-**node**-pair data.
 
-`bench/bias_modes.py` re-runs this decomposition at `bias_sharing`'s node counts
-(N up to 4096, where the bias table is 1.07 GB and spills L2) to check the split
-survives out of the N=512 regime it was measured in. **Results: pending job 121687.**
+`bench/bias_modes.py` re-runs that decomposition at `bias_sharing`'s node counts,
+at **`int64` node_ids** — what the collator actually emits — rather than the
+`flex_attn` package's tuned `int32` (job 121687, one attention layer, fwd+bwd ms):
 
-> The first attempt (job 121672) is **invalid** and kept only as
+| N | L | bare kernel | gather | scatter | bias total | bias % of layer | **scatter % of bias** |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 512 | 1759 | 1.6 | 1.2 | 1.8 | 3.0 | 66% | **59%** |
+| 1024 | 3363 | 4.1 | 4.8 | 6.8 | 11.7 | 74% | **58%** |
+| 2048 | 6598 | 13.6 | 19.5 | 23.2 | 42.7 | 76% | **54%** |
+| 4096 | 13034 | 51.0 | 79.3 | 91.2 | 170.5 | 77% | **53%** |
+
+**The split at our shapes is ~55/45, not 71/29**, and it drifts *toward* parity as
+`N` grows. The bias machinery is 66→77% of the layer, confirming the headline, but
+the scatter is not the lopsided villain the N=512 k=2 number implied. The likely
+reason for the difference is the index width: `int64` node_ids double the gather's
+address-math and index-load cost, and finding #10 reports the `int32` win as
+largest exactly where the gather is DRAM-bound. Measuring at production settings
+raises the gather's share.
+
+**So both halves need work, and the cheap half is already solved elsewhere.**
+Porting `int32` node_ids attacks the ~45% gather with a one-line cast that
+`flex_attn` already showed to be lossless; the ~55% scatter needs the harder fix
+(the per-node-pair data / per-token-pair work mismatch).
+
+Sanity check against §6.4's own numbers: 170.5 ms × 16 layers = 2.7 s against
+`speed.py`'s 6.6 s non-magnetic bias term at N=4096. The ~2.4× gap is gradient
+checkpointing recompute, which this isolation bench does not model — the two are
+comparable in *ratio*, not in absolute ms, as `bias_modes.py`'s docstring says.
+
+> Job 121672 is **invalid** and kept only as
 > `results/bench/bias_modes_INVALID_inprocess.jsonl`. It drove all 16 cells in one
 > process to share the flex compile cache; fragmentation accumulated across cells,
 > giving `flex[none]` forwards of 0.71 ms at N=1024 against 90.6 ms at N=2048 (for
 > 4× the work) and OOMs at N≥2048 where `speed.py` runs a full 16-layer model on the
 > same card. `flex_attn/run_sweep.py:5` requires a fresh subprocess per cell for
-> exactly this reason.
+> exactly this reason; `tests/experiments/test_bias_sharing_bench.py` pins it.
 
 One thing that fell out of reading that package: it found `int32` `node_ids` to be
 a free, lossless −1.4 to −20% (finding #10), but the **model path never adopted it**
