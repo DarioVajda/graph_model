@@ -4,8 +4,14 @@
 
 | | |
 |---|---|
-| **Now** | Measure what linearizing the magnetic bias costs, on the **existing** backbone. |
-| **Deferred** | The $O(N)$ factorized implementation. It needs a purpose-built backbone; §7 records the constraints so they are not re-derived. |
+| **Done** | Phases 0–2, 2026-08-05. Results and verdict: `src/experiments/linear_bias/README.md`. |
+| **Deferred** | The $O(N)$ factorized implementation. **Not cleared to start** — see the README §6. It needs a purpose-built backbone; §7 records the constraints so they are not re-derived. |
+
+Headline: linearization is free on GraphQA, costs **18.8% of the magnetic
+headroom** on WebQSP (4.91 pp test F1), and is unresolved on 4k context, where the
+apparent collapse is largely a learning-rate artifact. The price is the bilinear
+*family*, not the parameter count (`014`), and the rank ceiling never binds
+anywhere measured. $M{=}64$, not the incumbent 128, is the operating point.
 
 Order of work: **§4 Phase 0** (offline, gates everything) → **§5 Phase 1**
 (implement `magnetic_linear` and *prove it correct* with tests) → **§6 Phase 2**
@@ -244,11 +250,16 @@ offline does not get GPU time; §6.1's grid is whatever survives here.
 
 | $M$ | $R^2$ (median seed) | resid / bias std | worst layer |
 |---:|---:|---:|---:|
-| 8 | 0.9729 | 0.165 | 0.703 (L6) |
-| 16 | 0.9663 | 0.184 | 0.660 (L6) |
-| 32 | 0.9629 | 0.193 | 0.670 (L5) |
-| 64 | 0.9610 | 0.197 | 0.650 (L5) |
-| 128 | 0.9603 | 0.199 | 0.650 (L5) |
+| 8 | 0.9728 | 0.080 | 0.703 (L6) |
+| 16 | 0.9661 | 0.097 | 0.656 (L6) |
+| 32 | 0.9629 | 0.098 | 0.668 (L5) |
+| 64 | 0.9606 | 0.103 | 0.651 (L5) |
+| 128 | 0.9601 | 0.101 | 0.647 (L5) |
+
+> The residual column is the **measured** `resid_mean_over_layers` printed by
+> `analyse.py`. An earlier revision of this table carried 0.165–0.199, which was
+> the $\sqrt{1-R^2}$ fallback `analyse.py` uses when that field is absent from the
+> JSON — a derived quantity, not a measurement.
 
 Three findings, and the second is the load-bearing one.
 
@@ -411,6 +422,38 @@ wall-clock given cluster width, and Phase 0 is expected to prune the grid first.
   would trigger a full dataset rebuild per value. Use the collator-only override
   from §2.6; the cached $m{=}128$ dataset serves every arm.
 
+### 6.3 Results
+
+Five sweeps ran, all 2026-08-05; full tables, per-dataset reading and the verdict
+live in **`src/experiments/linear_bias/README.md`**. Summary of B→C, quoted as a
+fraction of the D→B magnetic headroom:
+
+| sweep | dataset | B→C | notes |
+|---|---|---:|---|
+| `013` | GraphQA (3 tasks) | **+0.2%** | free; the linear head *wins* `edge_count` |
+| `010` | WebQSP | **18.8%** | −4.91 pp test F1; $M{=}64$ is free, $M{=}16$ costs 29.3% |
+| `014` | WebQSP, linear $d_{mag}{=}256$ | — | 92% param-matched head recovers **none** of it |
+| `011` | context 4k | 94.8% | at the recipe's bias_lr — an unfired metric, see `012` |
+| `012` | context 4k, bias_lr sweep | — | bias_lr 2e-2 takes C from 0.09 → **0.59** |
+
+Three findings that change the plan above:
+
+* **§2.5's two ceilings resolved asymmetrically.** Ceiling (a), rank, never binds
+  — 100% of the trained bias's energy sits inside the rank-$2M$ cap and WebQSP's
+  bias is nearly rank-1. Ceiling (b), the bilinear family, is the entire cost, and
+  `014` proves it is the *family* and not the parameter count.
+* **§4's gate was not predictive.** Offline $R^2 \approx 0.96$ preceded a 4.91 pp
+  loss, and the dataset with the *worse* offline fit (context, 0.93) is not the one
+  that suffered most in training. Phase 0's durable contribution is the rank
+  spectrum, not the fit; do not gate GPU-days on imitation $R^2$ again.
+* **§6.2's "same budget as the arm each is compared against" is insufficient.**
+  `bias_lr` is arm-dependent: the linear head has 4.5× fewer head parameters and
+  no nonlinearity, and wants ~4× the LR. A shared LR prices optimization, not math.
+
+`011`'s $M$-grid ran at the LR `012` later showed to be wrong for the linear head,
+so the context $M$-curve is void. §7 stays deferred until it is re-run at
+bias_lr 2e-2 with a budget past the transition.
+
 ---
 
 ## 7. Deferred — the factorized backbone
@@ -431,7 +474,8 @@ identified against the current code and each is a real blocker, not a nicety.
 3. **The diagonal mask is not expressible.** `_finalize` (`bias.py:211`) zeroes
    $b_{ii}$; the factorized form gives $q_i \cdot k_i \neq 0$ with no way to
    subtract it. **Phase 2 should therefore also ablate the diagonal mask**, so the
-   future delta is not confounded with it.
+   future delta is not confounded with it. **Not done** — every §6.3 number is
+   with the mask on, so this confound is still outstanding.
 4. **"$O(N)$" is conditional on truncation.** The extra width is $2M$. Untruncated
    ($M=N$) the method degenerates to $O(N^2)$. At $M{=}32$, $2M{=}64$ equals
    Llama-1B's whole `head_dim`: expect ~1.6–1.9× on the attention step from the
