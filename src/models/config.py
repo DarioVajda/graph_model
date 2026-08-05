@@ -25,6 +25,7 @@ class GraphConfigMixin:
         magnetic_shared: bool = False,
         magnetic_groups: int = 0,
         magnetic_content: bool = False,
+        magnetic_linear: bool = False,
         magnetic_dim: int = 32,
         magnetic_content_dim: int = 128,
         magnetic_q: float = 0.25,
@@ -55,13 +56,15 @@ class GraphConfigMixin:
         self.magnetic_groups = magnetic_groups
         n_layers = getattr(self, "num_hidden_layers", None)
         if magnetic_groups:
-            if sum(map(bool, (magnetic, magnetic_shared, magnetic_content))) > 0:
+            if sum(map(bool, (magnetic, magnetic_shared, magnetic_content,
+                              magnetic_linear))) > 0:
                 raise ValueError(
                     "magnetic_groups is mutually exclusive with magnetic / "
-                    "magnetic_shared / magnetic_content; got magnetic_groups="
-                    f"{magnetic_groups} alongside magnetic={magnetic}, "
-                    f"magnetic_shared={magnetic_shared}, "
-                    f"magnetic_content={magnetic_content}.")
+                    "magnetic_shared / magnetic_content / magnetic_linear; got "
+                    f"magnetic_groups={magnetic_groups} alongside "
+                    f"magnetic={magnetic}, magnetic_shared={magnetic_shared}, "
+                    f"magnetic_content={magnetic_content}, "
+                    f"magnetic_linear={magnetic_linear}.")
             if n_layers is not None and not 1 <= magnetic_groups <= n_layers:
                 raise ValueError(
                     f"magnetic_groups={magnetic_groups} must be in [1, "
@@ -71,6 +74,22 @@ class GraphConfigMixin:
         # features, plus the live hidden states (see MagneticContentBias). Its
         # down-projection width is magnetic_content_dim (d_proj).
         self.magnetic_content = magnetic_content
+        # Linear-head magnetic bias (see LinearMagneticBias / LINEAR_BIAS.md).
+        # Consumes exactly the same magnetic_V / magnetic_lambdas features as
+        # `magnetic`, so every dataset/collator gate that keys on `magnetic` must
+        # also accept this flag — a gate that misses it yields a run with NO bias
+        # at all, which trains cleanly and looks like a clean negative result.
+        self.magnetic_linear = magnetic_linear
+        if magnetic_linear:
+            clash = [n for n, v in (("magnetic", magnetic),
+                                    ("magnetic_shared", magnetic_shared),
+                                    ("magnetic_content", magnetic_content),
+                                    ("magnetic_groups", bool(magnetic_groups))) if v]
+            if clash:
+                raise ValueError(
+                    "magnetic_linear replaces the magnetic head; enabling it "
+                    f"alongside {clash} stacks two biases on the same features, "
+                    "which is never the intended arm. Pass exactly one placement.")
         self.magnetic_dim = magnetic_dim
         self.magnetic_content_dim = magnetic_content_dim
         self.magnetic_q = magnetic_q

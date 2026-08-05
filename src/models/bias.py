@@ -19,6 +19,8 @@ RWSEBias      - same pattern for random-walk structural encodings
 RRWPBias      - small MLP applied to multi-hop random-walk probability vectors
 MagneticBias  - complex-eigenvector-based directional encoding via deep-set MLP
 MagneticContentBias - MagneticBias widened with a live per-node content summary
+LinearMagneticBias  - MagneticBias with a linear head instead of the MLP, so the
+                      bias is a bilinear form (see LINEAR_BIAS.md)
 K-hop gate (hard) - -inf for node pairs more than K hops apart; K=0 = disabled
 """
 
@@ -197,10 +199,14 @@ class MagneticBias(BaseBias):
         halving the largest per-layer intermediates. Uses the same parameters —
         ``proj[0]``'s weight is just split into its real/imag column halves.
         """
-        W1, b1 = self.proj[0].weight, self.proj[0].bias           # (m, 2m), (m)
-        m = W1.shape[0]
-        phiR = phi @ W1[:, :m].T                                  # (B, M, m)
-        phiI = phi @ W1[:, m:].T                                  # (B, M, m)
+        W1, b1 = self.proj[0].weight, self.proj[0].bias           # (out, 2m), (out)
+        # Split at HALF THE INPUT width — the real/imag halves of proj[0]'s input
+        # — not at its output width. The two coincide for MagneticBias (out =
+        # magnetic_dim = in/2) but not for LinearMagneticBias, whose head maps
+        # straight to num_heads.
+        m = W1.shape[1] // 2
+        phiR = phi @ W1[:, :m].T                                  # (B, M, out)
+        phiI = phi @ W1[:, m:].T                                  # (B, M, out)
         return (
             torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phiR)
             + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phiR)
@@ -317,6 +323,108 @@ class MagneticContentBias(MagneticBias):
         return self._finalize(b, device)
 
 
+class LinearMagneticBias(MagneticBias):
+    """MagneticBias with the 2-layer MLP head replaced by a single linear map.
+
+    Why: the MLP's pointwise SiLU is the *only* thing standing between this bias
+    and a bilinear form. Drop it and
+
+        b^(h)(i,j) = sum_c W[c,h] * [Re K ‖ Im K]_c(i,j)
+
+    becomes an inner product of two per-node vectors, i.e. exactly what attention
+    already computes — so a future backbone can fold it into wider Q/K and delete
+    the (B,N,N,·) tensor and the flex ``score_mod`` outright. See
+    ``src/models/LINEAR_BIAS.md``; that optimized backbone is deliberately NOT
+    what this class is. This is the same dense path as ``MagneticBias``, so any
+    measured quality delta is attributable to the math and not an implementation.
+
+    Reuses ``_phi`` unchanged (the eigenvalue DeepSets is untouched); only the
+    head differs. ``proj`` is kept as an ``nn.Sequential`` of length 3 with
+    Identity in the nonlinearity slot so that ``_folded_spectral`` — which reads
+    ``self.proj[0]`` — works verbatim, and the folded/unfolded parity test applies
+    to both classes without a special case.
+
+    Zero-initialised like ``MagneticBias.proj[2]``, so the bias starts at exactly
+    0 and cannot destabilise training from step 0.
+    """
+
+    config_key = 'magnetic_linear'
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        super().__init__(num_heads, head_dim, bias_config)
+        magnetic_dim = getattr(bias_config, 'magnetic_dim', 32)
+        # One linear map over [Re K ‖ Im K] (2*magnetic_dim) -> heads. Slot 1 is
+        # Identity rather than SiLU: that single substitution IS the experiment.
+        self.proj = nn.Sequential(
+            nn.Linear(magnetic_dim * 2, num_heads, bias=True),
+            nn.Identity(),
+            nn.Identity(),
+        )
+        nn.init.zeros_(self.proj[0].weight)
+        nn.init.zeros_(self.proj[0].bias)
+        self.proj[0]._is_hf_initialized = True
+
+    def forward(
+        self, *, dtype, device,
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        num_nodes: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Optional[torch.Tensor]:
+        parts = self._phi(magnetic, num_nodes, device)
+        if parts is None:
+            return None
+        V_real, V_imag, phi = parts
+
+        if getattr(self, "legacy_unfolded", False):
+            # Parity path: materialize [Re ‖ Im] and apply the head to it, the
+            # naive reading of the formula above.
+            real = (torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phi)
+                    + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phi))
+            imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi)
+                    - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi))
+            b = self.proj[0](torch.cat([real, imag], dim=-1))
+        else:
+            # The head is linear, so it folds into phi exactly as proj[0] does in
+            # MagneticBias: _folded_spectral already emits (B,N,N,out_features)
+            # with the head applied, and no further layer is needed.
+            b = self._folded_spectral(V_real, V_imag, phi)        # (B, N, N, H)
+
+        return self._finalize(b, device)
+
+    def structural_factors(
+        self, magnetic: Tuple[torch.Tensor, torch.Tensor],
+        num_nodes: torch.Tensor, device,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """The bilinear factorization: ``(Q_struct, K_struct)`` with
+
+            b^(h)(i,j) = <Q_struct[b,h,i,:], K_struct[b,j,:]>
+
+        shaped ``(B, H, N, 2M)`` and ``(B, N, 2M)``. Every learned parameter lands
+        on the query side, so ``K_struct`` carries no head dimension — it is a
+        universal structural dictionary that broadcasts across GQA groups.
+
+        Not used by ``forward`` (which stays dense so Phase 2 measures math, not
+        an implementation). It exists so the equivalence can be *tested* now, in
+        fp64, before any backbone is built on top of it — see LINEAR_BIAS.md §7.
+
+        NOTE: this reproduces the bias off the diagonal only. ``_finalize`` zeroes
+        b_ii, and an inner product cannot express that zeroing (§7.3).
+        """
+        V_real, V_imag, phi = self._phi(magnetic, num_nodes, device)
+        W = self.proj[0].weight                                   # (H, 2m)
+        m = W.shape[1] // 2
+        # Psi = Phi @ W_R / W_I  -> (B, M, H): the eigenvalue projection, O(M).
+        psi_R = phi @ W[:, :m].T
+        psi_I = phi @ W[:, m:].T
+
+        # Q = [ V_R*psi_R + V_I*psi_I ‖ V_I*psi_R - V_R*psi_I ], K = [ V_R ‖ V_I ]
+        vr, vi = V_real.unsqueeze(1), V_imag.unsqueeze(1)         # (B,1,N,M)
+        pr, pi = psi_R.transpose(1, 2).unsqueeze(2), psi_I.transpose(1, 2).unsqueeze(2)
+        q_struct = torch.cat([vr * pr + vi * pi, vi * pr - vr * pi], dim=-1)
+        k_struct = torch.cat([V_real, V_imag], dim=-1)            # (B, N, 2M)
+        return q_struct, k_struct
+
+
 class MagneticSharedBias(MagneticBias):
     """MagneticBias computed ONCE per forward and shared by every layer.
 
@@ -343,6 +451,7 @@ BIAS_TYPES: list[type[BaseBias]] = [
     MagneticBias,
     MagneticSharedBias,
     MagneticContentBias,
+    LinearMagneticBias,
 ]
 """Add new bias types here — GraphAttentionBias picks them up automatically."""
 
