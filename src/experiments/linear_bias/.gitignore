@@ -1,0 +1,3 @@
+# Sweep output: slurm logs, per-job scripts and array maps are regenerated on
+# every submission. Only the run records are force-added (see the commit).
+results/

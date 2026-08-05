@@ -1,0 +1,113 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 2 (LINEAR_BIAS.md §6) — the same four arms as 010, on the context
+  // experiment. RECIPE: 003_context4k_g_sweep verbatim, bias axes only changed.
+  //
+  // Why both datasets: they sit in DIFFERENT regimes and neither predicts the
+  // other. Here node_counts max at 128 and magnetic_m is 128, so M = min(128, N)
+  // = N — the eigenbasis is COMPLETE and the rank ceiling 2M = 2N never binds.
+  // Reducing M is therefore a first truncation. On WebQSP (010) the basis is
+  // already truncated for the ~26% of graphs above 128 nodes, so the same knob
+  // means something different. If the two disagree, that disagreement is itself
+  // the result.
+  //
+  // Arms and the M axis: see 010's header. `magnetic_m_collate` is the
+  // collator-only knob (not in data_config_key), so the whole grid reuses the
+  // one cached build — and note that context's validate() explicitly refuses
+  // magnetic_m < max(node_counts), which is exactly why the sweep goes through
+  // magnetic_m_collate instead. That exemption is deliberate: truncating the
+  // eigenbasis is the measurement, and only what the collator hands the model is
+  // narrowed, never the build.
+  //
+  // 7 arms x 3 seeds = 21 runs, ~3.5 GPU-h each (sacct, 003).
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/linear_bias/configs/011_context4k_linear.jsonc
+  //   python3 -m sweep.report src/experiments/linear_bias/results/011_context4k_linear
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "011_context4k_linear",
+  "results_dir": "src/experiments/linear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      // No max_concurrent: every arm should run at once. This sweep measures
+      // QUALITY (F1 per arm per M), not step time, so nothing here depends on the
+      // runs being serialised or co-located — the throttle would only add
+      // wall-clock.
+      "partition": "frida",
+      "account": "povejmo",
+      // Any of the three current-generation cards. A list renders as
+      // `--gres gpu:1 --constraint GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100`, which
+      // is how Slurm expresses "one of these types" (gres itself cannot OR).
+      // A100 and L4 are excluded deliberately: the L4's 24 GB will not hold a
+      // 4096-token flex step.
+      //
+      // NOTE this breaks step-time comparability ACROSS arms, which is why the
+      // g-sweeps pinned a single type. That is an accepted trade here: the
+      // deliverable is quality-vs-M, and GPU type does not move F1. Do not quote
+      // s/it between arms from this sweep.
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1, 2],
+
+  "arm": [
+    {"spd": false, "magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 128},
+    {"spd": false, "magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 16},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 64},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 32},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 16},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_m_collate": 0}
+  ],
+
+  // ── 003_context4k_g_sweep, verbatim below this line ───────────────────────
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 4096,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  // Part of the data cache key; held at the built value even where spd is off.
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "compile_mode": "default",
+
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 500,
+
+  "wandb_project": "GraphLLM"
+}
