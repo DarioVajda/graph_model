@@ -87,9 +87,21 @@ class RunConfig:
     # per-layer and G = 1 is one instance for the whole stack. Purely a model-side
     # knob: it does not enter data_config_key(), so a G sweep reuses one build.
     magnetic_groups: int = 0
+    # Linear-head magnetic bias (LinearMagneticBias / src/models/LINEAR_BIAS.md).
+    # Consumes exactly the same eigenvector DATA as `magnetic`, so it must NOT
+    # change data_config_key() — the arm reuses the existing build — and every
+    # gate that keys on `magnetic` must accept it too (see uses_magnetic).
+    magnetic_linear: bool = False
     magnetic_dim: int = 128
     magnetic_q: float = 0.25
     magnetic_m: int = 128                       # eigenvectors kept (0 -> all)
+    # Collator-only eigenvector truncation for the M-sweep (LINEAR_BIAS.md §2.6).
+    # 0 = follow magnetic_m. Deliberately NOT in data_config_key(): eigenvalues
+    # come back from `eigh` in ascending order and both the builder and the
+    # collator truncate by prefix slice, so slicing a stored-m dataset to M here
+    # is bit-identical to having built it at M — and the whole M-grid therefore
+    # runs off ONE build instead of one build per M.
+    magnetic_m_collate: int = 0
 
     # ── attention ──────────────────────────────────────────────────────────────
     # k_hop=0 keeps the prefix dense, which is what the dilution claim is about;
@@ -286,13 +298,70 @@ class RunConfig:
             cfg.update(spd=True, max_spd=self.max_spd)
         if self.rrwp:
             cfg.update(rrwp=True, max_rw_steps=self.max_rw_steps)
-        if self.magnetic:
+        if self.uses_magnetic:
             # magnetic_groups replaces the per-layer instance with G grouped ones;
             # same features, same data, different sharing granularity.
-            share = ({"magnetic_groups": self.magnetic_groups} if self.magnetic_groups
-                     else {"magnetic": True})
+            if self.magnetic_linear:
+                share = {"magnetic_linear": True}
+            elif self.magnetic_groups:
+                share = {"magnetic_groups": self.magnetic_groups}
+            else:
+                share = {"magnetic": True}
             cfg.update(**share, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
         return cfg
+
+    def data_config_key_candidates(self):
+        """This config's cache key, then any SUPERSET build that can serve it.
+
+        A built dataset is keyed by which feature COLUMNS it contains. A training
+        run that switches a feature off does not need those columns removed — it
+        simply never instantiates a module for them (``GraphAttentionBias`` builds
+        only enabled types, and an unconsumed column in the batch is inert). So a
+        `spd=False` run can read a `spd=True` build, and only the *build* path
+        needs the exact key.
+
+        Without this, the Phase 2 arms that drop SPD (LINEAR_BIAS.md §3: SPD has
+        no f(i)·g(j) form and so cannot survive the factorization) would each
+        demand a fresh multi-hour rebuild of a strict SUBSET of data that already
+        exists on disk.
+
+        Ordered most- to least-specific; the loader takes the first that exists.
+        """
+        seen, out = set(), []
+        for spd in ({self.spd, True} if not self.spd else {True}):
+            for rrwp in ({self.rrwp, True} if not self.rrwp else {True}):
+                for mag in ({self.uses_magnetic, True} if not self.uses_magnetic
+                            else {True}):
+                    key = self._data_config_key(spd=spd, rrwp=rrwp, magnetic=mag)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(key)
+        # Exact key first, whatever the iteration order above produced.
+        exact = self.data_config_key()
+        out = [exact] + [k for k in out if k != exact]
+        return out
+
+    @property
+    def uses_magnetic(self) -> bool:
+        """True when the run consumes magnetic eigenvector features.
+
+        Single source of truth for every dataset/collator/model gate. `magnetic`
+        and `magnetic_linear` differ only in the HEAD applied to the same
+        features, so a gate that checks `magnetic` alone would emit no
+        eigenvectors for the linear arm — and the bias would silently return None,
+        producing a bias-free run that trains fine and reads as a clean negative.
+        """
+        return bool(self.magnetic or self.magnetic_linear)
+
+    @property
+    def collate_magnetic_m(self) -> int:
+        """Eigenvector count the COLLATOR should truncate to (0 = no truncation).
+
+        Distinct from `magnetic_m`, which is a data-build knob in the cache key.
+        """
+        if not self.uses_magnetic:
+            return 0
+        return self.magnetic_m_collate or self.magnetic_m
 
     # ── derived: cache identity ────────────────────────────────────────────────
 
@@ -302,8 +371,21 @@ class RunConfig:
         Everything that changes the BYTES of a built dataset is in here; nothing
         else is (so a training-seed sweep reuses one build).
         """
+        return self._data_config_key(spd=self.spd, rrwp=self.rrwp,
+                                     magnetic=self.uses_magnetic)
+
+    def _data_config_key(self, *, spd, rrwp, magnetic):
+        """``data_config_key`` with the feature flags supplied explicitly.
+
+        Split out so ``data_config_key_candidates`` can name a SUPERSET build
+        without mutating the config. Every other component is read from ``self``,
+        so the two can never drift.
+        """
         grid = f"n{'-'.join(map(str, self.node_counts))}_t{'-'.join(map(str, self.token_counts))}"
-        feats = f"spd{int(self.spd)}rrwp{int(self.rrwp)}mag{int(self.magnetic)}"
+        # `uses_magnetic`, not `magnetic`: the linear arm consumes the identical
+        # eigenvector bytes, so it must map to the SAME build. Keying on
+        # `magnetic` alone would silently fork a second (identical) dataset.
+        feats = f"spd{int(spd)}rrwp{int(rrwp)}mag{int(magnetic)}"
         model_tag = self.model_name.split("/")[-1]
         # Appended ONLY when hops > 0, so the already-built lookup datasets keep
         # their existing keys rather than being orphaned by a new field.
@@ -321,6 +403,24 @@ class RunConfig:
                 f"_dev{self.n_dev}_te{self.n_test}_code{self.code_len}_ids{self.id_pool}"
                 f"_{feats}_m{self.magnetic_m}_q{self.magnetic_q}_spdcut{self.max_spd}"
                 f"_rw{self.max_rw_steps}_seed{self.data_seed}_v{self.data_format_version}")
+
+    def resolved_data_root(self, output_root):
+        """Absolute path of the build this config should READ.
+
+        The exact key if it exists, else the first superset build that does (see
+        ``data_config_key_candidates``). Raises rather than silently returning a
+        non-existent path, so a missing build fails at startup instead of
+        mid-training.
+        """
+        import os
+        for key in self.data_config_key_candidates():
+            path = os.path.join(output_root, key)
+            if os.path.isdir(path):
+                return path
+        raise FileNotFoundError(
+            "No built dataset for this config. Tried (most specific first):\n  "
+            + "\n  ".join(self.data_config_key_candidates())
+            + f"\nunder {output_root}. Build it with --mode data_prep.")
 
     def run_name(self):
         """Default (standalone) run name; the sweep runner overrides this."""
@@ -415,10 +515,25 @@ class RunConfig:
                 f"for fan_out={self.fan_out}, code_len={self.code_len}: a {self.needle_tokens()}-"
                 f"token needle plus {SUFFIX_SLACK} tokens of slack leaves no room for the "
                 "needle offset to vary. Raise token_counts or lower fan_out.")
-        if self.magnetic and self.magnetic_m and self.magnetic_m < max(self.node_counts):
+        if self.uses_magnetic and self.magnetic_m and self.magnetic_m < max(self.node_counts):
             raise ValueError(
                 f"magnetic_m={self.magnetic_m} truncates the eigenbasis below the largest "
                 f"graph ({max(self.node_counts)} nodes). Set magnetic_m >= max(node_counts) or 0.")
+        # magnetic_m_collate is exempt from the check above ON PURPOSE: truncating
+        # the eigenbasis is exactly what the M-sweep measures (LINEAR_BIAS.md
+        # §2.6). The build stays complete; only what the collator hands the model
+        # is narrowed, so one build serves the whole grid.
+        if self.magnetic_m_collate:
+            if not self.uses_magnetic:
+                raise ValueError(
+                    f"magnetic_m_collate={self.magnetic_m_collate} set with no magnetic "
+                    "bias enabled — it would silently do nothing.")
+            if self.magnetic_m and self.magnetic_m_collate > self.magnetic_m:
+                raise ValueError(
+                    f"magnetic_m_collate={self.magnetic_m_collate} exceeds the built "
+                    f"magnetic_m={self.magnetic_m}; the collator can only truncate what "
+                    "the dataset stores, so this would silently fall back to the smaller "
+                    "value and mislabel the run.")
         if self.k_hop < 0:
             raise ValueError("k_hop must be >= 0.")
         return self

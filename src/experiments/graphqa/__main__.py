@@ -154,12 +154,19 @@ def build_parser():
                    help="Layer-sharing granularity of the magnetic bias: G instances "
                         "instead of one per layer (0 = per-layer, 1 = one for the "
                         "whole stack). Model-side only; the dataset is unchanged.")
+    p.add_argument("--magnetic-linear", action=B, default=d.magnetic_linear,
+                   help="Replace the magnetic bias's MLP head with a single linear map "
+                        "onto the heads, making the bias bilinear in the eigenvectors "
+                        "(src/models/LINEAR_BIAS.md). Use with --no-magnetic.")
     p.add_argument("--magnetic-dim", type=int, default=d.magnetic_dim,
                    help="model bias-MLP hidden width.")
     p.add_argument("--magnetic-q", type=float, default=d.magnetic_q,
                    help="magnetic-Laplacian charge (a data-prep knob: part of the cache key).")
     p.add_argument("--magnetic-m", type=int, default=d.magnetic_m,
                    help="# magnetic eigenvectors kept (0 = all N).")
+    p.add_argument("--magnetic-m-collate", type=int, default=d.magnetic_m_collate,
+                   help="Collator-only cap on the eigenvector count (0 = no override). "
+                        "Outside the dataset cache key, so an M-sweep reuses one build.")
     p.add_argument("--laplacian", action=B, default=d.laplacian)
     p.add_argument("--rwse", action=B, default=d.rwse)
 
@@ -214,8 +221,10 @@ def config_from_args(args):
         spd=args.spd, max_spd=args.max_spd,
         rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
         magnetic=args.magnetic, magnetic_groups=args.magnetic_groups,
+        magnetic_linear=args.magnetic_linear,
         magnetic_dim=args.magnetic_dim,
         magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
+        magnetic_m_collate=args.magnetic_m_collate,
         laplacian=args.laplacian, rwse=args.rwse,
         max_length=args.max_length, val_fraction=args.val_fraction, use_gpu=args.use_gpu,
         lora=args.lora, lora_r=args.lora_r, lora_dropout=args.lora_dropout,

@@ -100,7 +100,7 @@ def build_collator(cfg, tokenizer, for_grid=False):
     so every batch's raw length already sits on a cell length and block alignment is
     the only padding added.
     """
-    magnetic_m = cfg.magnetic_m if cfg.magnetic else 0
+    magnetic_m = cfg.collate_magnetic_m
     len_buckets = cfg.grid_len_buckets() if for_grid else cfg.len_buckets()
     return GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,

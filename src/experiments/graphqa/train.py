@@ -46,6 +46,11 @@ def _save_train_record(cfg, run_name, sizes, results, runs_jsonl, sweep_meta=Non
         # Bias sharing granularity (0 = legacy per-layer). A first-class column:
         # a G sweep is otherwise only distinguishable by parsing the run name.
         "magnetic_groups": cfg.magnetic_groups,
+        # First-class columns for the same reason magnetic_groups is one: without
+        # them the only way to tell a linear arm from a magnetic one in runs.jsonl
+        # is to parse the run name, which is fragile and silently wrong.
+        "magnetic_linear": cfg.magnetic_linear,
+        "magnetic_m_collate": cfg.collate_magnetic_m,
         "seed": cfg.seed,
         # ── hyperparameters ──
         "model_name": cfg.model_name, "impl": cfg.impl, "dtype": cfg.dtype,
@@ -116,11 +121,12 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=cfg.lora_config())
     print_trainable_parameters(model)
 
-    # magnetic_m is the collator's eigenvector cap (0 -> keep all, which is what the
-    # cached datasets store); it is NOT the model's magnetic_dim.
+    # The collator's eigenvector cap (0 -> keep all, which is what the cached
+    # datasets store); it is NOT the model's magnetic_dim. Gated on `uses_magnetic`,
+    # not `magnetic`, so the linear arm is fed the same eigenvectors.
     collator = GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
-        magnetic_m=cfg.magnetic_m if cfg.magnetic else 0,
+        magnetic_m=cfg.collate_magnetic_m,
         pad_to_block=(cfg.backend() == "flex"), max_spd=cfg.max_spd)
 
     steps_per_epoch = max(1, len(train_dataset) // cfg.batch_size // cfg.accumulation_steps)

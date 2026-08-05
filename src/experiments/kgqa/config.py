@@ -208,9 +208,21 @@ class RunConfig:
     # change the data cache key (architecture-only knob).
     magnetic_content: bool = False
     magnetic_content_dim: int = 128           # magnetic_content down-projection width (d_proj)
+    # Linear-head magnetic bias (LinearMagneticBias / src/models/LINEAR_BIAS.md).
+    # Replaces `magnetic`'s 2-layer MLP head with one linear map, making the bias a
+    # bilinear form. Consumes the SAME eigenvector data, so it is an architecture-
+    # only knob and does NOT change the data cache key.
+    magnetic_linear: bool = False
     magnetic_dim: int = 128                   # magnetic-bias MLP hidden width (model architecture)
     magnetic_q: float = 0.25                  # magnetic-Laplacian charge
     magnetic_m: int = 128                     # # magnetic eigenvectors (data prep + collator; 0 = all N)
+    # Collator-only eigenvector truncation for the M-sweep (LINEAR_BIAS.md §2.6).
+    # 0 = follow magnetic_m. Deliberately NOT in data_config_key(): `eigh` returns
+    # ascending eigenvalues and both the builder and the collator truncate by
+    # prefix slice, so slicing a stored-m dataset to M here is bit-identical to
+    # having built it at M. One build therefore serves the whole M-grid instead of
+    # one 3.4 GB rebuild per value.
+    magnetic_m_collate: int = 0
     # RRWP (Relative Random Walk Probabilities) — the third encoding of the
     # paper's SPD+RRWP+MagLap suite, absent from the KGQA arm until now. It was
     # dropped here for storage: the column is (n, n, max_rw_steps) float32 per
@@ -362,6 +374,31 @@ class RunConfig:
         import torch
         return torch.bfloat16 if self.dtype == "bf16" else torch.float32
 
+    @property
+    def uses_magnetic(self) -> bool:
+        """True when the run consumes magnetic eigenvector features.
+
+        Single source of truth for every dataset/collator gate. All four
+        placements — `magnetic`, `magnetic_shared`, `magnetic_content`,
+        `magnetic_linear` — read the same eigenvectors and differ only in where or
+        how the head is applied, so a gate that enumerates a subset silently emits
+        no features for the missing arm. The bias then returns None and the run
+        trains with no graph bias at all, which looks exactly like a clean
+        negative result.
+        """
+        return bool(self.magnetic or self.magnetic_shared
+                    or self.magnetic_content or self.magnetic_linear)
+
+    @property
+    def collate_magnetic_m(self) -> int:
+        """Eigenvector count the COLLATOR truncates to (0 = emit no eigenvectors).
+
+        Distinct from `magnetic_m`, the data-build knob that lives in the cache key.
+        """
+        if not self.uses_magnetic:
+            return 0
+        return self.magnetic_m_collate or self.magnetic_m
+
     def bias_params(self):
         """The graph-bias flag/architecture dict (formerly the hard-coded ``BIAS_PARAMS``).
 
@@ -386,6 +423,11 @@ class RunConfig:
             # and adds the content down-projection (magnetic_content_dim).
             cfg.update(magnetic_content=True, magnetic_content_dim=self.magnetic_content_dim,
                        magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+        if self.magnetic_linear:
+            # Same spectral machinery and same features as `magnetic`; only the
+            # head differs, so magnetic_dim/magnetic_q carry over unchanged.
+            cfg.update(magnetic_linear=True, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q)
         if self.rrwp:
             # max_rw_steps is the RRWPBias MLP's INPUT width, so it must equal the
             # stored column's last dim — data prep and model read the same field.
@@ -550,6 +592,30 @@ class RunConfig:
             raise ValueError(
                 "rrwp is a graph-arm knob (the flat serialization builds no graph to "
                 "walk); remove it from flat_* runs.")
+        if self.magnetic_linear:
+            # `magnetic_linear` swaps the head on the same term, so it cannot
+            # coexist with any other placement of that term. Raising here (rather
+            # than letting the bias quietly return None or double up) is what stops
+            # a misconfigured arm from training cleanly and reading as a result.
+            others = {"magnetic": self.magnetic, "magnetic_shared": self.magnetic_shared,
+                      "magnetic_content": self.magnetic_content,
+                      "magnetic_groups": bool(self.magnetic_groups)}
+            clash = [k for k, v in others.items() if v]
+            if clash:
+                raise ValueError(
+                    f"magnetic_linear is a different HEAD on the same magnetic term, so "
+                    f"it cannot combine with {clash}. Enable exactly one placement.")
+        if self.magnetic_m_collate:
+            if not self.uses_magnetic:
+                raise ValueError(
+                    f"magnetic_m_collate={self.magnetic_m_collate} set with no magnetic "
+                    "bias enabled — it would silently do nothing.")
+            if self.magnetic_m and self.magnetic_m_collate > self.magnetic_m:
+                raise ValueError(
+                    f"magnetic_m_collate={self.magnetic_m_collate} exceeds the built "
+                    f"magnetic_m={self.magnetic_m}; the collator can only truncate what the "
+                    "dataset stores, so this would silently fall back to the smaller value "
+                    "and mislabel the run.")
         if self.magnetic and self.magnetic_shared:
             raise ValueError(
                 "spd/magnetic/magnetic_shared: magnetic and magnetic_shared are two "

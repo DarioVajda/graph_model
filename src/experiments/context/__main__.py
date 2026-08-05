@@ -105,9 +105,17 @@ def build_parser():
                    help="Layer-sharing granularity of the magnetic bias: G instances "
                         "instead of one per layer (0 = per-layer, 1 = one for the "
                         "whole stack). Model-side only; the dataset is unchanged.")
+    p.add_argument("--magnetic-linear", action=B, default=d.magnetic_linear,
+                   help="linear-head magnetic bias: same eigenvectors as --magnetic "
+                        "but one linear map instead of the 2-layer MLP, making the "
+                        "bias a bilinear form (see src/models/LINEAR_BIAS.md).")
     p.add_argument("--magnetic-dim", type=int, default=d.magnetic_dim)
     p.add_argument("--magnetic-q", type=float, default=d.magnetic_q)
     p.add_argument("--magnetic-m", type=int, default=d.magnetic_m)
+    p.add_argument("--magnetic-m-collate", type=int, default=d.magnetic_m_collate,
+                   help="collator-only eigenvector truncation for the M-sweep "
+                        "(0 = follow --magnetic-m). NOT in the data cache key, so "
+                        "the whole M-grid reuses one build.")
 
     # ── attention ──────────────────────────────────────────────────────────────
     p.add_argument("--k-hop", type=int, default=d.k_hop)
@@ -193,6 +201,7 @@ def config_from_args(args):
         spd=args.spd, max_spd=args.max_spd,
         rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
         magnetic=args.magnetic, magnetic_groups=args.magnetic_groups,
+        magnetic_linear=args.magnetic_linear, magnetic_m_collate=args.magnetic_m_collate,
         magnetic_dim=args.magnetic_dim,
         magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
         k_hop=args.k_hop, k_hop_directed=args.k_hop_directed,

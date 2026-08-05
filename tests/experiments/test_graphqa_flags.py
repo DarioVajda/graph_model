@@ -73,3 +73,65 @@ def test_unknown_key_fails_fast():
     """An unknown config key becomes an unknown flag and must fail the run."""
     with pytest.raises(SystemExit):
         build_parser().parse_args(render_flags({"not_a_real_knob": 1}))
+
+
+# ── every field must actually be forwarded, not just parsed ───────────────────
+
+# Fields whose value cannot be perturbed generically, with the reason.
+_UNPERTURBABLE = {
+    "mode": "changes which entry point runs",
+    "model_name": "a different backbone changes the valid impl set",
+    "impl": "constrained by the backbone",
+    "graph_type": "covered explicitly above",
+    "task": "covered explicitly above",
+    "dtype": "covered explicitly above",
+    "laplacian": "unwired -> validate() rejects it (tested above)",
+    "rwse": "unwired -> validate() rejects it (tested above)",
+    "val_fraction": "must stay in (0, 1)",
+    "max_steps": "-1 is the sentinel; +1 gives 0, a different sentinel",
+}
+
+# Overrides a field needs alongside it to stay valid.
+_COMPANIONS = {
+    "magnetic_linear": {"magnetic": False},
+    "magnetic_groups": {"magnetic": True},
+}
+
+
+def _perturb(name, value):
+    """A value different from the default, or None if there isn't an obvious one."""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 1
+    if isinstance(value, float):
+        return value * 2
+    if isinstance(value, str):
+        return None
+    if value is None:
+        return "GraphLLM" if name == "wandb_project" else None
+    return None
+
+
+@pytest.mark.parametrize("field", [f for f in RunConfig.__dataclass_fields__])
+def test_every_field_is_forwarded_from_cli(field):
+    """A flag that parses but is dropped by ``config_from_args`` is invisible.
+
+    That exact bug shipped once: --magnetic-linear and --magnetic-m-collate were
+    added to the parser but not to the RunConfig(...) call, so 45 submitted jobs
+    silently trained the DEFAULT arm — the linear runs came out byte-identical to
+    the no-bias floor, which reads as "linearization destroys the task" rather
+    than as a wiring fault. Enumerate the fields so a new knob cannot repeat it.
+    """
+    if field in _UNPERTURBABLE:
+        pytest.skip(_UNPERTURBABLE[field])
+    default = getattr(RunConfig(), field)
+    alt = _perturb(field, default)
+    if alt is None:
+        pytest.skip(f"no generic perturbation for {field}={default!r}")
+    parser_dests = {a.dest for a in build_parser()._actions}
+    if field not in parser_dests:
+        pytest.skip(f"{field} has no CLI flag")
+    cfg = _roundtrip({field: alt, **_COMPANIONS.get(field, {})})
+    assert getattr(cfg, field) == alt, (
+        f"--{field.replace('_', '-')} parses but config_from_args does not forward it")

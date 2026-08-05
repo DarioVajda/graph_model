@@ -34,9 +34,15 @@ OUTPUT_ROOT = os.path.join(EXPERIMENT_DIR, "processed_datasets")
 RAW_DATA_DIR = os.path.join(EXPERIMENT_DIR, "raw_data")
 
 
-def split_paths(cfg):
-    """``{split_name: base_path}`` for every split this config defines."""
-    root = os.path.join(OUTPUT_ROOT, cfg.data_config_key())
+def split_paths(cfg, root=None):
+    """``{split_name: base_path}`` for every split this config defines.
+
+    Pure string building — it never touches the filesystem, so split names can be
+    enumerated for a config that was never built (which is all several tests
+    want). ``root`` defaults to this config's EXACT key; pass a resolved root
+    (see ``load_split``) to read from a superset build instead.
+    """
+    root = root or os.path.join(OUTPUT_ROOT, cfg.data_config_key())
     paths = {"train": os.path.join(root, "train"), "dev": os.path.join(root, "dev")}
     mixed = bool(cfg.hop_counts)
     for (n, t) in cfg.selected_cells():
@@ -65,7 +71,7 @@ def _finalize(ds, cfg, tokenizer):
         ds.compute_shortest_path_distances(cutoff=cfg.max_spd)
     if cfg.rrwp:
         ds.compute_rrwp(max_rrwp_steps=cfg.max_rw_steps)
-    if cfg.magnetic:
+    if cfg.uses_magnetic:
         ds.compute_magnetic_lap(q=cfg.magnetic_q, m=cfg.magnetic_m)
     ds.cast_float_features_to_fp32()
 
@@ -311,7 +317,12 @@ def run_data_prep_mode(cfg, verbose=True):
 
 def load_split(cfg, split_name):
     """Load one built split; raises with the build command if it is missing."""
-    base = split_paths(cfg)[split_name]
+    # Resolve through resolved_data_root so a run that switched a feature OFF can
+    # read a build that still has that column: the model never instantiates a
+    # module for it, so the extra data is inert. Without this, the Phase 2 arms
+    # that drop SPD would each demand a multi-hour rebuild of a strict subset of
+    # data already on disk.
+    base = split_paths(cfg, root=cfg.resolved_data_root(OUTPUT_ROOT))[split_name]
     built = TextGraphDataset.gtds_path(base)
     if not os.path.exists(built):
         raise FileNotFoundError(

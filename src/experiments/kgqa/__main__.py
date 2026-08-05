@@ -249,10 +249,22 @@ def build_parser():
                         "with each node's live first-token summary (subsumes --magnetic).")
     p.add_argument("--magnetic-content-dim", type=int, default=d.magnetic_content_dim,
                    help="magnetic_content down-projection width (d_proj).")
+    p.add_argument("--magnetic-linear", action=B, default=d.magnetic_linear,
+                   help="linear-head magnetic bias: same eigenvectors and same "
+                        "spectral machinery as --magnetic, but one linear map "
+                        "instead of the 2-layer MLP, making the bias a bilinear "
+                        "form (see src/models/LINEAR_BIAS.md). Mutually exclusive "
+                        "with the other magnetic placements.")
     p.add_argument("--magnetic-dim", type=int, default=d.magnetic_dim, help="model bias-MLP hidden width.")
     p.add_argument("--magnetic-q", type=float, default=d.magnetic_q)
     p.add_argument("--magnetic-m", type=int, default=d.magnetic_m,
-                   help="# magnetic eigenvectors (data prep + collator; 0 = all N).")
+                   help="# magnetic eigenvectors (data prep + collator; 0 = all N). "
+                        "IN the data cache key — changing it rebuilds the dataset.")
+    p.add_argument("--magnetic-m-collate", type=int, default=d.magnetic_m_collate,
+                   help="collator-only eigenvector truncation for the M-sweep "
+                        "(0 = follow --magnetic-m). NOT in the data cache key, so "
+                        "the whole M-grid reuses one build; truncating the stored "
+                        "eigenvectors by prefix is bit-identical to building at M.")
     p.add_argument("--rrwp", action=B, default=d.rrwp,
                    help="relative random-walk-probability bias (data prep + model). "
                         "Adds an (n, n, --max-rw-steps) float32 column: ~45 GB for a "
@@ -350,6 +362,7 @@ def config_from_args(args):
         magnetic_groups=args.magnetic_groups,
         magnetic_shared=args.magnetic_shared,
         magnetic_content=args.magnetic_content, magnetic_content_dim=args.magnetic_content_dim,
+        magnetic_linear=args.magnetic_linear, magnetic_m_collate=args.magnetic_m_collate,
         magnetic_dim=args.magnetic_dim, magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
         rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
         num_epochs=args.num_epochs, batch_size=args.batch_size,

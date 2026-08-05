@@ -184,9 +184,19 @@ class RunConfig:
     # knob: it does not touch feature generation, the dataset cache key or the arm
     # label, so a G sweep trains on byte-identical data to the baseline.
     magnetic_groups: int = 0
+    # Swap the magnetic bias's 2-layer MLP head for a single linear map onto the
+    # heads, making the bias a bilinear form in the eigenvectors (see
+    # src/models/LINEAR_BIAS.md). Same features, same data, different head — so it
+    # is a model-side knob like magnetic_groups and shares the built dataset.
+    magnetic_linear: bool = False
     magnetic_dim: int = 32                      # model bias-MLP hidden width
     magnetic_q: float = 0.25                    # magnetic-Laplacian charge (data)
     magnetic_m: int = 0                         # eigenvectors kept (0 -> all N)
+    # Collator-only cap on the eigenvector count, deliberately OUTSIDE the dataset
+    # cache identity: it narrows what the collator hands the model, never the
+    # build, so an M-sweep reuses one cache instead of rebuilding per value. 0 =
+    # no override (fall back to magnetic_m).
+    magnetic_m_collate: int = 0
     laplacian: bool = False                     # unwired (see UNWIRED_FEATURES)
     rwse: bool = False                          # unwired
 
@@ -256,6 +266,28 @@ class RunConfig:
                 "lora_dropout": self.lora_dropout,
                 "target_modules": list(BACKBONES[self.backbone()]["lora_targets"])}
 
+    @property
+    def uses_magnetic(self) -> bool:
+        """True when ANY placement of the magnetic term is active.
+
+        Single source of truth for every collator/data gate. Gating on
+        ``self.magnetic`` alone would silently starve the linear arm of the
+        eigenvectors it is built from, and the run would train with no magnetic
+        bias while looking perfectly healthy.
+        """
+        return bool(self.magnetic or self.magnetic_linear)
+
+    @property
+    def collate_magnetic_m(self) -> int:
+        """Eigenvector count the COLLATOR emits (0 = keep all, as the cache stores).
+
+        Note the asymmetry with ``magnetic_m``: both use 0 for "all", so an
+        override of 0 means "no override" rather than "emit nothing".
+        """
+        if not self.uses_magnetic:
+            return 0
+        return self.magnetic_m_collate or self.magnetic_m
+
     def bias_params(self):
         """The graph-bias flag/architecture dict passed to the model config.
 
@@ -279,11 +311,23 @@ class RunConfig:
                      else {"magnetic": True})
             cfg.update(**share, magnetic_dim=self.magnetic_dim,
                        magnetic_q=self.magnetic_q)
+        elif self.magnetic_linear:
+            # Same spectral features and the same magnetic_dim/magnetic_q; only the
+            # head differs (one Linear onto the heads instead of the 2-layer MLP).
+            cfg.update(magnetic_linear=True, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q)
         return cfg
 
     def arm(self):
         """Short ablation-arm label ('base' | 'no-spd' | ...) for records + tables."""
         off = [f for f in WIRED_FEATURES if not getattr(self, f)]
+        if self.magnetic_linear:
+            # Without this the linear arm reports as 'no-magnetic' — the label of the
+            # arm that has NO magnetic term at all, which is the one thing it must
+            # never be confused with.
+            off = [f for f in off if f != "magnetic"]
+            tag = "mag-linear" if not off else "mag-linear+no-" + "+".join(off)
+            return tag
         if not off:
             return "base"
         return "no-" + "+".join(off)
@@ -354,6 +398,28 @@ class RunConfig:
                 f"Bias feature(s) {enabled_unwired} are exposed in the config but not "
                 f"wired in this experiment (data prep computes only {WIRED_FEATURES}). "
                 f"Disable them or extend process_dataset.py to produce their features.")
+
+        if self.magnetic and self.magnetic_linear:
+            raise ValueError(
+                "magnetic_linear swaps the HEAD on the magnetic term; it cannot be "
+                "combined with --magnetic (that would ask for two magnetic biases). "
+                "Use --no-magnetic --magnetic-linear for the linear arm.")
+        if self.magnetic_linear and self.magnetic_groups:
+            raise ValueError(
+                "magnetic_linear and magnetic_groups are two different placements of "
+                "the same term; enable at most one.")
+        if self.magnetic_m_collate:
+            if not self.uses_magnetic:
+                raise ValueError(
+                    "magnetic_m_collate is set but no magnetic term is enabled, so it "
+                    "would silently do nothing.")
+            if self.magnetic_m and self.magnetic_m_collate > self.magnetic_m:
+                raise ValueError(
+                    f"magnetic_m_collate={self.magnetic_m_collate} exceeds the built "
+                    f"magnetic_m={self.magnetic_m}; the collator can only truncate, so "
+                    f"this would silently fall back and mislabel the run.")
+            if self.magnetic_m_collate < 0:
+                raise ValueError("magnetic_m_collate must be >= 0 (0 = no override).")
 
         if self.lora_r < 0:
             raise ValueError("lora_r must be >= 0.")
