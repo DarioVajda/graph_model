@@ -248,9 +248,21 @@ def _launch_env():
     Submitting from this repo's root with its ``.venv`` active — the historical
     invocation — makes these resolve to exactly the values the launcher used to
     compute for itself, so submissions here are byte-for-byte unchanged.
+
+    Submitting with a system interpreter instead does NOT: the jobs are told to
+    use an interpreter that exists on the login node and not inside the container,
+    and every one of them dies seconds in with "venv python not found". That is a
+    silent, total, submit-time-invisible failure, so refuse it here rather than
+    let the queue discover it N times.
     """
     root = os.getcwd()
     venv_bin = os.path.dirname(os.path.abspath(sys.executable))
+    if not os.path.abspath(venv_bin).startswith(os.path.abspath(root) + os.sep):
+        raise SystemExit(
+            f"Refusing to submit: the submitting interpreter ({sys.executable}) "
+            f"lives outside the project root ({root}), so SWEEP_VENV_BIN would be "
+            f"{venv_bin} — a path the container cannot see. Re-run with the "
+            f"project venv, e.g. `{os.path.join(root, '.venv/bin/python')} -m sweep ...`.")
     env = [f"SWEEP_PROJECT_ROOT={root}", f"SWEEP_VENV_BIN={venv_bin}"]
     login = os.path.join(root, "login.sh")
     if os.path.isfile(login):
