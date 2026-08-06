@@ -1,11 +1,14 @@
 # `linear_bias` — what does linearizing the magnetic bias cost?
 
-**Status:** Phases 0–2 complete (2026-08-05). Verdict: **linearization is not
-free, and its price is dataset-dependent by two orders of magnitude** — free on
-GraphQA, 18.8% of the magnetic headroom on WebQSP, and near-total on the 4k
-context task at the tuned LR (partly, not wholly, an optimization artifact).
-The §7 factorized backbone is **not** cleared to start; §6 below names the one
-sweep that would decide it.
+**Status:** Phases 0–3 complete (Phases 0–2 2026-08-05, Phase 3 2026-08-06).
+Verdict: **linearization is not free, and its price is dataset-dependent by two
+orders of magnitude** — but a large part of what was being charged to it was the
+intra-node diagonal mask, which the factorization cannot express anyway (§6).
+Read at the configuration the deferred backbone would actually run, the WebQSP
+price is 5.6% of the magnetic headroom rather than 18.8%, the 4k context task
+saturates, and GraphQA turns from free to a systematic ~5.7% cost. The
+`LINEAR_BIAS.md` §7 factorized backbone is **still not** cleared to start; §7
+below (Conclusions) names the one sweep that would decide it.
 
 This package prices the plan in `src/models/LINEAR_BIAS.md`: replacing
 `MagneticBias`'s 2-layer MLP head with a single linear map, which turns the bias
@@ -17,10 +20,11 @@ flex `score_mod` outright.
 
 ## 0. What this package is
 
-A **measurement package**: two offline scripts, five sweep configs, and the
-results. The model change itself is `LinearMagneticBias` in `src/models/bias.py`
-(flag `--magnetic-linear`); every sweep invokes an existing experiment normally
-and only points at a config that lives here.
+A **measurement package**: two offline scripts, eight sweep configs, and the
+results. The model changes themselves are `LinearMagneticBias` in
+`src/models/bias.py` (flag `--magnetic-linear`) and the diagonal switch
+`--bias-self-node`; every sweep invokes an existing experiment normally and only
+points at a config that lives here.
 
 ```bash
 # Phase 0 — offline, reads trained bias_parameters.pt from the g-sweep checkpoints
@@ -37,6 +41,11 @@ python3 -m sweep src.experiments.context src/experiments/linear_bias/configs/011
 python3 -m sweep src.experiments.context src/experiments/linear_bias/configs/012_context4k_linear_long.jsonc
 python3 -m sweep src.experiments.graphqa src/experiments/linear_bias/configs/013_graphqa_linear.jsonc
 python3 -m sweep src.experiments.kgqa    src/experiments/linear_bias/configs/014_webqsp_magdim256.jsonc
+
+# Phase 3 — the diagonal mask (§6)
+python3 -m sweep src.experiments.kgqa    src/experiments/linear_bias/configs/015_webqsp_selfnode.jsonc
+python3 -m sweep src.experiments.context src/experiments/linear_bias/configs/016_context4k_selfnode.jsonc
+python3 -m sweep src.experiments.graphqa src/experiments/linear_bias/configs/017_graphqa_selfnode.jsonc
 ```
 
 Each config is its source experiment's headline recipe **verbatim**, with only
@@ -59,6 +68,9 @@ recipe-of-record; only the within-config gaps are meant to be read.
 The headline is quoted as **B→C as a fraction of the D→B headroom**, not as raw
 pp: raw pp is not comparable across three datasets whose metrics and difficulty
 differ.
+
+Phase 3 (§6) crosses B and C with a second axis, the intra-node diagonal mask
+(`--bias-self-node`), because the factorization can only run one side of it.
 
 ---
 
@@ -89,7 +101,7 @@ L14 ≈ 0.97. Report the worst layer, never the mean: the mean (0.96) reads as
 "linearization is nearly free" and hides exactly the layer where it is not.
 
 **(c) R² is flat in M** (0.973 → 0.960 across a 16× range), so Phase 0 pruned
-nothing and §6.1 ran the full grid.
+nothing and `LINEAR_BIAS.md` §6.1 ran the full grid.
 
 **What it got wrong: Phase 0 is not predictive of Phase 2.** R² ≈ 0.96 on WebQSP
 preceded a 4.91 pp loss, and R² ≈ 0.93 on context preceded near-total collapse —
@@ -209,11 +221,115 @@ wrong for the linear head**, so the context M-curve is currently uninterpretable
 
 ---
 
-## 6. Conclusions
+## 6. Phase 3 — the intra-node diagonal (`015`, `016`, `017`)
+
+`LINEAR_BIAS.md` §7.3 records that `_finalize` zeroes $b_{ii}$ and that the
+factorized form **cannot** express that zeroing — an inner product gives
+$q_i \cdot k_i$ and there is nothing to subtract it with. For arm C the mask is
+therefore not a setting: unmasked is the only configuration the deferred backbone
+can actually run, and every number in §3–§5 was measured with it on. The flag
+`--bias-self-node` (default **off**, so all earlier results stand bit-for-bit)
+keeps the diagonal; these three sweeps price it.
+
+Each masked cell is a deliberate **rerun** of the corresponding `010`/`013`
+headline cell, which makes it both a within-sweep control and a regression check
+on the refactor that turned `_finalize` into an instance method:
+
+| cell | `010` / `013` | rerun |
+|---|---:|---:|
+| WebQSP B magnetic, M=128 | 0.7190 | 0.7104 ± 0.0168 |
+| WebQSP C linear, M=128 | 0.6699 | 0.6715 ± 0.0048 |
+| GraphQA C `node_degree` | 0.9767 | 0.9820 |
+| GraphQA C `shortest_path` | 0.9393 | 0.9387 |
+| GraphQA C `edge_count` | 0.4967 | 0.4887 |
+
+All within seed noise, so the default path is unchanged and the cross-sweep
+comparisons below are sound.
+
+### 6.1 WebQSP (`015`) — the diagonal recovers two thirds of the penalty
+
+3 seeds, M=128, bias_lr 5e-3, 15 epochs — `010`'s headline recipe exactly.
+
+| head | mask | test F1 | Hits@1 | Δ F1 vs masked |
+|---|---|---:|---:|---:|
+| B magnetic | on | 0.7104 ± 0.0168 | 0.7713 | — |
+| B magnetic | off | 0.6930 ± 0.0106 | 0.7510 | −1.74 pp |
+| C linear | on | 0.6715 ± 0.0048 | 0.7336 | — |
+| C linear | **off** | **0.6962 ± 0.0024** | 0.7529 | **+2.47 pp** |
+
+Paired by seed, C gains on 3/3 (+2.07, +2.19, +3.15 pp); B loses on 2/3. **The
+effect is head-dependent, and the B arm is what establishes that** — without it
+"the diagonal helps C" could not be separated from "this bias likes a diagonal".
+
+Reading each head at its own best mask setting — B masked, C unmasked, since B has
+no reason to give up a mask it *can* implement — the residual B→C is −1.42 pp,
+**5.6% of the D→B headroom**, against 15.4% within this sweep with both masked and
+the 18.8% headline of `010`. Quoted against `010`'s B instead, the residual is 8.7%.
+**The WebQSP penalty does not vanish; it drops by roughly two thirds.**
+
+### 6.2 4k context (`016`) — the mask, not the family, caused the fragility
+
+Arm C only, 3 seeds, M=128, 4 epochs, `012`'s bias_lr pair.
+
+| bias_lr | mask | code_acc (mean) | seeds |
+|---|---|---:|---|
+| 5e-3 | on | 0.133 | 0.085 / 0.140 / 0.175 |
+| 5e-3 | **off** | **1.000** | 1.000 / 1.000 / 1.000 |
+| 2e-2 | on | 0.983 | 0.975 / 0.980 / 0.995 |
+| 2e-2 | off | 0.985 | 0.970 / 0.985 / 1.000 |
+
+The largest effect in the package. Masked, C fires only at 2e-2 — the LR
+sensitivity §5 diagnosed. Unmasked it saturates at **both** LRs, and at 4 epochs
+reaches 1.000, above `011`'s B (0.995). On this task the linear head is not short
+of capacity at all; it was short of a diagonal.
+
+Two limits on what this licenses: `016` ran **arm C only**, so there is no B or D
+control inside it, and two LR points are not a curve. It supports "the mask, not
+the bilinear family, was responsible for C's context fragility" — it is not a new
+B-vs-C number, and §5's void M-curve stays void.
+
+### 6.3 GraphQA (`017`) — the diagonal costs here, systematically
+
+3 tasks × 2 heads × 2 masks × 3 seeds, bias_lr 5e-3, 20 epochs.
+
+| task | head | mask on | mask off | Δ | as % of headroom |
+|---|---|---:|---:|---:|---:|
+| node_degree | C | 0.9820 | 0.9633 | −1.87 pp | 2.1% |
+| shortest_path | C | 0.9387 | 0.9253 | −1.33 pp | 2.9% |
+| edge_count | C | 0.4887 | 0.4333 | −5.53 pp | **12.0%** |
+| | | | | | **mean 5.7%** |
+| node_degree | B | 0.9653 | 0.9707 | +0.53 pp | — |
+| shortest_path | B | 0.9280 | 0.9460 | +1.80 pp | — |
+| edge_count | B | 0.4880 | 0.4247 | −6.33 pp | — |
+
+(Headroom = this sweep's masked B minus `013`'s D at the same bias_lr.)
+
+**Arm C is negative in 9 of 9 seed-paired comparisons** (sign test p ≈ 0.002), so
+this is systematic, not seed noise. `edge_count` — the one task the linear head
+*won* in §4 — takes the largest hit, and its seed spread inflates 14× (σ 0.0031 →
+0.0424). §4's "linearization is free on GraphQA" holds only under the mask; the
+configuration the factorization can actually run costs ~5.7% of headroom here.
+
+### 6.4 Why the sign flips across datasets
+
+The diagonal is a **node-level** quantity and `expand_node_to_token_bias` lifts
+node pairs to token pairs, so zeroing $b_{ii}$ removes the structural bias from
+*every token pair inside one node*, not merely a token attending to itself. WebQSP
+entity names and the context task's nodes are multi-token, so the mask suppresses a
+large block of genuine pairs; GraphQA's nodes are ~1–2 tokens, where the same mask
+costs almost nothing and the self-energy $K(i,i) = \sum_l |V_{il}|^2 \phi_l$ acts
+closer to an unwanted per-node constant. That is a hypothesis consistent with all
+three datasets — **these sweeps do not test it**, and node-token-length is
+confounded with dataset, metric and graph size.
+
+---
+
+## 7. Conclusions
 
 1. **Linearization has a real, non-zero price, and it is dataset-dependent.**
-   Free on GraphQA (+0.2% of headroom, wins `edge_count`), 18.8% of headroom on
-   WebQSP, unresolved-but-large on 4k context. No single number describes it.
+   Under the diagonal mask: free on GraphQA (+0.2% of headroom, wins `edge_count`),
+   18.8% of headroom on WebQSP, unresolved-but-large on 4k context. No single
+   number describes it — and §6 moves all three, in both directions.
 2. **The price is the bilinear *family*, not the parameter count** — `014` settles
    this on WebQSP: a 92%-matched linear head recovers none of the 4.91 pp.
 3. **The rank ceiling never binds** at any scale measured (P0b: 100% of energy
@@ -227,29 +343,42 @@ wrong for the linear head**, so the context M-curve is currently uninterpretable
    Any B-vs-C comparison at one shared LR prices optimization, not math.
 6. **Offline imitation R² did not predict trained quality** (§2). Phase 0's real
    contribution was the rank spectrum, not the fit.
+7. **The diagonal mask was a confound worth pricing, and it moved the headline**
+   (§6). Because the factorization cannot express the mask, arm C's honest
+   configuration is unmasked — and unmasked it is a *different arm*: WebQSP's
+   penalty falls 15.4% → 5.6% of headroom, context's LR fragility disappears
+   entirely, and GraphQA's "free" becomes a systematic ~5.7% cost.
+8. **The diagonal's sign is dataset-dependent and head-dependent.** It helps C and
+   hurts B on WebQSP; it helps C enormously on context; it hurts both heads on
+   GraphQA. Any future claim about it needs its own control arm — §6.1's B arm is
+   what made the WebQSP reading unambiguous.
 
 ### Verdict on §7 (the factorized backbone)
 
-**Not cleared.** The trunk's regime is long-context and 1024–4096 nodes — the
-regime the optimization exists for and the one where the linear head performed
-worst. Trading 18.8% of the magnetic headroom (WebQSP, the only clean number) for
-deleting the `score_mod` is a defensible bargain given that ~86% of flex's k=0
-overhead is bias machinery, but it should not be taken on a context result that is
-currently confounded with its learning rate.
+**Still not cleared, but the case is materially stronger than it was.** The
+trunk's regime is long-context and 1024–4096 nodes, and that is where §6.2 lands
+its biggest result: unmasked, the linear head saturates the 4k task at both LRs and
+at half `012`'s budget, which removes the specific failure that blocked clearance.
+The WebQSP price for deleting the `score_mod` is now 5.6% of headroom rather than
+18.8% — a clearly defensible bargain given that ~86% of flex's k=0 overhead is bias
+machinery. What blocks clearance is no longer plausibility but coverage: `016` had
+no B or D arm, so there is still **no clean B-vs-C number in the long-context
+regime at the configuration the backbone would run**.
 
-**The one sweep that would decide it:** re-run `011`'s M-grid at bias_lr 2e-2 with
-a budget long enough for the transition (≥6 epochs), plus arm B at the same
-budget. If C fires and lands near B, the WebQSP 18.8% is the worst case and §7
-proceeds at M=64. If C plateaus below B with the LR confound removed, the
-long-context regime is where the bilinear family genuinely fails, and §7 should
-not be built.
+**The one sweep that would decide it:** re-run `011`'s M-grid unmasked at
+bias_lr 2e-2 with a budget past the transition (≥6 epochs), **plus arm B at the
+same budget and both mask settings**. If C lands near B, §7 proceeds at M=64. If C
+plateaus below B with both the LR and the mask confounds removed, the long-context
+regime is where the bilinear family genuinely fails and §7 should not be built.
 
 ### Outstanding
 
-- **The diagonal-mask ablation was not run.** `LINEAR_BIAS.md` §7.3 asks Phase 2
-  to also ablate `_finalize`'s zeroing of b_ii, because the factorized form cannot
-  express it and the future delta would otherwise be confounded with it. Every
-  number above is with the mask on.
+- **No B or D control in the long-context regime at the unmasked configuration**
+  (§6.2). This is now the single blocker on the §7 verdict; the sweep above closes it.
 - **`magnetic` at d=256 was not run**, so "is 128 under-provisioned for *both*
   heads?" is open (§3).
-- The context M-curve is void pending the sweep above.
+- The context M-curve is void — `011`'s grid was run at both the wrong LR and the
+  wrong mask setting.
+- **§6.4's explanation for the sign flip is untested.** Node token-length is
+  confounded with dataset, metric and graph size; a within-dataset test would need
+  node text length varied directly.

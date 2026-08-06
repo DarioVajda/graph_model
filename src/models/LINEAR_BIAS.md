@@ -4,14 +4,20 @@
 
 | | |
 |---|---|
-| **Done** | Phases 0–2, 2026-08-05. Results and verdict: `src/experiments/linear_bias/README.md`. |
-| **Deferred** | The $O(N)$ factorized implementation. **Not cleared to start** — see the README §6. It needs a purpose-built backbone; §7 records the constraints so they are not re-derived. |
+| **Done** | Phases 0–2, 2026-08-05; Phase 3 (the §7.3 diagonal-mask ablation), 2026-08-06. Results and verdict: `src/experiments/linear_bias/README.md`. |
+| **Deferred** | The $O(N)$ factorized implementation. **Not cleared to start** — see the README §7. It needs a purpose-built backbone; §7 records the constraints so they are not re-derived. |
 
 Headline: linearization is free on GraphQA, costs **18.8% of the magnetic
 headroom** on WebQSP (4.91 pp test F1), and is unresolved on 4k context, where the
 apparent collapse is largely a learning-rate artifact. The price is the bilinear
 *family*, not the parameter count (`014`), and the rank ceiling never binds
 anywhere measured. $M{=}64$, not the incumbent 128, is the operating point.
+
+**Phase 3 revises this.** Those numbers were all measured with the intra-node
+diagonal masked — a mask the factorization cannot express (§7.3), so they price a
+configuration the deferred backbone could never run. Read unmasked, WebQSP costs
+**5.6%** of headroom, the 4k context task saturates, and GraphQA is no longer
+free (~5.7% cost). README §6 has the tables.
 
 Order of work: **§4 Phase 0** (offline, gates everything) → **§5 Phase 1**
 (implement `magnetic_linear` and *prove it correct* with tests) → **§6 Phase 2**
@@ -454,6 +460,11 @@ Three findings that change the plan above:
 so the context $M$-curve is void. §7 stays deferred until it is re-run at
 bias_lr 2e-2 with a budget past the transition.
 
+Phase 3 (README §6) later added a **third** sweep group, `015`–`017`, which
+ablates the diagonal mask this table's arms all share; see §7.3. It does not
+invalidate the numbers above — it establishes that they price the wrong
+configuration for the deferred backbone.
+
 ---
 
 ## 7. Deferred — the factorized backbone
@@ -474,8 +485,14 @@ identified against the current code and each is a real blocker, not a nicety.
 3. **The diagonal mask is not expressible.** `_finalize` (`bias.py:211`) zeroes
    $b_{ii}$; the factorized form gives $q_i \cdot k_i \neq 0$ with no way to
    subtract it. **Phase 2 should therefore also ablate the diagonal mask**, so the
-   future delta is not confounded with it. **Not done** — every §6.3 number is
-   with the mask on, so this confound is still outstanding.
+   future delta is not confounded with it. **Done, 2026-08-06** — flag
+   `--bias-self-node` (default off; every §6.3 number is with the mask on and
+   stands unchanged), swept as Phase 3 in README §6. The confound was real and
+   large: unmasked, C gains 2.47 pp on WebQSP (penalty 15.4% → 5.6% of headroom)
+   and saturates the 4k context task at both LRs, but *loses* on 9 of 9
+   seed-paired GraphQA comparisons. The sign is dataset- and head-dependent, so
+   the backbone inherits a different quality curve than §6.3 measured — not a
+   uniformly better one.
 4. **"$O(N)$" is conditional on truncation.** The extra width is $2M$. Untruncated
    ($M=N$) the method degenerates to $O(N^2)$. At $M{=}32$, $2M{=}64$ equals
    Llama-1B's whole `head_dim`: expect ~1.6–1.9× on the attention step from the
