@@ -1,0 +1,119 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 015's question on GraphQA. Rationale for the flag: see 015's header.
+  //
+  // GraphQA is where this is most likely to show a clean signal, for a reason
+  // that is a property of the task rather than of the method: 013 found
+  // linearization costs NOTHING here (mean +0.2% of headroom, and C won
+  // edge_count), so neither head is handicapped going in and any movement is
+  // attributable to the diagonal alone. It is also the only algorithmic task in
+  // the set — node_degree in particular is a per-node quantity, and b_ii is
+  // exactly a per-node feature (K(i,i) = sum_l |V_il|^2 phi_l), so if the
+  // diagonal carries usable signal anywhere it should carry it here.
+  //
+  // Cheap, too: 013's runs averaged ~17 min, so the whole 4-arm x 3-task x
+  // 3-seed grid is ~10 GPU-h.
+  //
+  // ── arms ─────────────────────────────────────────────────────────────────
+  //   B  magnetic,        mask on   <- rerun of 013's B@5e-3 cell
+  //   B  magnetic,        mask off
+  //   C  magnetic_linear, mask on   <- rerun of 013's C@5e-3 cell
+  //   C  magnetic_linear, mask off  <- the hypothesis
+  //
+  // Both heads at both mask settings, as in 015: without B, "the diagonal helps"
+  // cannot be separated from "the diagonal helps the factorizable head
+  // specifically", which is the distinction that decides whether §7 gets a free
+  // feature back or merely stops losing one.
+  //
+  // bias_lr is PINNED at 5e-3 rather than swept. 013 measured both 5e-3 and 2e-2
+  // for both heads: C preferred 5e-3 on all three tasks, B preferred it on two of
+  // three, so 5e-3 is the best known setting for the masked arms and the LR
+  // question is already answered on this dataset. Fixing it keeps the grid at 36
+  // runs instead of 72 and keeps the contrast one-dimensional. (Contrast with
+  // 016, where the LR question was NOT settled and so is swept.)
+  //
+  // D (no soft bias) is not re-run: no bias module means no diagonal to keep.
+  // 013's floors — node_degree 0.086, shortest_path 0.470, edge_count 0.026 —
+  // are the headroom denominators.
+  //
+  // 4 arms x 3 tasks x 3 seeds = 36 runs, ~17 min each = ~10 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.graphqa src/experiments/linear_bias/configs/017_graphqa_selfnode.jsonc
+  //   python3 -m sweep.report src/experiments/linear_bias/results/017_graphqa_selfnode
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "017_graphqa_selfnode",
+  "results_dir": "src/experiments/linear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      // No max_concurrent: this measures accuracy per arm, not step time, so
+      // nothing depends on serialisation.
+      "partition": "frida",
+      "account": "povejmo",
+      // B200 or B300, nothing else. The list form renders as
+      // `--gres gpu:1 --constraint GPU_BRD:B200|GPU_BRD:B300`, since Slurm gres
+      // cannot express an OR. Note this DIFFERS from 013, which ran on A100 —
+      // absolute step times are therefore not comparable to 013's, but accuracy
+      // (the only thing read here) is unaffected.
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "task": ["node_degree", "shortest_path", "edge_count"],
+  "seed": [42, 43, 44],
+
+  "arm": [
+    {"magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 128, "bias_self_node": false},
+    {"magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 128, "bias_self_node": true},
+    {"magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128, "bias_self_node": false},
+    {"magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128, "bias_self_node": true}
+  ],
+
+  // The two pairwise biases the factorization cannot represent (see 013's
+  // header). spd=false is also REQUIRED here rather than merely preferred:
+  // bias_self_node does not cover SPDBias (no self-distance row in its lookup)
+  // and validate() rejects the combination instead of half-applying the flag.
+  "spd": false,
+  "rrwp": false,
+
+  // ── 013_graphqa_linear, verbatim below this line (bias_lr pinned to 5e-3) ──
+  "bias_lr": 5e-3,
+
+  "question_node": "isolated",
+  "graph_type": "standard",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+  // Kept at the built values even where the feature is off: they are part of the
+  // data cache identity, so changing them would fork the cache.
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

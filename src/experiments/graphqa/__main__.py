@@ -158,6 +158,11 @@ def build_parser():
                    help="Replace the magnetic bias's MLP head with a single linear map "
                         "onto the heads, making the bias bilinear in the eigenvectors "
                         "(src/models/LINEAR_BIAS.md). Use with --no-magnetic.")
+    p.add_argument("--bias-self-node", action=B, default=d.bias_self_node,
+                   help="keep the intra-node diagonal b_ii instead of zeroing it. The "
+                        "bias is node-level and expanded to tokens, so the default "
+                        "zeroing leaves EVERY token pair inside one node unbiased. "
+                        "Incompatible with --spd (see LINEAR_BIAS.md §7.3).")
     p.add_argument("--magnetic-dim", type=int, default=d.magnetic_dim,
                    help="model bias-MLP hidden width.")
     p.add_argument("--magnetic-q", type=float, default=d.magnetic_q,
@@ -222,6 +227,7 @@ def config_from_args(args):
         rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
         magnetic=args.magnetic, magnetic_groups=args.magnetic_groups,
         magnetic_linear=args.magnetic_linear,
+        bias_self_node=args.bias_self_node,
         magnetic_dim=args.magnetic_dim,
         magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
         magnetic_m_collate=args.magnetic_m_collate,

@@ -223,6 +223,11 @@ class RunConfig:
     # having built it at M. One build therefore serves the whole M-grid instead of
     # one 3.4 GB rebuild per value.
     magnetic_m_collate: int = 0
+    # Keep the intra-node diagonal b_ii instead of zeroing it (LINEAR_BIAS.md
+    # §7.3). Architecture-only — it does NOT change the data cache key, so it
+    # reuses the same build as every other arm. Not compatible with spd (the SPD
+    # lookup has no self-distance row; the model config raises).
+    bias_self_node: bool = False
     # RRWP (Relative Random Walk Probabilities) — the third encoding of the
     # paper's SPD+RRWP+MagLap suite, absent from the KGQA arm until now. It was
     # dropped here for storage: the column is (n, n, max_rw_steps) float32 per
@@ -432,6 +437,10 @@ class RunConfig:
             # max_rw_steps is the RRWPBias MLP's INPUT width, so it must equal the
             # stored column's last dim — data prep and model read the same field.
             cfg.update(rrwp=True, max_rw_steps=self.max_rw_steps)
+        if self.bias_self_node:
+            # Model-side only: it changes what the bias EMITS on the diagonal, not
+            # what the dataset stores, so it is out of data_config_key().
+            cfg.update(bias_self_node=True)
         return cfg
 
     def lora_config(self):
@@ -616,6 +625,19 @@ class RunConfig:
                     f"magnetic_m={self.magnetic_m}; the collator can only truncate what the "
                     "dataset stores, so this would silently fall back to the smaller value "
                     "and mislabel the run.")
+        if self.bias_self_node:
+            # Fail here rather than in the model config: this is the layer that can
+            # name the offending flag combination in the run's own vocabulary.
+            if self.spd:
+                raise ValueError(
+                    "bias_self_node does not cover SPDBias (its lookup has no row for "
+                    "self-distance 0), so with spd=True the flag would apply to only "
+                    "some of the active biases. Drop spd from this arm — the "
+                    "factorization cannot express SPD anyway (LINEAR_BIAS.md §3).")
+            if not (self.uses_magnetic or self.rrwp):
+                raise ValueError(
+                    "bias_self_node is set but no bias with a diagonal is enabled; it "
+                    "would silently do nothing.")
         if self.magnetic and self.magnetic_shared:
             raise ValueError(
                 "spd/magnetic/magnetic_shared: magnetic and magnetic_shared are two "

@@ -159,6 +159,12 @@ def _save_train_record(cfg, run_name, results, runs_jsonl, sweep_meta=None):
         # Bias sharing granularity (0 = legacy per-layer). A first-class column:
         # a G sweep is otherwise only distinguishable by parsing the run name.
         "magnetic_groups": cfg.magnetic_groups,
+        # Same reasoning as magnetic_groups: without these, a linear arm, an
+        # M-truncated arm and a self-node arm are only distinguishable by parsing
+        # the run name, which is fragile and silently wrong.
+        "magnetic_linear": cfg.magnetic_linear,
+        "magnetic_m_collate": cfg.collate_magnetic_m,
+        "bias_self_node": cfg.bias_self_node,
         "magnetic_q": cfg.magnetic_q, "magnetic_m": cfg.magnetic_m,
         "node_counts": list(cfg.node_counts), "token_counts": list(cfg.token_counts),
         "max_train_len": cfg.max_train_len, "n_train": cfg.n_train,

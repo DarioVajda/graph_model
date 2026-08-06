@@ -102,6 +102,11 @@ class RunConfig:
     # is bit-identical to having built it at M — and the whole M-grid therefore
     # runs off ONE build instead of one build per M.
     magnetic_m_collate: int = 0
+    # Keep the intra-node diagonal b_ii instead of zeroing it (LINEAR_BIAS.md
+    # §7.3). Model-side only: it changes what the bias emits, not what the dataset
+    # stores, so it must NOT enter data_config_key() — the arm reuses the existing
+    # build. Incompatible with spd (the SPD lookup has no self-distance row).
+    bias_self_node: bool = False
 
     # ── attention ──────────────────────────────────────────────────────────────
     # k_hop=0 keeps the prefix dense, which is what the dilution claim is about;
@@ -308,6 +313,9 @@ class RunConfig:
             else:
                 share = {"magnetic": True}
             cfg.update(**share, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+        if self.bias_self_node:
+            # Model-side only; deliberately absent from data_config_key().
+            cfg.update(bias_self_node=True)
         return cfg
 
     def data_config_key_candidates(self):
@@ -534,6 +542,17 @@ class RunConfig:
                     f"magnetic_m={self.magnetic_m}; the collator can only truncate what "
                     "the dataset stores, so this would silently fall back to the smaller "
                     "value and mislabel the run.")
+        if self.bias_self_node:
+            if self.spd:
+                raise ValueError(
+                    "bias_self_node does not cover SPDBias (its lookup has no row for "
+                    "self-distance 0), so with spd=True the flag would apply to only "
+                    "some of the active biases. Drop spd from this arm — the "
+                    "factorization cannot express SPD anyway (LINEAR_BIAS.md §3).")
+            if not (self.uses_magnetic or self.rrwp):
+                raise ValueError(
+                    "bias_self_node is set but no bias with a diagonal is enabled; it "
+                    "would silently do nothing.")
         if self.k_hop < 0:
             raise ValueError("k_hop must be >= 0.")
         return self

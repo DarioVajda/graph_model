@@ -197,6 +197,10 @@ class RunConfig:
     # build, so an M-sweep reuses one cache instead of rebuilding per value. 0 =
     # no override (fall back to magnetic_m).
     magnetic_m_collate: int = 0
+    # Keep the intra-node diagonal b_ii instead of zeroing it (LINEAR_BIAS.md
+    # §7.3). Model-side only, like magnetic_groups: same features, same data.
+    # Incompatible with spd (the SPD lookup has no self-distance row).
+    bias_self_node: bool = False
     laplacian: bool = False                     # unwired (see UNWIRED_FEATURES)
     rwse: bool = False                          # unwired
 
@@ -316,10 +320,17 @@ class RunConfig:
             # head differs (one Linear onto the heads instead of the 2-layer MLP).
             cfg.update(magnetic_linear=True, magnetic_dim=self.magnetic_dim,
                        magnetic_q=self.magnetic_q)
+        if self.bias_self_node:
+            # Model-side only; it does not touch feature generation or the cache key.
+            cfg.update(bias_self_node=True)
         return cfg
 
     def arm(self):
         """Short ablation-arm label ('base' | 'no-spd' | ...) for records + tables."""
+        # A '+selfnode' suffix, not a separate branch: bias_self_node modifies
+        # whichever bias is active rather than replacing it, and appending keeps
+        # every existing label byte-identical while it is off (the default).
+        self_node = "+selfnode" if self.bias_self_node else ""
         off = [f for f in WIRED_FEATURES if not getattr(self, f)]
         if self.magnetic_linear:
             # Without this the linear arm reports as 'no-magnetic' — the label of the
@@ -327,10 +338,10 @@ class RunConfig:
             # never be confused with.
             off = [f for f in off if f != "magnetic"]
             tag = "mag-linear" if not off else "mag-linear+no-" + "+".join(off)
-            return tag
+            return tag + self_node
         if not off:
-            return "base"
-        return "no-" + "+".join(off)
+            return "base" + self_node
+        return "no-" + "+".join(off) + self_node
 
     def uses_default_cache(self):
         """True when this config's feature settings match the built-on-disk cache."""
@@ -420,6 +431,18 @@ class RunConfig:
                     f"this would silently fall back and mislabel the run.")
             if self.magnetic_m_collate < 0:
                 raise ValueError("magnetic_m_collate must be >= 0 (0 = no override).")
+
+        if self.bias_self_node:
+            if self.spd:
+                raise ValueError(
+                    "bias_self_node does not cover SPDBias (its lookup has no row for "
+                    "self-distance 0), so with spd=True the flag would apply to only "
+                    "some of the active biases. Drop spd from this arm — the "
+                    "factorization cannot express SPD anyway (LINEAR_BIAS.md §3).")
+            if not (self.uses_magnetic or self.rrwp):
+                raise ValueError(
+                    "bias_self_node is set but no bias with a diagonal is enabled; it "
+                    "would silently do nothing.")
 
         if self.lora_r < 0:
             raise ValueError("lora_r must be >= 0.")

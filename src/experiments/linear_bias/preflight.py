@@ -32,6 +32,9 @@ _CONFIGS = [
     ("src.experiments.context", "src/experiments/linear_bias/configs/012_context4k_linear_long.jsonc"),
     ("src.experiments.graphqa", "src/experiments/linear_bias/configs/013_graphqa_linear.jsonc"),
     ("src.experiments.kgqa", "src/experiments/linear_bias/configs/014_webqsp_magdim256.jsonc"),
+    ("src.experiments.kgqa", "src/experiments/linear_bias/configs/015_webqsp_selfnode.jsonc"),
+    ("src.experiments.context", "src/experiments/linear_bias/configs/016_context4k_selfnode.jsonc"),
+    ("src.experiments.graphqa", "src/experiments/linear_bias/configs/017_graphqa_selfnode.jsonc"),
 ]
 
 
@@ -121,6 +124,17 @@ def main(argv=None):
             if not (want_mag or want_lin) and (bp.get("magnetic") or bp.get("magnetic_linear")):
                 failures.append(f"{meta['name']}[{i}] no-bias arm got a magnetic bias: {bp}")
 
+            # (2b) the self-node arm must actually reach the model. The mask lives
+            # in _finalize, so a dropped flag produces a run that is byte-identical
+            # to its masked twin — two arms with the same numbers and no error.
+            want_self = bool(run.get("bias_self_node"))
+            if want_self and not bp.get("bias_self_node"):
+                failures.append(
+                    f"{meta['name']}[{i}] bias_self_node arm did not reach bias_params: {bp}")
+            if not want_self and bp.get("bias_self_node"):
+                failures.append(
+                    f"{meta['name']}[{i}] masked arm has bias_self_node set: {bp}")
+
             # (3) THE silent no-op: a magnetic arm whose collator emits nothing.
             # graphqa is excluded because 0 means "keep ALL eigenvectors" there
             # (its cache is built at magnetic_m=0), the opposite of kgqa/context
@@ -138,7 +152,7 @@ def main(argv=None):
             # --magnetic-linear while config_from_args drops it yields a run that
             # trains the DEFAULT arm and reports as the requested one.
             for flag in ("magnetic_linear", "magnetic_m_collate", "magnetic", "spd",
-                         "magnetic_dim", "bias_lr"):
+                         "magnetic_dim", "bias_lr", "bias_self_node"):
                 if flag in run and getattr(cfg, flag, None) != run[flag]:
                     failures.append(
                         f"{meta['name']}[{i}] {flag}={run[flag]!r} was requested but the "
@@ -163,7 +177,7 @@ def main(argv=None):
                 failures.append(f"{meta['name']}: dataset absent at {k}")
 
         arms = {(r.get("spd"), r.get("magnetic"), r.get("magnetic_linear"),
-                 r.get("magnetic_m_collate")) for r in runs}
+                 r.get("magnetic_m_collate"), r.get("bias_self_node")) for r in runs}
         print(f"  arms: {len(arms)}  runs: {len(runs)}  parsed+validated OK")
 
     print()

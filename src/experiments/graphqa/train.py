@@ -51,6 +51,7 @@ def _save_train_record(cfg, run_name, sizes, results, runs_jsonl, sweep_meta=Non
         # is to parse the run name, which is fragile and silently wrong.
         "magnetic_linear": cfg.magnetic_linear,
         "magnetic_m_collate": cfg.collate_magnetic_m,
+        "bias_self_node": cfg.bias_self_node,
         "seed": cfg.seed,
         # ── hyperparameters ──
         "model_name": cfg.model_name, "impl": cfg.impl, "dtype": cfg.dtype,

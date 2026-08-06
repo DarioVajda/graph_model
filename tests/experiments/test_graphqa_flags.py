@@ -95,6 +95,9 @@ _UNPERTURBABLE = {
 _COMPANIONS = {
     "magnetic_linear": {"magnetic": False},
     "magnetic_groups": {"magnetic": True},
+    # spd defaults ON here, and bias_self_node refuses to combine with it (SPDBias
+    # has no self-distance row, so the flag would cover only some active biases).
+    "bias_self_node": {"spd": False},
 }
 
 

@@ -96,6 +96,12 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         # Bias sharing granularity (0 = legacy per-layer). A first-class column:
         # a G sweep is otherwise only distinguishable by parsing the run name.
         "magnetic_groups": cfg.magnetic_groups,
+        # Same reasoning as magnetic_groups: without these, a linear arm, an
+        # M-truncated arm and a self-node arm are only distinguishable by parsing
+        # the run name, which is fragile and silently wrong.
+        "magnetic_linear": cfg.magnetic_linear,
+        "magnetic_m_collate": cfg.collate_magnetic_m,
+        "bias_self_node": cfg.bias_self_node,
         "data_format_version": cfg.data_format_version,
         "cvt_collapse": cfg.resolved_cvt_collapse("graph"),
         "question_node": cfg.question_node,
