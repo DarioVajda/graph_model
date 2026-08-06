@@ -32,6 +32,11 @@ class _Cfg:
     hidden_size = 64
 
 
+class _CfgSelfNode(_Cfg):
+    """As ``_Cfg`` but keeping the intra-node diagonal (LINEAR_BIAS.md §7.3)."""
+    bias_self_node = True
+
+
 def _items(node_counts=(4, 9, 6), seed=0, m=None):
     """Batch items carrying magnetic eigenvectors, mixed graph sizes.
 
@@ -230,6 +235,30 @@ def test_factorization_reproduces_dense_bias_offdiagonal():
     assert diff < 1e-10, f"factorization mismatch {diff}"
 
 
+def test_factorization_reproduces_dense_bias_everywhere_with_self_node():
+    """With ``bias_self_node=True`` the equivalence holds on the FULL matrix.
+
+    This is the point of the flag: an inner product gives <q_i, k_i> and cannot be
+    forced to 0, so under the default mask the factorization can only ever match
+    off-diagonal (test above). Unmasked, the dense path and the factorized path are
+    the same function everywhere — which is what the deferred backbone needs, and
+    it is checked here in fp64 before any backbone exists.
+    """
+    torch.manual_seed(0)
+    mod = LinearMagneticBias(4, 16, _CfgSelfNode()).double()
+    torch.nn.init.normal_(mod.proj[0].weight, std=0.5)
+    torch.nn.init.normal_(mod.proj[0].bias, std=0.0)   # bias term is not factorizable
+    magnetic, num_nodes = _mag_inputs(_batch(_items()))
+    dev = torch.device("cpu")
+
+    dense = mod(dtype=torch.float64, device=dev, magnetic=magnetic, num_nodes=num_nodes)
+    q, k = mod.structural_factors(magnetic, num_nodes, dev)
+    recon = torch.einsum("bhim,bjm->bhij", q, k)
+
+    diff = (dense - recon).abs().max().item()
+    assert diff < 1e-10, f"full-matrix factorization mismatch {diff}"
+
+
 def test_factorization_key_side_is_head_free():
     """K_struct carries no head dimension — the property that makes this
     GQA-native (one structural dictionary broadcast across all query heads)."""
@@ -391,3 +420,64 @@ def test_registered_in_bias_types():
     assert LinearMagneticBias in BIAS_TYPES
     assert LinearMagneticBias.config_key == "magnetic_linear"
     assert not LinearMagneticBias.shared
+
+
+# ── 15. bias_self_node — the intra-node diagonal (LINEAR_BIAS.md §7.3) ────────
+
+@pytest.mark.parametrize("cls", [MagneticBias, LinearMagneticBias])
+def test_diagonal_zeroed_by_default(cls):
+    """The default must stay masked: every result recorded before this flag
+    existed was measured with b_ii = 0, and silently changing that would
+    invalidate the comparison to them."""
+    torch.manual_seed(0)
+    mod = cls(4, 16, _Cfg()).double()
+    _make_live(mod)
+    magnetic, num_nodes = _mag_inputs(_batch(_items()))
+    out = mod(dtype=torch.float64, device=torch.device("cpu"),
+              magnetic=magnetic, num_nodes=num_nodes)
+    n = out.shape[-1]
+    diag = out[..., torch.arange(n), torch.arange(n)]
+    assert diag.abs().max().item() == 0.0
+
+
+@pytest.mark.parametrize("cls", [MagneticBias, LinearMagneticBias])
+def test_self_node_keeps_a_live_diagonal(cls):
+    """With the flag on, b_ii must be genuinely non-zero — and the OFF-diagonal
+    must be untouched, so the flag changes exactly one thing."""
+    torch.manual_seed(0)
+    mod = cls(4, 16, _Cfg()).double()
+    _make_live(mod)
+    torch.manual_seed(0)
+    mod_self = cls(4, 16, _CfgSelfNode()).double()
+    _make_live(mod_self)
+
+    magnetic, num_nodes = _mag_inputs(_batch(_items()))
+    kw = dict(dtype=torch.float64, device=torch.device("cpu"),
+              magnetic=magnetic, num_nodes=num_nodes)
+    masked, unmasked = mod(**kw), mod_self(**kw)
+
+    n = masked.shape[-1]
+    ar = torch.arange(n)
+    # Only real nodes carry a meaningful diagonal; padded slots are inert.
+    live = unmasked[0, :, ar, ar][:, :int(num_nodes[0])]
+    assert live.abs().max().item() > 1e-9, "bias_self_node produced a zero diagonal"
+
+    off = ~torch.eye(n, dtype=torch.bool)
+    assert torch.allclose(masked[..., off], unmasked[..., off], atol=1e-12), \
+        "bias_self_node must not perturb the off-diagonal"
+
+
+def test_self_node_rejected_alongside_spd():
+    """SPDBias has no self-distance row, so the flag would silently cover only
+    part of the active biases. It must raise, not half-apply."""
+    with pytest.raises(ValueError, match="SPDBias"):
+        GTLMLlamaConfig(magnetic_linear=True, magnetic_dim=_MAG_DIM,
+                        graph_attn_impl="eager", spd=True, max_spd=8,
+                        bias_self_node=True, **_BASE)
+
+
+def _make_live(mod):
+    """Break zero-init so a diagonal assertion cannot pass vacuously."""
+    torch.nn.init.normal_(mod.proj[0].weight, std=0.5)
+    if len(mod.proj) > 2 and hasattr(mod.proj[2], "weight"):
+        torch.nn.init.normal_(mod.proj[2].weight, std=0.5)

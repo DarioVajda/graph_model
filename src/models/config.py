@@ -29,6 +29,7 @@ class GraphConfigMixin:
         magnetic_dim: int = 32,
         magnetic_content_dim: int = 128,
         magnetic_q: float = 0.25,
+        bias_self_node: bool = False,
         k_hop: int = 0,
         k_hop_directed: bool = False,
         graph_attn_impl: str = "eager",
@@ -93,6 +94,23 @@ class GraphConfigMixin:
         self.magnetic_dim = magnetic_dim
         self.magnetic_content_dim = magnetic_content_dim
         self.magnetic_q = magnetic_q
+        # Keep the intra-node diagonal b_ii instead of zeroing it (see
+        # MagneticBias._finalize / LINEAR_BIAS.md §7.3). Applies to the magnetic
+        # family and RRWP. Default False = today's behaviour, bit-for-bit.
+        #
+        # SPD is deliberately NOT covered: SPDBias indexes `clamp(spd-1, ...)`, so
+        # self-distance 0 collides with distance 1 and it has no table row of its
+        # own. Adding one changes `weights`' shape and would break reload of every
+        # existing bias_parameters.pt. Raise rather than let the flag mean
+        # "self-node bias, except silently not for one of the three bias types".
+        if bias_self_node and spd:
+            raise ValueError(
+                "bias_self_node does not cover SPDBias: its lookup has no row for "
+                "self-distance 0 (idx = clamp(spd-1, ...)), so enabling the flag "
+                "alongside spd would silently apply to only some of the active "
+                "biases. Widening the table is a checkpoint-breaking change — do "
+                "it deliberately, not as a side effect of this flag.")
+        self.bias_self_node = bias_self_node
         self.k_hop = k_hop
         self.k_hop_directed = k_hop_directed
         self.graph_attn_impl = graph_attn_impl

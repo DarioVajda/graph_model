@@ -121,6 +121,7 @@ class RRWPBias(BaseBias):
     def __init__(self, num_heads: int, head_dim: int, bias_config):
         super().__init__()
         max_rw_steps = getattr(bias_config, 'max_rw_steps', 8)
+        self.bias_self_node = getattr(bias_config, 'bias_self_node', False)
         hidden = 4 * max_rw_steps
         self.proj = nn.Sequential(
             nn.Linear(max_rw_steps, hidden, bias=True),
@@ -135,6 +136,8 @@ class RRWPBias(BaseBias):
         if rrwp is None:
             return None
         b = self.proj(rrwp).permute(0, 3, 1, 2).contiguous()      # (B, H, N, N)
+        if self.bias_self_node:
+            return b
         diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
         return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
 
@@ -147,6 +150,9 @@ class MagneticBias(BaseBias):
     def __init__(self, num_heads: int, head_dim: int, bias_config):
         super().__init__()
         magnetic_dim = getattr(bias_config, 'magnetic_dim', 32)
+        # Read once here so every subclass (Shared/Content/Linear) inherits it via
+        # super().__init__ and _finalize needs no per-class plumbing.
+        self.bias_self_node = getattr(bias_config, 'bias_self_node', False)
         self.lambda_lin = nn.Linear(1, head_dim, bias=True)
         self.deep_set = nn.Sequential(
             nn.Linear(head_dim * 2, magnetic_dim, bias=True),
@@ -214,10 +220,28 @@ class MagneticBias(BaseBias):
             - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phiI)
         ) + b1                                                    # (B, N, N, m)
 
-    @staticmethod
-    def _finalize(b, device) -> torch.Tensor:
-        """``(B, N, N, H)`` → ``(B, H, N, N)`` with the intra-node diagonal zeroed."""
+    def _finalize(self, b, device) -> torch.Tensor:
+        """``(B, N, N, H)`` → ``(B, H, N, N)``, zeroing the intra-node diagonal
+        unless ``bias_self_node`` is set.
+
+        The diagonal is a node-level quantity, and ``expand_node_to_token_bias``
+        lifts node pairs to token pairs — so zeroing b_ii means EVERY token pair
+        inside the same node gets no structural bias, not merely a token relative
+        to itself.
+
+        ``bias_self_node=True`` keeps it. At i=j the imaginary part of the
+        Hermitian kernel vanishes identically and ``K(i,i) = sum_l |V_il|^2 phi_l``
+        — a real per-node spectral self-energy, not noise. It is also the one part
+        of the bias the factorization can reproduce for free (an inner product
+        gives <q_i, k_i> and cannot be forced to 0), which is why this switch
+        exists: see LINEAR_BIAS.md §7.3.
+
+        Default False, so every existing config and checkpoint keeps the masked
+        behaviour bit-for-bit.
+        """
         b = b.permute(0, 3, 1, 2).contiguous()                    # (B, H, N, N)
+        if getattr(self, 'bias_self_node', False):
+            return b
         diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
         return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
 
@@ -407,8 +431,11 @@ class LinearMagneticBias(MagneticBias):
         an implementation). It exists so the equivalence can be *tested* now, in
         fp64, before any backbone is built on top of it — see LINEAR_BIAS.md §7.
 
-        NOTE: this reproduces the bias off the diagonal only. ``_finalize`` zeroes
-        b_ii, and an inner product cannot express that zeroing (§7.3).
+        NOTE: with the default ``bias_self_node=False`` this reproduces the bias
+        off the diagonal only — ``_finalize`` zeroes b_ii and an inner product
+        cannot express that zeroing (§7.3). With ``bias_self_node=True`` the
+        equivalence is exact on the FULL matrix, which is the configuration the
+        deferred factorized backbone would actually run.
         """
         V_real, V_imag, phi = self._phi(magnetic, num_nodes, device)
         W = self.proj[0].weight                                   # (H, 2m)
