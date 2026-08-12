@@ -1,0 +1,130 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // MIXED_BIAS.md Phase 2 on GraphQA — the algorithmic tasks.
+  //
+  // This is where arm 3 (magnitude alone) has the strongest prior. S_i =
+  // diag f(L) is essentially a degree / centrality measure, and node_degree is
+  // literally a per-node quantity; 017's header made the same argument for the
+  // intra-node diagonal, which is the same object (K(i,i) = sum_l |V_il|^2
+  // phi_l). If the magnitude channel carries usable signal anywhere, here.
+  //
+  // ── arms: only 3 and 4 are new ───────────────────────────────────────────
+  //   3  magnetic_magnitude, mask off
+  //   4  magnetic_hybrid,    mask off
+  //
+  // Arms 0, 1 and 2 are REUSED, and GraphQA is the only dataset where that
+  // works. The controls come from 013 D (the floors: node_degree 0.086,
+  // shortest_path 0.470, edge_count 0.026), 017 B masked and 017 C unmasked.
+  // They survive the move to M=64 because 013/017 build the cache at
+  // magnetic_m: 0 on ~20-node graphs, so min(N, 64) = min(N, 128) = N and the
+  // truncation is a no-op at both values. magnetic_m_collate is set to 64 below
+  // anyway, so the RECORD says what the sweep intends rather than leaving the
+  // reader to re-derive that it does not matter.
+  //
+  // ── bias_lr IS swept here, unlike 017 ────────────────────────────────────
+  // 017 pinned 5e-3 because 013 had already measured both LRs for both existing
+  // heads and settled the question for them. It is not settled for arms 3 and 4:
+  // their parameter counts resemble neither incumbent, so each is read at its
+  // own best (MIXED_BIAS.md §5.2). The reused controls stay at their own best
+  // 5e-3, which is what "read each arm at its own best" means.
+  //
+  // 2 arms x 2 bias_lr x 3 tasks x 3 seeds = 36 runs, ~17 min each (013) =
+  // ~10 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.graphqa src/experiments/mixed_bias/configs/019_graphqa_mixed.jsonc
+  //   python3 -m sweep.report src/experiments/mixed_bias/results/019_graphqa_mixed
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "019_graphqa_mixed",
+  "results_dir": "src/experiments/mixed_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 16,
+      "partition": "frida",
+      "account": "povejmo",
+      // A100 (either memory tier) or H100. `GPU_BRD:A100` is carried by all
+      // three A100 nodes — aga (4x40GB), axa (8x40GB) and ana (8x80GB) — and
+      // there is NO `GPU_BRD:A100_80GB` feature to name, so the list form is
+      // what spans both tiers. The string form "A100" would pin the gres TYPE
+      // and exclude ana, whose gres is `gpu:A100_80GB:8`.
+      //
+      // H100 was added because A100 alone was fully allocated at submission with
+      // ten 7-day A100 jobs queued above this account — a pool that could stay
+      // occupied for a week. These runs are ~17 min, which makes them the best
+      // backfill candidates in the sweep, so widening the pool is nearly free.
+      //
+      // CONSEQUENCE FOR STEP TIMES, not for accuracy: 013 ran on A100, so only
+      // the tasks that land there are directly comparable to it. Mixed hardware
+      // within one sweep means wall-clock per run is no longer a single number.
+      // Accuracy — the only thing read from this sweep — is unaffected.
+      "gpus": ["A100", "H100"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "task": ["node_degree", "shortest_path", "edge_count"],
+  "seed": [42, 43, 44],
+
+  // A BUNDLE: head flag, mask and LR vary together. Both arms are unmasked —
+  // an inner product yields <q_i, k_i> and cannot be forced to zero, so unmasked
+  // is the only configuration a factorized backbone can run (MIXED_BIAS.md §5.1).
+  "arm": [
+    {"magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3},
+    {"magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2},
+    {"magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3},
+    {"magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2}
+  ],
+
+  // ── magnitude-channel widths (MIXED_BIAS.md §2.5, §2.6) ───────────────────
+  // Same operating point as 018/020 so the three datasets measure one recipe.
+  // Note magnetic_dim is 32 here (not 128 as on WebQSP), so MLP_magnitude is
+  // 32 -> 256 -> 64 — the internal width is the free one either way.
+  "magnetic_magnitude_dim": 64,
+  "magnetic_magnitude_repr_dim": 256,
+
+  // The two pairwise biases the factorization cannot represent (see 013's
+  // header). spd=false is also REQUIRED rather than merely preferred:
+  // bias_self_node does not cover SPDBias (no self-distance row in its lookup)
+  // and validate() rejects the combination instead of half-applying the flag.
+  "spd": false,
+  "rrwp": false,
+
+  // ── 017_graphqa_selfnode, verbatim below this line (bias_lr moved into the
+  //    bundle) ───────────────────────────────────────────────────────────────
+  "question_node": "isolated",
+  "graph_type": "standard",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+  // Kept at the built values even where the feature is off: they are part of the
+  // data cache identity, so changing them would fork the cache.
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}
