@@ -21,8 +21,14 @@ MagneticBias  - complex-eigenvector-based directional encoding via deep-set MLP
 MagneticContentBias - MagneticBias widened with a live per-node content summary
 LinearMagneticBias  - MagneticBias with a linear head instead of the MLP, so the
                       bias is a bilinear form (see LINEAR_BIAS.md)
+MagneticMagnitudeBias - per-node spectral self-energy through an MLP, the only
+                      NON-linear channel a bilinear form admits (MIXED_BIAS.md)
+MagneticHybridBias  - LinearMagneticBias + MagneticMagnitudeBias, i.e. the linear
+                      phase channel and the non-linear magnitude channel in tandem
 K-hop gate (hard) - -inf for node pairs more than K hops apart; K=0 = disabled
 """
+
+import math
 
 import torch
 import torch.nn as nn
@@ -220,6 +226,94 @@ class MagneticBias(BaseBias):
             - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phiI)
         ) + b1                                                    # (B, N, N, m)
 
+    # ── Magnitude channel (MagneticMagnitudeBias / MagneticHybridBias) ────────
+    #
+    # Built on demand by _build_magnitude_channel; the classes that do not call
+    # it carry none of these parameters. See src/models/MIXED_BIAS.md §2.3.
+
+    def _self_energy(self, V_real, V_imag, phi) -> torch.Tensor:
+        """Per-node spectral self-energy ``S`` — ``(B, N, magnetic_dim)``.
+
+            S_i = sum_l (V_R[i,l]^2 + V_I[i,l]^2) * phi_l  =  Re K(i,i)
+
+        i.e. the DIAGONAL of the same Hermitian kernel ``_folded_spectral`` builds
+        off the diagonal — computed without ever forming an N² intermediate
+        (O(N·M·magnetic_dim)).
+
+        This is the only per-node magnitude feature invariant to BOTH eigenbasis
+        ambiguities. Taking |V_il|² kills the per-eigenvector U(1) phase, which is
+        the whole ambiguity when the spectrum is simple; summing over l kills the
+        U(k) mixing inside a degenerate block, because phi_l is constant across a
+        block and factors out, leaving that block's projector diagonal — which no
+        unitary mixing can move. Per-COLUMN magnitudes have the first property and
+        not the second: MIXED_BIAS.md §3 measures them moving by 0.674 under a
+        relabelling of a 5-node star that leaves this sum at 8.3e-7. So the
+        non-linearity must go AFTER this pool, never before it.
+
+        Padded eigenvector slots contribute nothing by construction: V is zero
+        there, so |V|² = 0 whatever phi holds in those rows.
+        """
+        return torch.einsum('bil,blk->bik', V_real * V_real + V_imag * V_imag, phi)
+
+    def _build_magnitude_channel(self, num_heads: int, bias_config) -> None:
+        """MLP_magnitude, the per-head diagonal s^(h), and the per-KV-group W_K.
+
+        ``magnetic_magnitude_repr_dim`` is INTERNAL to the MLP — evaluated once per
+        node per forward and never seen by attention, so it is free. Only
+        ``magnetic_magnitude_dim`` is appended to each head, and it is not.
+
+        s^(h) is per QUERY head and W_K^(g) is per KV GROUP: the finest granularity
+        GQA physically allows. The key tensor already exists as (B, H_KV, N, d), so
+        writing a different structural block into each group costs nothing, while
+        per-query-head keys would force H_Q/H_KV copies of a shared row and defeat
+        GQA. Bloom-style full MHA has no ``num_key_value_heads``, where per-group
+        degenerates to per-head — also correct, and the parameter count tracks the
+        key rows that physically exist.
+        """
+        magnetic_dim = getattr(bias_config, 'magnetic_dim', 32)
+        d_repr = getattr(bias_config, 'magnetic_magnitude_repr_dim', 256)
+        d_out = getattr(bias_config, 'magnetic_magnitude_dim', 64)
+        n_kv = getattr(bias_config, 'num_key_value_heads', None) or num_heads
+        if num_heads % n_kv:
+            raise ValueError(
+                f"num_heads={num_heads} is not divisible by num_key_value_heads="
+                f"{n_kv}; the magnitude channel's group map g(h) = h // (H_Q/H_KV) "
+                "assumes HF's repeat_kv layout.")
+        self.magnitude_kv_heads = n_kv
+        self.magnitude_repeat = num_heads // n_kv
+        self.magnitude_mlp = nn.Sequential(
+            nn.Linear(magnetic_dim, d_repr, bias=True),
+            nn.SiLU(),
+            nn.Linear(d_repr, d_out, bias=True),
+        )
+        # Zero-init the QUERY side ONLY. The bias is then exactly 0 at step 0, as
+        # every other magnetic head is, but the arm is not stuck there: zeroing
+        # both sides of <Z ⊙ s, Z W_K> makes it a dead saddle — db/ds ∝ Z W_K = 0
+        # and db/dW_K ∝ Z ⊙ s = 0, so both gradients are exactly zero forever.
+        # With only s zeroed, s has a non-zero gradient immediately and W_K starts
+        # moving once s does.
+        self.magnitude_q_scale = nn.Parameter(torch.zeros(num_heads, d_out))
+        bound = 1.0 / math.sqrt(d_out)                       # nn.Linear's default
+        self.magnitude_k_mix = nn.Parameter(
+            torch.empty(n_kv, d_out, d_out).uniform_(-bound, bound))
+
+    def _magnitude_factors(self, V_real, V_imag, phi):
+        """``(Q_magnitude, K_magnitude)`` — ``(B, H_Q, N, d)`` and ``(B, H_KV, N, d)``.
+
+        Query head ``h`` pairs with key group ``h // magnitude_repeat``.
+        """
+        Z = self.magnitude_mlp(self._self_energy(V_real, V_imag, phi))     # (B, N, d)
+        q = Z.unsqueeze(1) * self.magnitude_q_scale.unsqueeze(0).unsqueeze(2)
+        k = torch.einsum('bnd,gde->bgne', Z, self.magnitude_k_mix)
+        return q, k
+
+    def _magnitude_bias(self, V_real, V_imag, phi) -> torch.Tensor:
+        """The magnitude channel's ``(B, N, N, H)`` contribution — `_finalize`'s layout."""
+        q, k = self._magnitude_factors(V_real, V_imag, phi)
+        # repeat_interleave IS repeat_kv: group g serves heads [g·n_rep, (g+1)·n_rep).
+        k = k.repeat_interleave(self.magnitude_repeat, dim=1)              # (B, H_Q, N, d)
+        return torch.einsum('bhid,bhjd->bijh', q, k)
+
     def _finalize(self, b, device) -> torch.Tensor:
         """``(B, N, N, H)`` → ``(B, H, N, N)``, zeroing the intra-node diagonal
         unless ``bias_self_node`` is set.
@@ -388,6 +482,25 @@ class LinearMagneticBias(MagneticBias):
         nn.init.zeros_(self.proj[0].bias)
         self.proj[0]._is_hf_initialized = True
 
+    def _phase_bias(self, V_real, V_imag, phi) -> torch.Tensor:
+        """The linear phase channel's ``(B, N, N, H)`` contribution, pre-`_finalize`.
+
+        Split out of ``forward`` so ``MagneticHybridBias`` can add a second channel
+        to it without re-deriving the folded/unfolded branch.
+        """
+        if getattr(self, "legacy_unfolded", False):
+            # Parity path: materialize [Re ‖ Im] and apply the head to it, the
+            # naive reading of the formula above.
+            real = (torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phi)
+                    + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phi))
+            imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi)
+                    - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi))
+            return self.proj[0](torch.cat([real, imag], dim=-1))
+        # The head is linear, so it folds into phi exactly as proj[0] does in
+        # MagneticBias: _folded_spectral already emits (B,N,N,out_features) with
+        # the head applied, and no further layer is needed.
+        return self._folded_spectral(V_real, V_imag, phi)         # (B, N, N, H)
+
     def forward(
         self, *, dtype, device,
         magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
@@ -397,23 +510,7 @@ class LinearMagneticBias(MagneticBias):
         parts = self._phi(magnetic, num_nodes, device)
         if parts is None:
             return None
-        V_real, V_imag, phi = parts
-
-        if getattr(self, "legacy_unfolded", False):
-            # Parity path: materialize [Re ‖ Im] and apply the head to it, the
-            # naive reading of the formula above.
-            real = (torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phi)
-                    + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phi))
-            imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi)
-                    - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi))
-            b = self.proj[0](torch.cat([real, imag], dim=-1))
-        else:
-            # The head is linear, so it folds into phi exactly as proj[0] does in
-            # MagneticBias: _folded_spectral already emits (B,N,N,out_features)
-            # with the head applied, and no further layer is needed.
-            b = self._folded_spectral(V_real, V_imag, phi)        # (B, N, N, H)
-
-        return self._finalize(b, device)
+        return self._finalize(self._phase_bias(*parts), device)
 
     def structural_factors(
         self, magnetic: Tuple[torch.Tensor, torch.Tensor],
@@ -437,7 +534,14 @@ class LinearMagneticBias(MagneticBias):
         equivalence is exact on the FULL matrix, which is the configuration the
         deferred factorized backbone would actually run.
         """
-        V_real, V_imag, phi = self._phi(magnetic, num_nodes, device)
+        return self._phase_factors(*self._phi(magnetic, num_nodes, device))
+
+    def _phase_factors(self, V_real, V_imag, phi) -> Tuple[torch.Tensor, torch.Tensor]:
+        """``structural_factors`` off already-computed ``_phi`` parts.
+
+        Split out so ``MagneticHybridBias`` can build both channels from ONE
+        ``_phi`` call instead of two.
+        """
         W = self.proj[0].weight                                   # (H, 2m)
         m = W.shape[1] // 2
         # Psi = Phi @ W_R / W_I  -> (B, M, H): the eigenvalue projection, O(M).
@@ -450,6 +554,128 @@ class LinearMagneticBias(MagneticBias):
         q_struct = torch.cat([vr * pr + vi * pi, vi * pr - vr * pi], dim=-1)
         k_struct = torch.cat([V_real, V_imag], dim=-1)            # (B, N, 2M)
         return q_struct, k_struct
+
+
+class MagneticMagnitudeBias(MagneticBias):
+    """Per-node spectral self-energy through an MLP — the magnitude channel alone.
+
+        S_i = sum_l |V_il|² phi_l              (B, N, magnetic_dim)   [_self_energy]
+        Z   = MLP_magnitude(S)                 (B, N, d_magnitude)
+        b^(h)(i,j) = <Z_i ⊙ s^(h), Z_j W_K^(g)>,   g = h // (H_Q/H_KV)
+
+    Why this form: a bilinear form <f(i), g(j)> places NO constraint on how f and
+    g are computed from a single node's features, so an MLP is free there — this
+    is the only kind of non-linearity a factorization admits at all. What it can
+    never reproduce is a non-linearity applied to a PAIRWISE quantity, which is
+    what MagneticBias's SiLU is. See MIXED_BIAS.md §1.
+
+    The bias carries no relative-geometry content whatsoever: it is structural
+    role against structural role. That is precisely what this arm isolates.
+
+    Deliberately NOT optimized — the same dense (B,H,N,N) path as every other
+    magnetic head, so a measured quality delta is attributable to the math and not
+    to an implementation. ``structural_factors`` exists so the O(N) factorization
+    can be pinned in fp64 before any backbone is built on it.
+    """
+
+    config_key = 'magnetic_magnitude'
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        super().__init__(num_heads, head_dim, bias_config)
+        # No pairwise head at all. MagneticBias's `proj` MLP would be dead weight
+        # in the checkpoint and in the weight-decay group, and its only reader
+        # (_folded_spectral) is never called here. lambda_lin/deep_set stay: they
+        # are what produces phi.
+        del self.proj
+        self._build_magnitude_channel(num_heads, bias_config)
+
+    def forward(
+        self, *, dtype, device,
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        num_nodes: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Optional[torch.Tensor]:
+        parts = self._phi(magnetic, num_nodes, device)
+        if parts is None:
+            return None
+        return self._finalize(self._magnitude_bias(*parts), device)
+
+    def structural_factors(
+        self, magnetic: Tuple[torch.Tensor, torch.Tensor],
+        num_nodes: torch.Tensor, device,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """``(Q_struct, K_struct)`` shaped ``(B, H_Q, N, d)`` and ``(B, H_KV, N, d)``:
+
+            b^(h)(i,j) = <Q_struct[b, h, i, :], K_struct[b, h // n_rep, j, :]>
+
+        Note the convention differs from ``LinearMagneticBias``, whose key side is
+        parameter-free and therefore has no head dimension at all. Here W_K is
+        per KV group, so the key carries a group axis that the caller resolves
+        with repeat_kv.
+
+        Not used by ``forward``. With the default ``bias_self_node=False`` it
+        reproduces the bias off the diagonal only — an inner product yields
+        <q_i, k_i> and cannot express that zeroing. ``bias_self_node=True`` makes
+        the equivalence exact on the FULL matrix, which is the configuration a
+        factorized backbone would actually run and the one §5 measures.
+        """
+        return self._magnitude_factors(*self._phi(magnetic, num_nodes, device))
+
+
+class MagneticHybridBias(LinearMagneticBias):
+    """The proposed O(N) replacement: linear phase + non-linear magnitude.
+
+        b_hybrid = b_phase + b_magnitude
+
+    which factorizes by CONCATENATION, since a sum of two inner products is one
+    inner product over the stacked vectors:
+
+        Q_tandem^(h) = [ Q_phase^(h) ‖ Q_magnitude^(h) ]
+        K_tandem^(g) = [ K_phase     ‖ K_magnitude^(g) ]
+
+    Expectations, so the result is read correctly: this is NOT a universal
+    approximator of MagneticBias's MLP head and no amount of width makes it one.
+    It adds one non-linear node-level channel to one linear pairwise channel. The
+    reason to expect that to suffice is empirical — P0b measured the trained bias
+    as nearly rank-1 (90% of WebQSP's spectral energy in two singular values) — so
+    a modest-rank additive channel is large relative to what the bias demonstrably
+    uses. See MIXED_BIAS.md §1 and §5.6.
+    """
+
+    config_key = 'magnetic_hybrid'
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        super().__init__(num_heads, head_dim, bias_config)
+        self._build_magnitude_channel(num_heads, bias_config)
+
+    def forward(
+        self, *, dtype, device,
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        num_nodes: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Optional[torch.Tensor]:
+        parts = self._phi(magnetic, num_nodes, device)
+        if parts is None:
+            return None
+        b = self._phase_bias(*parts) + self._magnitude_bias(*parts)
+        return self._finalize(b, device)
+
+    def structural_factors(
+        self, magnetic: Tuple[torch.Tensor, torch.Tensor],
+        num_nodes: torch.Tensor, device,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """``(B, H_Q, N, 2M + d)`` and ``(B, H_KV, N, 2M + d)`` — see §2.4.
+
+        ``K_phase`` is parameter-free and head-independent, so it is broadcast
+        into every group rather than being duplicated as learned weight; only the
+        magnitude block actually differs per group.
+        """
+        parts = self._phi(magnetic, num_nodes, device)
+        q_phase, k_phase = self._phase_factors(*parts)         # (B,H,N,2M), (B,N,2M)
+        q_mag, k_mag = self._magnitude_factors(*parts)         # (B,H,N,d), (B,H_KV,N,d)
+        k_phase = k_phase.unsqueeze(1).expand(-1, k_mag.shape[1], -1, -1)
+        return (torch.cat([q_phase, q_mag], dim=-1),
+                torch.cat([k_phase, k_mag], dim=-1))
 
 
 class MagneticSharedBias(MagneticBias):
@@ -479,6 +705,8 @@ BIAS_TYPES: list[type[BaseBias]] = [
     MagneticSharedBias,
     MagneticContentBias,
     LinearMagneticBias,
+    MagneticMagnitudeBias,
+    MagneticHybridBias,
 ]
 """Add new bias types here — GraphAttentionBias picks them up automatically."""
 
