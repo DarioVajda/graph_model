@@ -255,6 +255,23 @@ def build_parser():
                         "instead of the 2-layer MLP, making the bias a bilinear "
                         "form (see src/models/LINEAR_BIAS.md). Mutually exclusive "
                         "with the other magnetic placements.")
+    p.add_argument("--magnetic-magnitude", action=B, default=d.magnetic_magnitude,
+                   help="magnitude-channel magnetic bias: each node's spectral "
+                        "self-energy sum_l |V_il|^2 phi_l through an MLP, then a "
+                        "bilinear form. Non-linear but carries NO relative geometry "
+                        "(see src/models/MIXED_BIAS.md). Mutually exclusive with the "
+                        "other magnetic placements.")
+    p.add_argument("--magnetic-hybrid", action=B, default=d.magnetic_hybrid,
+                   help="linear phase channel + non-linear magnitude channel in "
+                        "tandem — the proposed O(N) replacement for --magnetic. "
+                        "Mutually exclusive with the other magnetic placements.")
+    p.add_argument("--magnetic-magnitude-dim", type=int, default=d.magnetic_magnitude_dim,
+                   help="d_magnitude: width Q/K append per head for the magnitude "
+                        "channel. NOT free — it is head width.")
+    p.add_argument("--magnetic-magnitude-repr-dim", type=int,
+                   default=d.magnetic_magnitude_repr_dim,
+                   help="d_magnitude_repr: MLP_magnitude's internal width. Computed "
+                        "once per node and never enters attention, so it is free.")
     p.add_argument("--bias-self-node", action=B, default=d.bias_self_node,
                    help="keep the intra-node diagonal b_ii instead of zeroing it. "
                         "Because the bias is node-level and expanded to tokens, the "
@@ -368,6 +385,9 @@ def config_from_args(args):
         magnetic_shared=args.magnetic_shared,
         magnetic_content=args.magnetic_content, magnetic_content_dim=args.magnetic_content_dim,
         magnetic_linear=args.magnetic_linear, magnetic_m_collate=args.magnetic_m_collate,
+        magnetic_magnitude=args.magnetic_magnitude, magnetic_hybrid=args.magnetic_hybrid,
+        magnetic_magnitude_dim=args.magnetic_magnitude_dim,
+        magnetic_magnitude_repr_dim=args.magnetic_magnitude_repr_dim,
         bias_self_node=args.bias_self_node,
         magnetic_dim=args.magnetic_dim, magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
         rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,

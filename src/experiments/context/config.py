@@ -92,6 +92,13 @@ class RunConfig:
     # change data_config_key() — the arm reuses the existing build — and every
     # gate that keys on `magnetic` must accept it too (see uses_magnetic).
     magnetic_linear: bool = False
+    # Decoupled magnetic heads (MagneticMagnitudeBias / MagneticHybridBias;
+    # src/models/MIXED_BIAS.md). Same eigenvector DATA again, so the same two
+    # rules apply: out of data_config_key(), and inside uses_magnetic.
+    magnetic_magnitude: bool = False
+    magnetic_hybrid: bool = False
+    magnetic_magnitude_dim: int = 64            # d_magnitude — appended per head (NOT free)
+    magnetic_magnitude_repr_dim: int = 256      # d_magnitude_repr — internal to the MLP (free)
     magnetic_dim: int = 128
     magnetic_q: float = 0.25
     magnetic_m: int = 128                       # eigenvectors kept (0 -> all)
@@ -308,11 +315,18 @@ class RunConfig:
             # same features, same data, different sharing granularity.
             if self.magnetic_linear:
                 share = {"magnetic_linear": True}
+            elif self.magnetic_hybrid:
+                share = {"magnetic_hybrid": True}
+            elif self.magnetic_magnitude:
+                share = {"magnetic_magnitude": True}
             elif self.magnetic_groups:
                 share = {"magnetic_groups": self.magnetic_groups}
             else:
                 share = {"magnetic": True}
             cfg.update(**share, magnetic_dim=self.magnetic_dim, magnetic_q=self.magnetic_q)
+            if self.magnetic_magnitude or self.magnetic_hybrid:
+                cfg.update(magnetic_magnitude_dim=self.magnetic_magnitude_dim,
+                           magnetic_magnitude_repr_dim=self.magnetic_magnitude_repr_dim)
         if self.bias_self_node:
             # Model-side only; deliberately absent from data_config_key().
             cfg.update(bias_self_node=True)
@@ -353,13 +367,15 @@ class RunConfig:
     def uses_magnetic(self) -> bool:
         """True when the run consumes magnetic eigenvector features.
 
-        Single source of truth for every dataset/collator/model gate. `magnetic`
-        and `magnetic_linear` differ only in the HEAD applied to the same
-        features, so a gate that checks `magnetic` alone would emit no
-        eigenvectors for the linear arm — and the bias would silently return None,
-        producing a bias-free run that trains fine and reads as a clean negative.
+        Single source of truth for every dataset/collator/model gate. `magnetic`,
+        `magnetic_linear`, `magnetic_magnitude` and `magnetic_hybrid` differ only
+        in the HEAD applied to the same features, so a gate that checks `magnetic`
+        alone would emit no eigenvectors for the other arms — and the bias would
+        silently return None, producing a bias-free run that trains fine and reads
+        as a clean negative.
         """
-        return bool(self.magnetic or self.magnetic_linear)
+        return bool(self.magnetic or self.magnetic_linear
+                    or self.magnetic_magnitude or self.magnetic_hybrid)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -531,6 +547,23 @@ class RunConfig:
         # the eigenbasis is exactly what the M-sweep measures (LINEAR_BIAS.md
         # §2.6). The build stays complete; only what the collator hands the model
         # is narrowed, so one build serves the whole grid.
+        # The decoupled heads are different HEADS on the same magnetic term, so
+        # neither may combine with another placement. `magnetic_groups` is NOT a
+        # competing head at this layer — it MODIFIES `magnetic` (bias_params emits
+        # magnetic_groups in place of magnetic), so `magnetic=True` +
+        # `magnetic_groups=G` is the intended combination and stays legal.
+        placements = {"magnetic": self.magnetic, "magnetic_linear": self.magnetic_linear,
+                      "magnetic_magnitude": self.magnetic_magnitude,
+                      "magnetic_hybrid": self.magnetic_hybrid,
+                      "magnetic_groups": bool(self.magnetic_groups)}
+        for name in ("magnetic_magnitude", "magnetic_hybrid"):
+            if not placements[name]:
+                continue
+            clash = [k for k, v in placements.items() if v and k != name]
+            if clash:
+                raise ValueError(
+                    f"{name} is a different HEAD on the same magnetic term, so it "
+                    f"cannot combine with {clash}. Enable exactly one placement.")
         if self.magnetic_m_collate:
             if not self.uses_magnetic:
                 raise ValueError(

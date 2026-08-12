@@ -100,6 +100,8 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         # M-truncated arm and a self-node arm are only distinguishable by parsing
         # the run name, which is fragile and silently wrong.
         "magnetic_linear": cfg.magnetic_linear,
+        "magnetic_magnitude": cfg.magnetic_magnitude,
+        "magnetic_hybrid": cfg.magnetic_hybrid,
         "magnetic_m_collate": cfg.collate_magnetic_m,
         "bias_self_node": cfg.bias_self_node,
         "data_format_version": cfg.data_format_version,

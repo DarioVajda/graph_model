@@ -94,6 +94,10 @@ _UNPERTURBABLE = {
 # Overrides a field needs alongside it to stay valid.
 _COMPANIONS = {
     "magnetic_linear": {"magnetic": False},
+    # Each decoupled head REPLACES the magnetic placement rather than modifying
+    # it, so it has to be tested with the default magnetic arm switched off.
+    "magnetic_magnitude": {"magnetic": False},
+    "magnetic_hybrid": {"magnetic": False},
     "magnetic_groups": {"magnetic": True},
     # spd defaults ON here, and bias_self_node refuses to combine with it (SPDBias
     # has no self-distance row, so the flag would cover only some active biases).

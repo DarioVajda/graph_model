@@ -213,6 +213,16 @@ class RunConfig:
     # bilinear form. Consumes the SAME eigenvector data, so it is an architecture-
     # only knob and does NOT change the data cache key.
     magnetic_linear: bool = False
+    # Decoupled magnetic heads (MagneticMagnitudeBias / MagneticHybridBias;
+    # src/models/MIXED_BIAS.md). `magnetic_magnitude` is the non-linear per-node
+    # magnitude channel alone; `magnetic_hybrid` is that channel plus the linear
+    # phase channel, i.e. the proposed O(N) replacement. Both consume the SAME
+    # eigenvector data as `magnetic`, so they are architecture-only knobs and do
+    # NOT change the data cache key.
+    magnetic_magnitude: bool = False
+    magnetic_hybrid: bool = False
+    magnetic_magnitude_dim: int = 64          # d_magnitude — appended per head (NOT free)
+    magnetic_magnitude_repr_dim: int = 256    # d_magnitude_repr — internal to the MLP (free)
     magnetic_dim: int = 128                   # magnetic-bias MLP hidden width (model architecture)
     magnetic_q: float = 0.25                  # magnetic-Laplacian charge
     magnetic_m: int = 128                     # # magnetic eigenvectors (data prep + collator; 0 = all N)
@@ -383,16 +393,17 @@ class RunConfig:
     def uses_magnetic(self) -> bool:
         """True when the run consumes magnetic eigenvector features.
 
-        Single source of truth for every dataset/collator gate. All four
+        Single source of truth for every dataset/collator gate. All six
         placements — `magnetic`, `magnetic_shared`, `magnetic_content`,
-        `magnetic_linear` — read the same eigenvectors and differ only in where or
-        how the head is applied, so a gate that enumerates a subset silently emits
-        no features for the missing arm. The bias then returns None and the run
-        trains with no graph bias at all, which looks exactly like a clean
-        negative result.
+        `magnetic_linear`, `magnetic_magnitude`, `magnetic_hybrid` — read the same
+        eigenvectors and differ only in where or how the head is applied, so a
+        gate that enumerates a subset silently emits no features for the missing
+        arm. The bias then returns None and the run trains with no graph bias at
+        all, which looks exactly like a clean negative result.
         """
         return bool(self.magnetic or self.magnetic_shared
-                    or self.magnetic_content or self.magnetic_linear)
+                    or self.magnetic_content or self.magnetic_linear
+                    or self.magnetic_magnitude or self.magnetic_hybrid)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -433,6 +444,15 @@ class RunConfig:
             # head differs, so magnetic_dim/magnetic_q carry over unchanged.
             cfg.update(magnetic_linear=True, magnetic_dim=self.magnetic_dim,
                        magnetic_q=self.magnetic_q)
+        if self.magnetic_magnitude or self.magnetic_hybrid:
+            # Same reasoning again, plus the two magnitude-channel widths. Both
+            # keys share one block because they build the identical channel and
+            # differ only in whether the phase channel rides alongside it.
+            key = "magnetic_hybrid" if self.magnetic_hybrid else "magnetic_magnitude"
+            cfg.update(**{key: True}, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q,
+                       magnetic_magnitude_dim=self.magnetic_magnitude_dim,
+                       magnetic_magnitude_repr_dim=self.magnetic_magnitude_repr_dim)
         if self.rrwp:
             # max_rw_steps is the RRWPBias MLP's INPUT width, so it must equal the
             # stored column's last dim — data prep and model read the same field.
@@ -601,18 +621,23 @@ class RunConfig:
             raise ValueError(
                 "rrwp is a graph-arm knob (the flat serialization builds no graph to "
                 "walk); remove it from flat_* runs.")
-        if self.magnetic_linear:
-            # `magnetic_linear` swaps the head on the same term, so it cannot
-            # coexist with any other placement of that term. Raising here (rather
-            # than letting the bias quietly return None or double up) is what stops
-            # a misconfigured arm from training cleanly and reading as a result.
-            others = {"magnetic": self.magnetic, "magnetic_shared": self.magnetic_shared,
+        # Each of these swaps the head on the same magnetic term, so none can
+        # coexist with any other placement of that term. Raising here (rather than
+        # letting the bias quietly return None or double up) is what stops a
+        # misconfigured arm from training cleanly and reading as a result.
+        placements = {"magnetic": self.magnetic, "magnetic_shared": self.magnetic_shared,
                       "magnetic_content": self.magnetic_content,
+                      "magnetic_linear": self.magnetic_linear,
+                      "magnetic_magnitude": self.magnetic_magnitude,
+                      "magnetic_hybrid": self.magnetic_hybrid,
                       "magnetic_groups": bool(self.magnetic_groups)}
-            clash = [k for k, v in others.items() if v]
+        for name in ("magnetic_linear", "magnetic_magnitude", "magnetic_hybrid"):
+            if not placements[name]:
+                continue
+            clash = [k for k, v in placements.items() if v and k != name]
             if clash:
                 raise ValueError(
-                    f"magnetic_linear is a different HEAD on the same magnetic term, so "
+                    f"{name} is a different HEAD on the same magnetic term, so "
                     f"it cannot combine with {clash}. Enable exactly one placement.")
         if self.magnetic_m_collate:
             if not self.uses_magnetic:

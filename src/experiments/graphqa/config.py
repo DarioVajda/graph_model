@@ -189,6 +189,15 @@ class RunConfig:
     # src/models/LINEAR_BIAS.md). Same features, same data, different head — so it
     # is a model-side knob like magnetic_groups and shares the built dataset.
     magnetic_linear: bool = False
+    # Decoupled magnetic heads (MagneticMagnitudeBias / MagneticHybridBias;
+    # src/models/MIXED_BIAS.md). `magnetic_magnitude` is the per-node magnitude
+    # channel alone, `magnetic_hybrid` adds the linear phase channel to it. Same
+    # features and same data as `magnetic`, so both are model-side knobs that
+    # share the built dataset, exactly like magnetic_linear.
+    magnetic_magnitude: bool = False
+    magnetic_hybrid: bool = False
+    magnetic_magnitude_dim: int = 64            # d_magnitude — appended per head (NOT free)
+    magnetic_magnitude_repr_dim: int = 256      # d_magnitude_repr — internal to the MLP (free)
     magnetic_dim: int = 32                      # model bias-MLP hidden width
     magnetic_q: float = 0.25                    # magnetic-Laplacian charge (data)
     magnetic_m: int = 0                         # eigenvectors kept (0 -> all N)
@@ -275,11 +284,12 @@ class RunConfig:
         """True when ANY placement of the magnetic term is active.
 
         Single source of truth for every collator/data gate. Gating on
-        ``self.magnetic`` alone would silently starve the linear arm of the
-        eigenvectors it is built from, and the run would train with no magnetic
-        bias while looking perfectly healthy.
+        ``self.magnetic`` alone would silently starve the linear, magnitude and
+        hybrid arms of the eigenvectors they are built from, and the run would
+        train with no magnetic bias while looking perfectly healthy.
         """
-        return bool(self.magnetic or self.magnetic_linear)
+        return bool(self.magnetic or self.magnetic_linear
+                    or self.magnetic_magnitude or self.magnetic_hybrid)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -320,6 +330,15 @@ class RunConfig:
             # head differs (one Linear onto the heads instead of the 2-layer MLP).
             cfg.update(magnetic_linear=True, magnetic_dim=self.magnetic_dim,
                        magnetic_q=self.magnetic_q)
+        elif self.magnetic_magnitude or self.magnetic_hybrid:
+            # Same features again, plus the two magnitude-channel widths. One
+            # branch for both keys: they build the identical channel and differ
+            # only in whether the phase channel rides alongside it.
+            key = "magnetic_hybrid" if self.magnetic_hybrid else "magnetic_magnitude"
+            cfg.update(**{key: True}, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q,
+                       magnetic_magnitude_dim=self.magnetic_magnitude_dim,
+                       magnetic_magnitude_repr_dim=self.magnetic_magnitude_repr_dim)
         if self.bias_self_node:
             # Model-side only; it does not touch feature generation or the cache key.
             cfg.update(bias_self_node=True)
@@ -332,12 +351,15 @@ class RunConfig:
         # every existing label byte-identical while it is off (the default).
         self_node = "+selfnode" if self.bias_self_node else ""
         off = [f for f in WIRED_FEATURES if not getattr(self, f)]
-        if self.magnetic_linear:
-            # Without this the linear arm reports as 'no-magnetic' — the label of the
-            # arm that has NO magnetic term at all, which is the one thing it must
-            # never be confused with.
+        head = ("mag-linear" if self.magnetic_linear else
+                "mag-hybrid" if self.magnetic_hybrid else
+                "mag-magnitude" if self.magnetic_magnitude else None)
+        if head:
+            # Without this the non-MLP heads report as 'no-magnetic' — the label of
+            # the arm that has NO magnetic term at all, which is the one thing they
+            # must never be confused with.
             off = [f for f in off if f != "magnetic"]
-            tag = "mag-linear" if not off else "mag-linear+no-" + "+".join(off)
+            tag = head if not off else head + "+no-" + "+".join(off)
             return tag + self_node
         if not off:
             return "base" + self_node
@@ -419,6 +441,23 @@ class RunConfig:
             raise ValueError(
                 "magnetic_linear and magnetic_groups are two different placements of "
                 "the same term; enable at most one.")
+        # Same rule for the decoupled heads. Note `magnetic_groups` is NOT a
+        # competing head here — at this layer it MODIFIES `magnetic` (bias_params
+        # emits magnetic_groups in place of magnetic), so `magnetic=True` +
+        # `magnetic_groups=G` is the intended combination and must stay legal.
+        placements = {"magnetic": self.magnetic, "magnetic_linear": self.magnetic_linear,
+                      "magnetic_magnitude": self.magnetic_magnitude,
+                      "magnetic_hybrid": self.magnetic_hybrid,
+                      "magnetic_groups": bool(self.magnetic_groups)}
+        for name in ("magnetic_magnitude", "magnetic_hybrid"):
+            if not placements[name]:
+                continue
+            clash = [k for k, v in placements.items() if v and k != name]
+            if clash:
+                raise ValueError(
+                    f"{name} is a different HEAD on the same magnetic term, so it "
+                    f"cannot combine with {clash} — that would ask for two magnetic "
+                    "biases on one feature set. Enable exactly one placement.")
         if self.magnetic_m_collate:
             if not self.uses_magnetic:
                 raise ValueError(

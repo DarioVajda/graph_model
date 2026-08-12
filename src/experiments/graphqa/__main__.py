@@ -158,6 +158,19 @@ def build_parser():
                    help="Replace the magnetic bias's MLP head with a single linear map "
                         "onto the heads, making the bias bilinear in the eigenvectors "
                         "(src/models/LINEAR_BIAS.md). Use with --no-magnetic.")
+    p.add_argument("--magnetic-magnitude", action=B, default=d.magnetic_magnitude,
+                   help="Magnitude-channel magnetic bias: each node's spectral "
+                        "self-energy sum_l |V_il|^2 phi_l through an MLP, then a "
+                        "bilinear form. Non-linear but carries NO relative geometry "
+                        "(src/models/MIXED_BIAS.md). Use with --no-magnetic.")
+    p.add_argument("--magnetic-hybrid", action=B, default=d.magnetic_hybrid,
+                   help="Linear phase channel + non-linear magnitude channel in "
+                        "tandem — the proposed O(N) replacement. Use with --no-magnetic.")
+    p.add_argument("--magnetic-magnitude-dim", type=int, default=d.magnetic_magnitude_dim,
+                   help="d_magnitude: width Q/K append per head. NOT free.")
+    p.add_argument("--magnetic-magnitude-repr-dim", type=int,
+                   default=d.magnetic_magnitude_repr_dim,
+                   help="d_magnitude_repr: MLP_magnitude's internal width — free.")
     p.add_argument("--bias-self-node", action=B, default=d.bias_self_node,
                    help="keep the intra-node diagonal b_ii instead of zeroing it. The "
                         "bias is node-level and expanded to tokens, so the default "
@@ -227,6 +240,9 @@ def config_from_args(args):
         rrwp=args.rrwp, max_rw_steps=args.max_rw_steps,
         magnetic=args.magnetic, magnetic_groups=args.magnetic_groups,
         magnetic_linear=args.magnetic_linear,
+        magnetic_magnitude=args.magnetic_magnitude, magnetic_hybrid=args.magnetic_hybrid,
+        magnetic_magnitude_dim=args.magnetic_magnitude_dim,
+        magnetic_magnitude_repr_dim=args.magnetic_magnitude_repr_dim,
         bias_self_node=args.bias_self_node,
         magnetic_dim=args.magnetic_dim,
         magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,

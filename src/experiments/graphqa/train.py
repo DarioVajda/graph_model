@@ -50,6 +50,8 @@ def _save_train_record(cfg, run_name, sizes, results, runs_jsonl, sweep_meta=Non
         # them the only way to tell a linear arm from a magnetic one in runs.jsonl
         # is to parse the run name, which is fragile and silently wrong.
         "magnetic_linear": cfg.magnetic_linear,
+        "magnetic_magnitude": cfg.magnetic_magnitude,
+        "magnetic_hybrid": cfg.magnetic_hybrid,
         "magnetic_m_collate": cfg.collate_magnetic_m,
         "bias_self_node": cfg.bias_self_node,
         "seed": cfg.seed,
