@@ -93,12 +93,14 @@ def _live(cls, cfg=_Cfg):
     """A module with the magnitude channel switched ON.
 
     Zero-init makes the bias identically 0, so every test about what the channel
-    COMPUTES has to perturb the query side first — otherwise it would pass
-    against a module that computes nothing at all.
+    COMPUTES has to lift the gate first — otherwise it would pass against a module
+    that computes nothing at all. The gate is ``magnitude_gain``: leaving it at its
+    initial zero would silently reduce every assertion below to 0 == 0.
     """
     torch.manual_seed(0)
     mod = cls(_H, _HEAD_DIM, cfg()).double()
     with torch.no_grad():
+        mod.magnitude_gain.normal_(std=0.5)
         mod.magnitude_q_scale.normal_(std=0.5)
         if hasattr(mod, "proj"):                    # hybrid: wake the phase channel too
             torch.nn.init.normal_(mod.proj[0].weight, std=0.5)
@@ -279,14 +281,18 @@ def test_zero_init_bias_is_exactly_zero(cls):
 
 @pytest.mark.parametrize("cls", _ARMS, ids=_ARM_IDS)
 def test_zero_init_is_not_a_dead_saddle(cls):
-    """The gradient of the query side must be NON-ZERO at step 0.
+    """The gradient of the GATE must be non-zero at step 0.
 
-    This is what distinguishes a correct zero-init from the failure the plan
-    calls out: zeroing BOTH sides of <Z ⊙ s, Z W_K> makes db/ds ∝ Z W_K = 0 and
-    db/dW_K ∝ Z ⊙ s = 0, so both gradients are exactly zero forever and the arm
-    never leaves the origin — while looking perfectly healthy, because the loss
-    still falls (the LoRA adapter is training). Only ``s`` is zeroed, so ``s``
-    moves immediately and ``W_K`` starts moving once ``s`` does.
+    This is what distinguishes a correct zero-init from the failure the plan calls
+    out: zeroing every factor of g <q̂, k̂> at once makes it a dead saddle, and the
+    arm never leaves the origin while looking perfectly healthy, because the loss
+    still falls (the LoRA adapter is training). Exactly one factor is zeroed — the
+    gain — so it moves immediately and everything behind it starts moving once it
+    does.
+
+    Which factor holds the zero moved when the channel was normalized: it used to
+    be ``s``, but ``s`` is inside the normalized vector and F.normalize at exactly
+    zero has Jacobian I/eps. See `test_gate_gradient_is_not_the_eps_bomb`.
     """
     torch.manual_seed(0)
     mod = cls(_H, _HEAD_DIM, _Cfg()).double()
@@ -295,11 +301,13 @@ def test_zero_init_is_not_a_dead_saddle(cls):
               magnetic=magnetic, num_nodes=num_nodes)
     out.sum().backward()
 
-    assert mod.magnitude_q_scale.grad is not None
-    g = mod.magnitude_q_scale.grad.abs().max().item()
-    assert g > 0, "q_scale has zero gradient at step 0 — the arm cannot ever move"
-    # W_K is correctly still at zero gradient here (it is multiplied by s = 0);
-    # it starts moving on the next step. Asserted so the asymmetry is on record.
+    assert mod.magnitude_gain.grad is not None
+    g = mod.magnitude_gain.grad.abs().max().item()
+    assert g > 0, "the gain has zero gradient at step 0 — the arm cannot ever move"
+    # s and W_K are correctly still at zero gradient here (both are behind the
+    # gain); they start moving on the next step. Asserted so the asymmetry is on
+    # record — it is a one-step delay, not a dead saddle.
+    assert mod.magnitude_q_scale.grad.abs().max().item() == 0.0
     assert mod.magnitude_k_mix.grad.abs().max().item() == 0.0
 
 
@@ -323,6 +331,89 @@ def test_zero_init_logits_match_no_bias_model():
                                if not k.startswith("magnetic")}).logits
         assert torch.allclose(with_mag, without, atol=1e-12), \
             f"{key}: {(with_mag - without).abs().max().item()}"
+
+
+# ── 9b. Scale stability (MIXED_BIAS.md §5.7) ─────────────────────────────────
+#
+# The regression tests for the four divergences. Unnormalized, the same Z fed
+# both sides of the inner product, so the bias was quartic in the trunk scale and
+# unbounded in every one of its three learned factors. These pin the properties
+# that replaced that; they are cheap, and each one failing means the arm is back
+# to the parameterization that produced NaN on WebQSP at epoch 2.48.
+
+@pytest.mark.parametrize("cls", _ARMS, ids=_ARM_IDS)
+@pytest.mark.parametrize("factor", ["trunk", "q_scale", "k_mix"])
+def test_bias_is_invariant_to_the_scale_of_every_learned_factor(cls, factor):
+    """Scaling the trunk, ``s`` or ``W_K`` by k leaves the bias EXACTLY unchanged.
+
+    This is the property the normalization buys, and it is what makes the fix not
+    depend on knowing which of the three actually grows during training — a
+    question the diagnostic job never got to answer. Note the invariance is to a
+    uniform rescaling, which is the growth mode §5.7 measures; it does not claim
+    the bias is invariant to arbitrary reparameterization.
+    """
+    mod = _live(cls)
+    magnetic, num_nodes = _mag_inputs(_batch(_items()))
+    kw = dict(dtype=torch.float64, device=torch.device("cpu"),
+              magnetic=magnetic, num_nodes=num_nodes)
+    before = mod(**kw)
+
+    k = 8.0
+    with torch.no_grad():
+        if factor == "trunk":
+            # The last Linear is what Z is linear in, so this scales Z by exactly k
+            # without touching the phase channel's deep_set/lambda_lin.
+            mod.magnitude_mlp[-1].weight.mul_(k)
+            mod.magnitude_mlp[-1].bias.mul_(k)
+        elif factor == "q_scale":
+            mod.magnitude_q_scale.mul_(k)
+        else:
+            mod.magnitude_k_mix.mul_(k)
+
+    diff = (mod(**kw) - before).abs().max().item()
+    assert diff < 1e-12, f"{factor} scaled the bias by more than fp64 noise: {diff}"
+
+
+@pytest.mark.parametrize("cls", _ARMS, ids=_ARM_IDS)
+def test_magnitude_bias_is_bounded_by_the_gain(cls):
+    """|b_magnitude| <= |g^(h)| per head, whatever the trunk does.
+
+    The gain is the only unbounded quantity left in the channel, which is the
+    point: it is one auditable scalar per head rather than a 64x64 W_K, so
+    "survived because it is fixed" and "survived because it is postponed" are
+    distinguishable by watching a number.
+    """
+    mod = _live(cls)
+    parts = mod._phi(*_mag_inputs(_batch(_items())), torch.device("cpu"))
+    b = mod._magnitude_bias(*parts)                       # (B, N, N, H), pre-_finalize
+    bound = mod.magnitude_gain.abs()                      # (H,)
+    worst = (b.abs().amax(dim=(0, 1, 2)) - bound).max().item()
+    assert worst < 1e-12, f"bias exceeded its per-head gain bound by {worst}"
+
+
+@pytest.mark.parametrize("cls", _ARMS, ids=_ARM_IDS)
+def test_gate_gradient_is_not_the_eps_bomb(cls):
+    """At step 0 the gradients must be O(1), not O(1/eps).
+
+    The gate is a scalar OUTSIDE the normalized vector precisely so that nothing
+    is ever normalized at exactly zero. Were the zero-init still on ``s``, the
+    query row would be the zero vector, F.normalize would clamp its denominator to
+    eps and pass no gradient through it, and the local Jacobian would be I/eps —
+    around 1e12, which with max_grad_norm=1.0 scales every other gradient in the
+    model to nothing for that step. A step-0 instability in place of a step-800
+    one is not a fix, so it is asserted rather than assumed.
+    """
+    torch.manual_seed(0)
+    mod = cls(_H, _HEAD_DIM, _Cfg()).double()
+    magnetic, num_nodes = _mag_inputs(_batch(_items()))
+    mod(dtype=torch.float64, device=torch.device("cpu"),
+        magnetic=magnetic, num_nodes=num_nodes).sum().backward()
+
+    for name, p in mod.named_parameters():
+        if p.grad is None:
+            continue
+        g = p.grad.abs().max().item()
+        assert g < 1e3, f"{name} has a {g:.3g} gradient at step 0"
 
 
 # ── 10. No silent no-op ──────────────────────────────────────────────────────
@@ -544,10 +635,13 @@ def test_hybrid_is_exactly_phase_plus_magnitude():
 
 @pytest.mark.parametrize("key,cls", list(zip(["magnetic_magnitude", "magnetic_hybrid"], _ARMS)))
 def test_bias_parameters_round_trip(key, cls, tmp_path):
-    """MLP_magnitude, s^(h) and W_K must survive save/load through
+    """MLP_magnitude, s^(h), W_K and the gain must survive save/load through
     bias_parameters.pt — the file the LoRA adapter does NOT contain. Nothing new
     is written for this (``active_params=("graph_bias",)`` is a substring match),
-    which is exactly why it is asserted rather than assumed."""
+    which is exactly why it is asserted rather than assumed.
+
+    The gain especially: it is the gate, so a model that dropped it on load would
+    emit an identically-zero bias and every logit comparison below would pass."""
     from src.models.io import save_bias_parameters, load_bias_parameters
 
     cfg = GTLMLlamaConfig(magnetic_dim=_MAG_DIM, graph_attn_impl="eager",
@@ -559,11 +653,13 @@ def test_bias_parameters_round_trip(key, cls, tmp_path):
         if isinstance(mod, cls):
             with torch.no_grad():
                 mod.magnitude_q_scale.normal_(std=0.3)
+                mod.magnitude_gain.normal_(std=0.3)   # the gate: 0 => zero bias
 
     save_bias_parameters(model, str(tmp_path), ["graph_bias"])
     saved = torch.load(tmp_path / "bias_parameters.pt", map_location="cpu",
                        weights_only=True)
-    for want in ("magnitude_mlp.0.weight", "magnitude_q_scale", "magnitude_k_mix"):
+    for want in ("magnitude_mlp.0.weight", "magnitude_q_scale", "magnitude_k_mix",
+                 "magnitude_gain"):
         assert any(want in k for k in saved), (want, sorted(saved))
 
     # Same seed => identical BACKBONE, so the only difference between the two

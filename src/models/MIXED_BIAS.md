@@ -194,9 +194,29 @@ per-column one:
 * $d_{\text{magnitude-repr}}$ is free while $d_{\text{magnitude}}$ is not: the MLP
   may be wide internally and still hand attention a narrow key.
 
-The pairwise term is $b^{(h)}_{magnitude}(i,j) = \langle Z_i \odot s^{(h)},\, Z_j W_K^{(g)}\rangle$
+The pairwise term is
+
+$$b^{(h)}_{magnitude}(i,j) = g^{(h)}\,\big\langle \widehat{Z_i \odot s^{(h)}},\; \widehat{Z_j W_K^{(g)}} \big\rangle,
+\qquad \hat x = x/\lVert x \rVert_2$$
+
 — structural role against structural role, with **no relative-geometry content at
 all**. That is exactly what the arm is meant to isolate, and §5.6 reads it that way.
+
+**The normalization and the per-head gain $g^{(h)}$ are not cosmetic.** As first
+specified this term was $\langle Z_i \odot s^{(h)}, Z_j W_K^{(g)}\rangle$, which is
+quartic in the shared trunk and unbounded in all three of its learned factors;
+four Phase-2 runs diverged to `NaN` and arms 3/4 were withdrawn. §5.7 is the
+diagnosis and §5.8 the remedy as built. Three properties are load-bearing and are
+pinned by tests:
+
+* $|b_{magnitude}| \le |g^{(h)}|$, so the channel's range is one auditable scalar
+  per head rather than an unbounded product of three tensors;
+* $b$ is **exactly invariant** to a uniform rescaling of the trunk, of $s^{(h)}$
+  and of $W_K^{(g)}$ — the fix does not depend on knowing which of the three grows;
+* $g^{(h)} = 0$ at init, so the bias is still exactly $0$ at step 0. The zero sits
+  on the gain and **not** on $s^{(h)}$, because normalizing a deliberately-zero
+  vector has Jacobian $I/\varepsilon \approx 10^{12}$ — a step-0 instability in
+  place of a step-800 one.
 
 ### 2.4 Arm C — tandem
 
@@ -205,6 +225,14 @@ K_{tandem}^{(g)} = \big[\,K_{phase} \;\big\|\; K_{magnitude}^{(g)}\,\big]$$
 
 so $b_{tandem} = b_{phase} + b_{magnitude}$, and the dense Phase 1 implementation
 is literally that sum.
+
+The magnitude block is normalized **before** the concatenation and the phase block
+is not normalized at all. Normalizing the stacked vector would make each channel's
+scale a function of the other's — reintroducing at the output exactly the coupling
+§5.7 suspects the shared $\Phi$ trunk of already providing. The phase channel needs
+nothing regardless: $K_{phase}$ is parameter-free with unit row norm, so its learned
+parameters enter at degree 1, and it has never diverged at either LR on either
+dataset. Leaving it untouched also keeps arm C's phase half comparable to arm A.
 
 ### 2.5 The head-width budget
 
@@ -645,6 +673,46 @@ above was derived independently and lands on the same remedy.
 Non-zero `bias_weight_decay` only delays the failure, and a lower `bias_lr` is a
 workaround — so arm 3/4 results at 5e-3 must be read as "the largest LR this
 parameterization survives", not as a free choice.
+
+## 5.8 The remedy as built
+
+§2.3 carries the resulting form. Three design points are worth recording because
+each had a plausible alternative that does not work here.
+
+**Normalize the factors, not $Z$.** The §5.7 fixture varies only the trunk scale
+$k$, so its "split + L2-norm" column cannot discriminate between *the trunk grows*
+and *$s$ or $W_K$ grows* — normalizing $Z$ is invariant to the former by
+construction and does nothing about the latter, which remain learned, unbounded and
+weight-decay-free. Normalizing $Q_{magnitude}$ and $K_{magnitude}$ after $s$ and
+$W_K$ are applied is invariant to all three at once. Since the diagnostic that
+would have identified the culprit never ran (job 125240 was cancelled at 0:00
+elapsed by the same mass-cancel that ended the sweep), the fix that does not
+require knowing the answer is the one to build.
+
+**Everything must happen before the dot product.** The deferred backbone
+concatenates these factors onto the content $Q/K$ and takes one fused
+flex/flash dot product, so nothing may be applied to $b$ afterwards. Row-wise
+normalization survives that ($\hat q_i$ depends only on $i$, $\hat k_j$ only on
+$j$, so the bilinear form is preserved) and so does a per-head scalar gain, which
+folds into the query block: $\lVert q'_i \rVert = |g^{(h)}|$ and
+$\langle q'_i, \hat k_j \rangle = g^{(h)} \langle \hat q_i, \hat k_j \rangle$. A
+$\tanh$ or a clamp on $b$ would bound it just as well and is **not available** —
+non-bilinear in $(i,j)$, same reason arms 3/4 run unmasked (§2.4). Normalization
+plus a gain is the only bounding mechanism that survives factorization at all.
+
+**The gain, not $s$, holds the zero-init.** Covered in §2.3; the test is
+`test_gate_gradient_is_not_the_eps_bomb`. One consequence for reading the next
+sweep: $s$ and $W_K$ now have exactly zero gradient at step 0 and start moving one
+step later, when $g$ leaves the origin. That is a one-step delay, not the dead
+saddle §4.2 gates against, and it is asserted directly.
+
+**What this does not bound.** $g^{(h)}$ is itself learned and unopposed
+(`bias_weight_decay = 0`), so a sufficiently determined run can still grow it —
+linearly, at $\approx$ `bias_lr` per step under AdamW, rather than quartically.
+Normalization converts a runaway into a drift; it does not prove boundedness. The
+difference that matters operationally is that the drift is now visible in one
+scalar per head, so "survived because it is fixed" and "survived because it is
+postponed" are distinguishable without re-deriving anything. Log $g$ and read it.
 
 ---
 

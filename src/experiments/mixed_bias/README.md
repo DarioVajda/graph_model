@@ -148,13 +148,28 @@ diverging in lockstep, unlike the context event:
     ep2.47  loss=11.45  grad=1.075e12
     ep2.48  loss=46.90  grad=NaN
 
-### Design consequence (for after this sweep, not during it)
+### Design consequence — BUILT, 2026-08-12
 
-If this holds, the magnitude channel wants its bilinear form anchored the way the
-phase channel is — e.g. normalising `Z` (LayerNorm or L2) before the inner
-product, which would bound one factor without changing what the channel encodes.
-That is a change to the architecture under test and must NOT be made mid-sweep;
-it belongs in `MIXED_BIAS.md` §6 as follow-up work.
+The magnitude channel wanted its bilinear form anchored the way the phase channel
+is. As built (`MIXED_BIAS.md` §2.3 and §5.8) the anchor is on the **factors**, not
+on `Z`: `Q_magnitude` and `K_magnitude` are L2-normalised per node row *after*
+`s` and `W_K` are applied, and a per-head scalar gain carries the range.
+
+Normalising `Z` alone would have been weaker in a way that matters here. The §5.7
+fixture varies only the trunk scale, so it cannot distinguish "the trunk grows"
+from "`s` or `W_K` grows"; normalising `Z` is invariant to the first by
+construction and does nothing about the second. Normalising the factors is
+invariant to all three at once — which is the property worth having, because the
+diagnostic that would have named the culprit never ran (job 125240, cancelled at
+0:00 elapsed by the same 21:40 mass-cancel that ended the sweep).
+
+The zero-init moved from `s` onto the gain: `s` sits inside the normalised vector,
+and normalising a deliberately-zero vector has Jacobian `I/eps` ≈ 1e12 at step 0.
+
+**These runs are therefore not re-runnable as-is.** Arms 3 and 4 now describe a
+different parameterisation, so the four divergences above are a record of what was
+withdrawn, not a baseline for what replaces it. Arms 0-2 are unchanged and their
+`018`/`021` numbers stand.
 
 ### Still open
 

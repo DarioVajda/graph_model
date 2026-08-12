@@ -286,26 +286,52 @@ class MagneticBias(BaseBias):
             nn.SiLU(),
             nn.Linear(d_repr, d_out, bias=True),
         )
-        # Zero-init the QUERY side ONLY. The bias is then exactly 0 at step 0, as
-        # every other magnetic head is, but the arm is not stuck there: zeroing
-        # both sides of <Z ⊙ s, Z W_K> makes it a dead saddle — db/ds ∝ Z W_K = 0
-        # and db/dW_K ∝ Z ⊙ s = 0, so both gradients are exactly zero forever.
-        # With only s zeroed, s has a non-zero gradient immediately and W_K starts
-        # moving once s does.
-        self.magnitude_q_scale = nn.Parameter(torch.zeros(num_heads, d_out))
+        # The zero-init that makes the bias inert at step 0 lives on `gain`, NOT on
+        # `s` — see `_magnitude_factors`. Normalizing a deliberately-zero vector is
+        # a step-0 gradient bomb: F.normalize clamps the denominator to eps and
+        # passes no gradient through it, so in that regime the map is q/eps with
+        # Jacobian I/eps ≈ 1e12. `s` must therefore be a generic non-zero vector,
+        # and the gate moves to a scalar applied AFTER the normalization.
         bound = 1.0 / math.sqrt(d_out)                       # nn.Linear's default
+        self.magnitude_q_scale = nn.Parameter(
+            torch.empty(num_heads, d_out).uniform_(-bound, bound))
         self.magnitude_k_mix = nn.Parameter(
             torch.empty(n_kv, d_out, d_out).uniform_(-bound, bound))
+        # One scalar per query head: the whole learnable range of the channel, and
+        # after normalization the ONLY unbounded quantity left in it (|b| <= |g|).
+        # Zero at init, so the bias is exactly 0 and the model is bit-identical to
+        # the no-bias backbone, exactly as every other magnetic head is.
+        self.magnitude_gain = nn.Parameter(torch.zeros(num_heads))
 
     def _magnitude_factors(self, V_real, V_imag, phi):
         """``(Q_magnitude, K_magnitude)`` — ``(B, H_Q, N, d)`` and ``(B, H_KV, N, d)``.
 
         Query head ``h`` pairs with key group ``h // magnitude_repeat``.
+
+        Both factors are L2-normalized per node row and the query side carries a
+        per-head gain, so ``b = g^(h) <q̂_i, k̂_j>`` with ``|b| <= |g^(h)|``.
+
+        Why (MIXED_BIAS.md §5.7): unnormalized, the same ``Z`` feeds both sides, so
+        the shared trunk enters SQUARED and the bias scales as k⁴ in the trunk
+        scale where the phase channel scales as k². It sits at 15x below the phase
+        channel for thousands of steps and then crosses it within tens — four runs
+        died that way. Normalizing per row makes the bias invariant to the scale of
+        the trunk, of ``s`` AND of ``W_K`` at once, which is the property that does
+        not depend on guessing which of the three actually grows.
+
+        Normalization is per ROW — ``q̂_i`` depends only on i, ``k̂_j`` only on j —
+        so the bilinear form survives and `structural_factors` still factorizes.
+        The gain is a per-head scalar and therefore folds into the query side; that
+        matters because the flex/flash backend concatenates these onto the content
+        Q/K and takes ONE fused dot product, so nothing may be applied to ``b``
+        after it. The same constraint is why a tanh or a clamp on ``b`` is not an
+        option here, and why arms 3/4 run unmasked (§2.4).
         """
         Z = self.magnitude_mlp(self._self_energy(V_real, V_imag, phi))     # (B, N, d)
         q = Z.unsqueeze(1) * self.magnitude_q_scale.unsqueeze(0).unsqueeze(2)
         k = torch.einsum('bnd,gde->bgne', Z, self.magnitude_k_mix)
-        return q, k
+        q = F.normalize(q, dim=-1) * self.magnitude_gain.view(1, -1, 1, 1)
+        return q, F.normalize(k, dim=-1)
 
     def _magnitude_bias(self, V_real, V_imag, phi) -> torch.Tensor:
         """The magnitude channel's ``(B, N, N, H)`` contribution — `_finalize`'s layout."""
@@ -561,7 +587,11 @@ class MagneticMagnitudeBias(MagneticBias):
 
         S_i = sum_l |V_il|² phi_l              (B, N, magnetic_dim)   [_self_energy]
         Z   = MLP_magnitude(S)                 (B, N, d_magnitude)
-        b^(h)(i,j) = <Z_i ⊙ s^(h), Z_j W_K^(g)>,   g = h // (H_Q/H_KV)
+        b^(h)(i,j) = g^(h) <norm(Z_i ⊙ s^(h)), norm(Z_j W_K^(g))>,  g = h // (H_Q/H_KV)
+
+    The row-wise normalization and the per-head gain are load-bearing, not
+    cosmetic: without them this form is quartic in the shared trunk and diverged
+    on four runs. See `_magnitude_factors` and MIXED_BIAS.md §5.7.
 
     Why this form: a bilinear form <f(i), g(j)> places NO constraint on how f and
     g are computed from a single node's features, so an MLP is free there — this
@@ -632,6 +662,15 @@ class MagneticHybridBias(LinearMagneticBias):
 
         Q_tandem^(h) = [ Q_phase^(h) ‖ Q_magnitude^(h) ]
         K_tandem^(g) = [ K_phase     ‖ K_magnitude^(g) ]
+
+    The magnitude block arrives already normalized and gained, and the phase block
+    is left alone — normalization is PER CHANNEL, never on the concatenation.
+    Normalizing the stacked vector would make each channel's scale depend on the
+    other's, which is the coupling this arm is suspected of already having through
+    the shared `deep_set`/`lambda_lin` trunk (MIXED_BIAS.md §5.7). The phase
+    channel needs nothing anyway: ``K_phase`` is parameter-free with unit row norm,
+    so its learned parameters enter at degree 1 and it has never diverged. Leaving
+    it untouched also keeps this arm's phase half comparable to arm 2's baselines.
 
     Expectations, so the result is read correctly: this is NOT a universal
     approximator of MagneticBias's MLP head and no amount of width makes it one.
