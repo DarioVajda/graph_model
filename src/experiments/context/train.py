@@ -165,6 +165,7 @@ def _save_train_record(cfg, run_name, results, runs_jsonl, sweep_meta=None):
         "magnetic_linear": cfg.magnetic_linear,
         "magnetic_magnitude": cfg.magnetic_magnitude,
         "magnetic_hybrid": cfg.magnetic_hybrid,
+        "magnetic_linear_v2": cfg.magnetic_linear_v2,
         "magnetic_m_collate": cfg.collate_magnetic_m,
         "bias_self_node": cfg.bias_self_node,
         "magnetic_q": cfg.magnetic_q, "magnetic_m": cfg.magnetic_m,

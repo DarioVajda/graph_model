@@ -198,6 +198,12 @@ class RunConfig:
     magnetic_hybrid: bool = False
     magnetic_magnitude_dim: int = 64            # d_magnitude — appended per head (NOT free)
     magnetic_magnitude_repr_dim: int = 256      # d_magnitude_repr — internal to the MLP (free)
+    # Gated linear magnetic head (GatedLinearMagneticBias): `magnetic_linear`
+    # with the eigenvalue
+    # features scaled by a bounded per-node gate. Same features and same data
+    # again, so it is a model-side knob sharing the built dataset.
+    magnetic_linear_v2: bool = False
+    magnetic_gate_repr_dim: int = 256           # gate-MLP hidden width — internal (free)
     magnetic_dim: int = 32                      # model bias-MLP hidden width
     magnetic_q: float = 0.25                    # magnetic-Laplacian charge (data)
     magnetic_m: int = 0                         # eigenvectors kept (0 -> all N)
@@ -289,7 +295,8 @@ class RunConfig:
         train with no magnetic bias while looking perfectly healthy.
         """
         return bool(self.magnetic or self.magnetic_linear
-                    or self.magnetic_magnitude or self.magnetic_hybrid)
+                    or self.magnetic_magnitude or self.magnetic_hybrid
+                    or self.magnetic_linear_v2)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -339,6 +346,12 @@ class RunConfig:
                        magnetic_q=self.magnetic_q,
                        magnetic_magnitude_dim=self.magnetic_magnitude_dim,
                        magnetic_magnitude_repr_dim=self.magnetic_magnitude_repr_dim)
+        elif self.magnetic_linear_v2:
+            # Same features and the same magnetic_dim/magnetic_q as magnetic_linear,
+            # which this arm reduces to when the gate is 1 (its initialisation).
+            cfg.update(magnetic_linear_v2=True, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q,
+                       magnetic_gate_repr_dim=self.magnetic_gate_repr_dim)
         if self.bias_self_node:
             # Model-side only; it does not touch feature generation or the cache key.
             cfg.update(bias_self_node=True)
@@ -353,7 +366,8 @@ class RunConfig:
         off = [f for f in WIRED_FEATURES if not getattr(self, f)]
         head = ("mag-linear" if self.magnetic_linear else
                 "mag-hybrid" if self.magnetic_hybrid else
-                "mag-magnitude" if self.magnetic_magnitude else None)
+                "mag-magnitude" if self.magnetic_magnitude else
+                "mag-linear-v2" if self.magnetic_linear_v2 else None)
         if head:
             # Without this the non-MLP heads report as 'no-magnetic' — the label of
             # the arm that has NO magnetic term at all, which is the one thing they
@@ -448,8 +462,9 @@ class RunConfig:
         placements = {"magnetic": self.magnetic, "magnetic_linear": self.magnetic_linear,
                       "magnetic_magnitude": self.magnetic_magnitude,
                       "magnetic_hybrid": self.magnetic_hybrid,
+                      "magnetic_linear_v2": self.magnetic_linear_v2,
                       "magnetic_groups": bool(self.magnetic_groups)}
-        for name in ("magnetic_magnitude", "magnetic_hybrid"):
+        for name in ("magnetic_magnitude", "magnetic_hybrid", "magnetic_linear_v2"):
             if not placements[name]:
                 continue
             clash = [k for k, v in placements.items() if v and k != name]

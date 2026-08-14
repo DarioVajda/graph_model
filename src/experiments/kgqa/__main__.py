@@ -265,6 +265,15 @@ def build_parser():
                    help="linear phase channel + non-linear magnitude channel in "
                         "tandem — the proposed O(N) replacement for --magnetic. "
                         "Mutually exclusive with the other magnetic placements.")
+    p.add_argument("--magnetic-linear-v2", action=B, default=d.magnetic_linear_v2,
+                   help="linear phase channel whose eigenvalue features are scaled "
+                        "by a bounded per-node gate read off the spectral "
+                        "self-energy. Measured null on WebQSP. "
+                        "Identical to --magnetic-linear at initialisation. "
+                        "Mutually exclusive with the other magnetic placements.")
+    p.add_argument("--magnetic-gate-repr-dim", type=int, default=d.magnetic_gate_repr_dim,
+                   help="gate-MLP hidden width for --magnetic-linear-v2. Computed "
+                        "once per node and never enters attention, so it is free.")
     p.add_argument("--magnetic-magnitude-dim", type=int, default=d.magnetic_magnitude_dim,
                    help="d_magnitude: width Q/K append per head for the magnitude "
                         "channel. NOT free — it is head width.")
@@ -386,6 +395,8 @@ def config_from_args(args):
         magnetic_content=args.magnetic_content, magnetic_content_dim=args.magnetic_content_dim,
         magnetic_linear=args.magnetic_linear, magnetic_m_collate=args.magnetic_m_collate,
         magnetic_magnitude=args.magnetic_magnitude, magnetic_hybrid=args.magnetic_hybrid,
+        magnetic_linear_v2=args.magnetic_linear_v2,
+        magnetic_gate_repr_dim=args.magnetic_gate_repr_dim,
         magnetic_magnitude_dim=args.magnetic_magnitude_dim,
         magnetic_magnitude_repr_dim=args.magnetic_magnitude_repr_dim,
         bias_self_node=args.bias_self_node,

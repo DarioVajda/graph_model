@@ -99,6 +99,11 @@ class RunConfig:
     magnetic_hybrid: bool = False
     magnetic_magnitude_dim: int = 64            # d_magnitude — appended per head (NOT free)
     magnetic_magnitude_repr_dim: int = 256      # d_magnitude_repr — internal to the MLP (free)
+    # Gated linear magnetic head (GatedLinearMagneticBias).
+    # Same eigenvector DATA again, so the
+    # same two rules: out of data_config_key(), and inside uses_magnetic.
+    magnetic_linear_v2: bool = False
+    magnetic_gate_repr_dim: int = 256           # gate-MLP hidden width — internal (free)
     magnetic_dim: int = 128
     magnetic_q: float = 0.25
     magnetic_m: int = 128                       # eigenvectors kept (0 -> all)
@@ -319,6 +324,8 @@ class RunConfig:
                 share = {"magnetic_hybrid": True}
             elif self.magnetic_magnitude:
                 share = {"magnetic_magnitude": True}
+            elif self.magnetic_linear_v2:
+                share = {"magnetic_linear_v2": True}
             elif self.magnetic_groups:
                 share = {"magnetic_groups": self.magnetic_groups}
             else:
@@ -327,6 +334,8 @@ class RunConfig:
             if self.magnetic_magnitude or self.magnetic_hybrid:
                 cfg.update(magnetic_magnitude_dim=self.magnetic_magnitude_dim,
                            magnetic_magnitude_repr_dim=self.magnetic_magnitude_repr_dim)
+            if self.magnetic_linear_v2:
+                cfg.update(magnetic_gate_repr_dim=self.magnetic_gate_repr_dim)
         if self.bias_self_node:
             # Model-side only; deliberately absent from data_config_key().
             cfg.update(bias_self_node=True)
@@ -375,7 +384,8 @@ class RunConfig:
         as a clean negative.
         """
         return bool(self.magnetic or self.magnetic_linear
-                    or self.magnetic_magnitude or self.magnetic_hybrid)
+                    or self.magnetic_magnitude or self.magnetic_hybrid
+                    or self.magnetic_linear_v2)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -555,8 +565,9 @@ class RunConfig:
         placements = {"magnetic": self.magnetic, "magnetic_linear": self.magnetic_linear,
                       "magnetic_magnitude": self.magnetic_magnitude,
                       "magnetic_hybrid": self.magnetic_hybrid,
+                      "magnetic_linear_v2": self.magnetic_linear_v2,
                       "magnetic_groups": bool(self.magnetic_groups)}
-        for name in ("magnetic_magnitude", "magnetic_hybrid"):
+        for name in ("magnetic_magnitude", "magnetic_hybrid", "magnetic_linear_v2"):
             if not placements[name]:
                 continue
             clash = [k for k, v in placements.items() if v and k != name]

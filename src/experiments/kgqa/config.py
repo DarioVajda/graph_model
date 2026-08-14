@@ -223,6 +223,12 @@ class RunConfig:
     magnetic_hybrid: bool = False
     magnetic_magnitude_dim: int = 64          # d_magnitude — appended per head (NOT free)
     magnetic_magnitude_repr_dim: int = 256    # d_magnitude_repr — internal to the MLP (free)
+    # Gated linear magnetic head (GatedLinearMagneticBias): `magnetic_linear`
+    # with its eigenvalue
+    # features scaled by a bounded per-node gate read off the spectral self-energy.
+    # Same eigenvector data again, so architecture-only and NOT in the cache key.
+    magnetic_linear_v2: bool = False
+    magnetic_gate_repr_dim: int = 256         # gate-MLP hidden width — internal (free)
     magnetic_dim: int = 128                   # magnetic-bias MLP hidden width (model architecture)
     magnetic_q: float = 0.25                  # magnetic-Laplacian charge
     magnetic_m: int = 128                     # # magnetic eigenvectors (data prep + collator; 0 = all N)
@@ -393,9 +399,10 @@ class RunConfig:
     def uses_magnetic(self) -> bool:
         """True when the run consumes magnetic eigenvector features.
 
-        Single source of truth for every dataset/collator gate. All six
+        Single source of truth for every dataset/collator gate. All seven
         placements — `magnetic`, `magnetic_shared`, `magnetic_content`,
-        `magnetic_linear`, `magnetic_magnitude`, `magnetic_hybrid` — read the same
+        `magnetic_linear`, `magnetic_magnitude`, `magnetic_hybrid`,
+        `magnetic_linear_v2` — read the same
         eigenvectors and differ only in where or how the head is applied, so a
         gate that enumerates a subset silently emits no features for the missing
         arm. The bias then returns None and the run trains with no graph bias at
@@ -403,7 +410,8 @@ class RunConfig:
         """
         return bool(self.magnetic or self.magnetic_shared
                     or self.magnetic_content or self.magnetic_linear
-                    or self.magnetic_magnitude or self.magnetic_hybrid)
+                    or self.magnetic_magnitude or self.magnetic_hybrid
+                    or self.magnetic_linear_v2)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -453,6 +461,12 @@ class RunConfig:
                        magnetic_q=self.magnetic_q,
                        magnetic_magnitude_dim=self.magnetic_magnitude_dim,
                        magnetic_magnitude_repr_dim=self.magnetic_magnitude_repr_dim)
+        if self.magnetic_linear_v2:
+            # Same features and widths as `magnetic_linear`, which this arm reduces
+            # to exactly when the gate sits at its initial value of 1.
+            cfg.update(magnetic_linear_v2=True, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q,
+                       magnetic_gate_repr_dim=self.magnetic_gate_repr_dim)
         if self.rrwp:
             # max_rw_steps is the RRWPBias MLP's INPUT width, so it must equal the
             # stored column's last dim — data prep and model read the same field.
@@ -630,8 +644,10 @@ class RunConfig:
                       "magnetic_linear": self.magnetic_linear,
                       "magnetic_magnitude": self.magnetic_magnitude,
                       "magnetic_hybrid": self.magnetic_hybrid,
+                      "magnetic_linear_v2": self.magnetic_linear_v2,
                       "magnetic_groups": bool(self.magnetic_groups)}
-        for name in ("magnetic_linear", "magnetic_magnitude", "magnetic_hybrid"):
+        for name in ("magnetic_linear", "magnetic_magnitude", "magnetic_hybrid",
+                     "magnetic_linear_v2"):
             if not placements[name]:
                 continue
             clash = [k for k, v in placements.items() if v and k != name]
