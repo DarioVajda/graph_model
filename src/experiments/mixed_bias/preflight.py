@@ -36,12 +36,17 @@ _CONFIGS = [
     ("src.experiments.kgqa", "src/experiments/mixed_bias/configs/018_webqsp_mixed.jsonc"),
     ("src.experiments.graphqa", "src/experiments/mixed_bias/configs/019_graphqa_mixed.jsonc"),
     ("src.experiments.context", "src/experiments/mixed_bias/configs/020_context4k_mixed.jsonc"),
+    ("src.experiments.kgqa", "src/experiments/mixed_bias/configs/022_webqsp_magnitude_repro.jsonc"),
+    ("src.experiments.kgqa", "src/experiments/mixed_bias/configs/023_webqsp_mixed_arms34.jsonc"),
+    ("src.experiments.graphqa", "src/experiments/mixed_bias/configs/024_graphqa_linear_v2.jsonc"),
+    ("src.experiments.kgqa", "src/experiments/mixed_bias/configs/025_webqsp_linear_v2.jsonc"),
 ]
 
 # Every placement of the magnetic term. The whole point of this file is that a
 # gate enumerating a SUBSET of these is the failure mode, so the list lives in
 # exactly one place and every check below derives from it.
-_HEADS = ("magnetic", "magnetic_linear", "magnetic_magnitude", "magnetic_hybrid")
+_HEADS = ("magnetic", "magnetic_linear", "magnetic_magnitude", "magnetic_hybrid",
+          "magnetic_linear_v2")
 
 # Heads that build the magnitude channel and therefore must carry its widths.
 _MAGNITUDE_HEADS = ("magnetic_magnitude", "magnetic_hybrid")

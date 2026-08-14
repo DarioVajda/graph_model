@@ -1,0 +1,142 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 026 — WebQSP arm v2, 8-GPU DDP. A STABILITY PROBE, NOT A RESULT.
+  //
+  // ── read this before quoting any number out of this sweep ────────────────
+  // This run is EXPECTED to be killed at its walltime with the training
+  // incomplete. Its accuracy metrics are not comparable to 021/023 and must not
+  // be put in a table beside them:
+  //   * it will not have finished 15 epochs, and
+  //   * it runs 8 x bs1 x accum1 rather than 1 x bs2 x accum4. Effective batch
+  //     is 8 either way, but per-GPU batch, batch composition and dataloader
+  //     sharding all differ, and no arm-2 control was run under this config.
+  // `025` is the sweep that produces the readable WebQSP v2 numbers.
+  //
+  // ── what it IS for ───────────────────────────────────────────────────────
+  // De-risking `025` before it spends ~28 GPU-h overnight. Three questions, all
+  // answerable from a partial run:
+  //   1. Does arm v2 train without diverging on WebQSP? Every arm-3/4 divergence
+  //      in this family began between epoch 1.77 and 3.17 (see "Divergences"),
+  //      and ~40 min of 8-way DDP clears that window. The tanh bound is supposed
+  //      to make this structurally impossible — this is the first chance to see
+  //      it on real data rather than in a unit test.
+  //   2. Does the gate actually leave 1? Zero-init means it is inert at step 0
+  //      by construction, and the head has to move first (a two-step delay, not
+  //      a saddle). A gate still at 1 after several epochs would mean `025`
+  //      measures arm 2 under a different name.
+  //   3. What does 8-way DDP actually cost on this recipe? Measured, for the
+  //      next time a window like this one comes up.
+  //
+  // ── why it exists at all, given it cannot finish ─────────────────────────
+  // The 2026-08-13 13:00 maintenance reservation left ~48 min and the recipe
+  // needs 235 min single-GPU. The arithmetic (README, "Why WebQSP did not fit
+  // the window") puts a perfect-scaling 8-GPU run at ~47 min, i.e. right at the
+  // boundary with no margin — too thin to plan a RESULT around, but the GPUs are
+  // idle and `025` is already queued behind the reservation as the safety net,
+  // so the downside is an unused allocation and the upside is knowing whether
+  // `025` is worth its overnight slot.
+  //
+  // ── the DDP configuration ────────────────────────────────────────────────
+  // 8 ranks x batch_size 1 x accumulation_steps 1 = effective batch 8, matching
+  // 021/023's 1 x 2 x 4. That is the closest DDP can get: preserving per-GPU
+  // batch 2 as well would need accumulation 0.5. Per-GPU batch 1 is where this
+  // workload is least efficient — the (B,N,N,.) bias tensor and the flex kernel
+  // both amortize over the batch — so do not read the throughput number as an
+  // upper bound on what DDP can do for this recipe.
+  //
+  // `gpus_per_config: 8` makes sweep launch under `torchrun --nproc_per_node 8`
+  // (sweep/execute.py). Neither text_graph_trainer.py nor _v2 overrides
+  // `_get_train_sampler`, so HF's default DistributedSampler applies and the
+  // ranks get disjoint indices — the trap that docstring warns about does not
+  // fire here. This is nonetheless the FIRST distributed run of this recipe, so
+  // a rank-mismatch or sampler surprise is itself one of the things being tested.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/mixed_bias/configs/026_webqsp_v2_ddp_probe.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "026_webqsp_v2_ddp_probe",
+  "results_dir": "src/experiments/mixed_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      // Whole-node Blackwell: ixb4 (B200) and ixb5-8 (B300) are entirely free at
+      // submission, so an 8-GPU request lands immediately. H100 is excluded
+      // deliberately — ixh is the only H100 node and taking all 8 of its GPUs
+      // would block anything else that wants the window.
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 8,
+      // 8 dataloader workers' worth of host CPU, one rank each.
+      "cpus": 64,
+      // 128G was needed at 1 rank (018's four OOM kills at 64G); 8 ranks on one
+      // node share the host, and the dataset is loaded per rank, so this scales.
+      "mem": "512G",
+      // Sized to the maintenance window (13:00), NOT to the workload. The run is
+      // EXPECTED to hit this limit and be killed — see the header. Slurm will not
+      // start a job that would run into the reservation, so anything longer
+      // simply would not launch.
+      "time": "00:38:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── one cell: the priority arm at the priority LR ─────────────────────────
+  // bias_lr 5e-3 because that is where arms 2 and 4 were read, and seed 0 to
+  // match 022/023's reproducer cell.
+  "arm": [
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": true, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 0}
+  ],
+
+  "magnetic_gate_repr_dim": 256,
+
+  // ── DDP batch split (see header) ──────────────────────────────────────────
+  // The ONLY deviation from 025 below this line. Everything else is verbatim, so
+  // the throughput number is attributable to the rank count and the batch split.
+  "batch_size": 1,
+  "accumulation_steps": 1,
+
+  // ── 025_webqsp_linear_v2, verbatim below this line ────────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  // Evals are the second-largest non-step cost after compile, and this run is
+  // not being read for accuracy — but they are left at 200 so the loss trace is
+  // sampled often enough to SEE a divergence, which is the whole point.
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

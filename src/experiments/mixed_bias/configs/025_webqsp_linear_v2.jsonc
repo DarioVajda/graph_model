@@ -1,0 +1,135 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 025 — arm v2 (`magnetic_linear_v2`) on WebQSP.
+  //
+  // The gated linear head: arm 2's
+  // bilinear phase channel with its eigenvalue features scaled by a bounded
+  // per-node gate read off the spectral self-energy. It is arm 2 EXACTLY at
+  // initialisation (gate = 1 + tanh(0) = 1, asserted bit-for-bit in
+  // tests/models/test_gated_linear_magnetic_bias.py), so everything measured
+  // here is what the gate learns on top of arm 2.
+  //
+  // ── this one CANNOT fit the 2026-08-13 maintenance window ────────────────
+  // Submitted to queue behind the 13:00-01:00 reservation rather than ahead of
+  // it, deliberately. WebQSP runs measured 3:55-5:21 single-GPU (sacct, 023) and
+  // the window was under an hour; the 8-way DDP that would be needed to close
+  // that gap is a recipe change, not a scheduling one — see the README section
+  // "Why WebQSP did not fit the window" for the arithmetic. 024 (GraphQA) is the
+  // sweep that ran in the window.
+  //
+  // ── read against 021 and 023 ─────────────────────────────────────────────
+  // Same recipe, same M=64, same data build, same bias_self_node=true. The
+  // comparison that matters is v2 vs arm 2 (`magnetic_linear`, 021), since v2
+  // reduces to exactly that arm when the gate does not move. Arm 4
+  // (`magnetic_hybrid`, 023) is the other reference point: it spends the SAME
+  // per-node feature additively on a separate channel, so v2-vs-arm-4 is the
+  // multiplicative-vs-additive comparison with everything else held fixed.
+  //
+  // Standing caveat on how hard this can be read: 022 and 023 ran the hybrid
+  // 5e-3 seed-0 cell with byte-identical configs and got 0.6946 and 0.6781 —
+  // 1.65 pp apart at FIXED seed. That is larger than the arm-2-vs-arm-4 gap
+  // (0.63 pp), so a 3-seed median here bounds the effect rather than resolving
+  // it. Stated up front so the result is not over-read.
+  //
+  // ── grid ─────────────────────────────────────────────────────────────────
+  // 1 arm x 2 bias_lr x 3 seeds = 6 runs, ~4-5.3 GPU-h each = ~28 GPU-h.
+  // 5e-3 cells are listed FIRST so they are the array's low-index tasks and get
+  // scheduled first: that is the LR where arms 2 and 4 were read, so if only
+  // half this grid ever runs, the half that runs is the comparable half.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/mixed_bias/configs/025_webqsp_linear_v2.jsonc
+  //   python3 -m sweep.report src/experiments/mixed_bias/results/025_webqsp_linear_v2
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "025_webqsp_linear_v2",
+  "results_dir": "src/experiments/mixed_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      // 023's pool. H100 (ixh) plus Blackwell (ixb1-4 B200, ixb5-8 B300); 021
+      // and 023 both ran this exact recipe across all three. Absolute step times
+      // are not comparable across brands; accuracy, the only thing read here, is
+      // unaffected.
+      "gpus": ["H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      // 128G, as 018/023 — at 64G four runs were OOM-killed at ~3 h with MaxRSS
+      // pinned exactly to the cgroup cap. Host RAM, unrelated to the arm.
+      "mem": "128G",
+      // 12 h, as 023. This array is EXPECTED to sit queued until the 08-13
+      // maintenance reservation clears at 01:00 on 08-14 — Slurm will not start
+      // a 12 h job into a reservation, which is correct behaviour and is why the
+      // number is not trimmed to make it start sooner. Trimming it would only
+      // risk killing a 5 h run at its own walltime.
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── the grid (seed inside the bundle, 021/023's pattern) ──────────────────
+  // Every head flag written explicitly in every object, even where false, so the
+  // resolved JSON is self-describing rather than relying on defaults.
+  "arm": [
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": true, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": true, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": true, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 2},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": true, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": true, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": true, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 2}
+  ],
+
+  // ── gate width ───────────────────────────────────────────────────────────
+  // INTERNAL to the gate MLP — once per node per forward, never seen by
+  // attention, so unlike magnetic_magnitude_dim it costs O(N) and is free. 256
+  // matches magnetic_magnitude_repr_dim so the two non-linear arms carry
+  // comparable per-node capacity. magnetic_dim is 128 here, so the gate MLP is
+  // 128 -> 256 -> 128; its output width is magnetic_dim by construction.
+  "magnetic_gate_repr_dim": 256,
+
+  // ── 023_webqsp_mixed_arms34, verbatim below this line ─────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "magnetic_shared": false,
+  // max_spd stays at the built value even where spd is off: it is part of
+  // data_config_key, so changing it would fork the dataset cache.
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
