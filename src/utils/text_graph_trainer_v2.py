@@ -49,6 +49,7 @@ class GraphTrainerV2(Trainer):
         # contains "bias") never matched the graph-bias modules — the historical
         # behavior is NO decay on them, and 0.0 preserves it exactly.
         self.bias_weight_decay = bias_weight_decay
+        self._gain_params = None       # resolved lazily in `log`; [] means "no arm"
         super().__init__(*args, **kwargs)
 
     # ── Optional: a distinct learning rate for the bias parameters ──────────────
@@ -123,6 +124,28 @@ class GraphTrainerV2(Trainer):
                     logs["bias_learning_rate"] = group["lr"]
                     logs["bias_weight_decay"] = self.bias_weight_decay
                     break
+
+        # `bias_gain_absmax` — max |g^(h)| over every layer's magnitude channel.
+        #
+        # After MIXED_BIAS.md §5.8 the magnitude bias is bounded by its per-head
+        # gain, |b| <= |g|, so this ONE number is an upper bound on the whole
+        # channel's contribution to the attention logits. It is what distinguishes
+        # "the normalization fixed it" from "the normalization postponed it": a
+        # run that survives with g flat is fixed, a run that survives with g still
+        # climbing is on the same trajectory as the four that diverged, just
+        # slower. Without it a clean run is uninterpretable, which is exactly the
+        # ambiguity that lowering bias_lr already produced.
+        #
+        # Absent on every other arm — the list resolves empty and this is a no-op,
+        # so no other experiment's log line changes.
+        if self._gain_params is None:
+            self._gain_params = [p for n, p in self.model.named_parameters()
+                                 if n.endswith("magnitude_gain")]
+        if self._gain_params:
+            with torch.no_grad():
+                logs["bias_gain_absmax"] = max(
+                    p.detach().abs().max().item() for p in self._gain_params)
+
         super().log(logs, *args, **kwargs)
 
     # ── Correctness: honor the eval_dataset object actually passed ──────────────

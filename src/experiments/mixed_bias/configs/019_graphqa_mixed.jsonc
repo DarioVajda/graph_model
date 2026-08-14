@@ -60,7 +60,13 @@
       // the tasks that land there are directly comparable to it. Mixed hardware
       // within one sweep means wall-clock per run is no longer a single number.
       // Accuracy — the only thing read from this sweep — is unaffected.
-      "gpus": ["A100", "H100"],
+      //
+      // Blackwell added 2026-08-12 for the re-run: ixb1-4 (B200) and ixb5-8
+      // (B300) are 8 more GPUs this 36-run array can backfill into, and at ~17
+      // min per run the array drains far faster spread across four brands than
+      // pinned to two. sbatch_tests.sh already gates the flex suite on B200/B300,
+      // and 020 ran its whole context sweep there.
+      "gpus": ["A100", "H100", "B200", "B300"],
       "gpus_per_config": 1,
       "cpus": 8,
       "mem": "64G",

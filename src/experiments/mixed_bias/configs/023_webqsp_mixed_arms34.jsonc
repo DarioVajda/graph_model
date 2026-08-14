@@ -1,0 +1,151 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 023 — arms 3 and 4 on WebQSP, under the §5.8 parameterization.
+  //
+  // 018 withdrew these arms mid-flight after four divergences. MIXED_BIAS.md
+  // §5.8 replaced the magnitude channel's bilinear form (both factors L2-
+  // normalized per row, a per-head gain carrying the range), and 022 established
+  // that the replacement TRAINS: all three cells that reliably died now clear
+  // their death points with the gain bound flat. This is the grid 018 never got
+  // to finish, re-run under the fixed form.
+  //
+  // ── the complete 12-cell grid, deliberately including 022's four ──────────
+  // 2 arms x 2 bias_lr x 3 seeds = 12. Four of these (magnitude 2e-2 seeds 0/2,
+  // hybrid 5e-3 seeds 0/2) already ran in 022 with a byte-identical config, so
+  // they are re-run here rather than reused. That costs ~4 runs and buys a
+  // COMPLETE grid in ONE directory, which is what sweep.report's median-seed
+  // rule needs — 021 made exactly this trade for exactly this reason, and
+  // splitting a grid across two results dirs means merging runs.jsonl by hand.
+  //
+  // 022 keeps its own identity as the stability reproducer: it is the record
+  // that the death cells were cleared, read against 018's logs. This sweep is
+  // the QUALITY measurement, read against 021's baselines.
+  //
+  // ── what this is measuring, and what 022 already suggests ────────────────
+  // Read against 021 (arms 0/1/2, same recipe, same M=64, same data build).
+  // MIXED_BIAS.md §5.6 gives the three readings. 022's mid-training numbers
+  // already point hard at one of them — arm 4 tracking arm 2 point-for-point at
+  // matched LR and epoch, arm 3 sitting BELOW 010's no-bias floor at both
+  // learning rates — i.e. "the magnitude channel is inert and the residual
+  // against arm 1 is pairwise non-linearity no factorization reaches", which
+  // closes LINEAR_BIAS.md §7 negatively.
+  //
+  // This sweep exists to settle that at 15 epochs with 3 seeds rather than at
+  // epoch 5-8 with 1-2, because the arm-4-vs-arm-2 gap is exactly the size that
+  // seed noise could still move.
+  //
+  // ── seed rides INSIDE the bundle ─────────────────────────────────────────
+  // 021's pattern. It makes the cell set explicit and non-rectangular-capable;
+  // here the grid happens to be full, but writing it out means a future partial
+  // re-run can drop cells without restructuring the file.
+  //
+  // 12 runs, ~2.8-4.8 GPU-h each (sacct, 010/015/022) = ~45 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/mixed_bias/configs/023_webqsp_mixed_arms34.jsonc
+  //   python3 -m sweep.report src/experiments/mixed_bias/results/023_webqsp_mixed_arms34
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "023_webqsp_mixed_arms34",
+  "results_dir": "src/experiments/mixed_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 16,
+      "partition": "frida",
+      "account": "povejmo",
+      // H100 + Blackwell. 018 and 022 pinned H100 alone, and ixh is the only
+      // H100 node (8 GPUs), so that capped effective concurrency at 8 no matter
+      // what max_concurrent said — and left this grid queued behind itself while
+      // ixb sat free. B200 (ixb1-4, 180 GB) and B300 (ixb5-8, 288 GB) both run
+      // this workload: 021 is executing the SAME kgqa WebQSP recipe on ixb7/ixb8
+      // right now, and sbatch_tests.sh already gates the flex suite on both.
+      // Absolute step times are not comparable across brands; accuracy, the only
+      // thing read here, is unaffected — the same reasoning 018 used to compare
+      // its H100 numbers against 015's B200/B300 ones.
+      "gpus": ["H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      // 128G, as 018 — at 64G four runs were OOM-killed at ~3 h with MaxRSS
+      // pinned exactly to the cgroup cap. Host RAM, unrelated to the arm.
+      "mem": "128G",
+      // 12 h, as 018. NOTE the cluster-wide 12 h maintenance starting ~2026-08-13
+      // 11:20: a 12 h job must START by ~23:20 on 08-12 to fit ahead of it.
+      // Anything Slurm cannot fit will simply hold until the reservation clears,
+      // which is correct behaviour but means the tail of this grid may land a day
+      // later than the head.
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── the grid (seed inside the bundle, 021's pattern) ──────────────────────
+  // Every head flag written explicitly in every object, even where false, so the
+  // resolved JSON is self-describing rather than relying on defaults.
+  "arm": [
+    // arm 3 — magnitude only
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 2},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 2},
+
+    // arm 4 — the proposed O(N) replacement
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 2},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2, "seed": 2}
+  ],
+
+  // ── magnitude-channel widths (MIXED_BIAS.md §2.5, §2.6) ───────────────────
+  // 018's values unchanged. §5.8 altered the FORM of the channel, not its
+  // widths, so changing them would confound the comparison against 021.
+  "magnetic_magnitude_dim": 64,
+  "magnetic_magnitude_repr_dim": 256,
+
+  // ── 018_webqsp_mixed, verbatim below this line ────────────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "magnetic_shared": false,
+  // max_spd stays at the built value even where spd is off: it is part of
+  // data_config_key, so changing it would fork the dataset cache.
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
