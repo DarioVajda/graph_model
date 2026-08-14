@@ -25,6 +25,11 @@ MagneticMagnitudeBias - per-node spectral self-energy through an MLP, the only
                       NON-linear channel a bilinear form admits (MIXED_BIAS.md)
 MagneticHybridBias  - LinearMagneticBias + MagneticMagnitudeBias, i.e. the linear
                       phase channel and the non-linear magnitude channel in tandem
+GatedLinearMagneticBias - LinearMagneticBias with the eigenvalue features gated by
+                      a bounded per-node factor read off the spectral self-energy,
+                      i.e. the same non-linearity as the magnitude channel spent
+                      MULTIPLICATIVELY inside the spectral sum instead of on a
+                      separate additive channel
 K-hop gate (hard) - -inf for node pairs more than K hops apart; K=0 = disabled
 """
 
@@ -717,6 +722,124 @@ class MagneticHybridBias(LinearMagneticBias):
                 torch.cat([k_phase, k_mag], dim=-1))
 
 
+class GatedLinearMagneticBias(LinearMagneticBias):
+    """Arm 2's bilinear phase channel with a bounded per-node multiplicative gate.
+
+        S_i  = sum_l |V_il|² phi_l                       (B, N, magnetic_dim)
+        g_i  = 1 + tanh(MLP_node(S_i))                   (B, N, magnetic_dim), in (0,2)
+        b^(h)(i,j) = sum_c g_[i,c] * ( W_R[c,h] Re K_c(i,j) + W_I[c,h] Im K_c(i,j) )
+                     + beta_h
+
+    i.e. **arm 2 with per-query-node channel-mixing weights**. The gate multiplies
+    the eigenvalue features rather than adding a separate channel, which is the one
+    structural difference from ``MagneticHybridBias``: the same non-linear per-node
+    quantity (``_self_energy``) is spent INSIDE the spectral sum instead of beside
+    it.
+
+    MEASURED, and it does not work: on WebQSP (`mixed_bias` 025, M=64, 3 seeds) it
+    is 0.82 pp F1 BELOW arm 2 at bias_lr 5e-3 and 1.82 pp below at 2e-2 — negative
+    at both LRs and on every metric. The gate was verified to have left its
+    identity init, so that is a real null and not an untrained module. Retained
+    because it costs nothing to keep (it appends no head width, see below) and it
+    is the query-only special case of a node-PAIR gate, i.e. the control for that
+    design if it is ever built. Do not spend GPU-hours re-testing it.
+
+    Three properties that make this safe to run, in the order they matter:
+
+    * **Scale stability.** ``tanh`` bounds the gate into (0,2), so the shared
+      DeepSets trunk still enters the bias at degree 1 and |b - beta_h| is at most
+      2× arm 2's own bound. That is the defect that killed arms 3/4 (§5.7): there,
+      BOTH sides of the magnitude inner product were unbounded functions of the
+      trunk, making the bias quadratic in it. Here the key side is still
+      ``[V_R ‖ V_I]``, parameter-free with unit row energy.
+    * **Exact arm-2 equivalence at init.** ``gate_mlp``'s final Linear is
+      zero-initialised, so ``g == 1`` identically and this class is bit-identical
+      to ``LinearMagneticBias`` at step 0. No separate per-head gain is needed —
+      ``proj[0]``'s zero-init already is one.
+    * **Invariance.** The gate reads only ``_self_energy``, the sole per-node
+      magnitude feature invariant to both eigenbasis ambiguities (see
+      ``_self_energy``), and it multiplies a query row, so the U(1)/U(k) argument
+      for the kernel is untouched.
+
+    What it does NOT buy: rank. The right factor ``X = [V_R ‖ V_I]`` is shared
+    across channels, so ``b = (sum_c diag(g[:,c]) X S_c) Xᵀ`` still has rank at
+    most min(N, 2M) — same ceiling as arm 2. The gate buys per-node adaptivity
+    within that ceiling, not more of it. Rank was never measured to be the binding
+    constraint anyway (P0b: 90% of the energy in two singular values).
+
+    Deliberately dense like every other arm, so a measured delta is math and not an
+    implementation. ``structural_factors`` and the dense path both route through
+    ``_gated_query_halves`` so the two cannot drift apart.
+    """
+
+    config_key = 'magnetic_linear_v2'
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        super().__init__(num_heads, head_dim, bias_config)
+        magnetic_dim = getattr(bias_config, 'magnetic_dim', 32)
+        d_repr = getattr(bias_config, 'magnetic_gate_repr_dim', 256)
+        # d_repr is INTERNAL: evaluated once per node per forward, never seen by
+        # attention, so it costs O(N) and is free relative to the N² path.
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(magnetic_dim, d_repr, bias=True),
+            nn.SiLU(),
+            nn.Linear(d_repr, magnetic_dim, bias=True),
+        )
+        nn.init.zeros_(self.gate_mlp[2].weight)
+        nn.init.zeros_(self.gate_mlp[2].bias)
+        self.gate_mlp[2]._is_hf_initialized = True
+
+    def _gate(self, V_real, V_imag, phi) -> torch.Tensor:
+        """``(B, N, magnetic_dim)`` in (0, 2), exactly 1 at initialisation."""
+        return 1.0 + torch.tanh(self.gate_mlp(self._self_energy(V_real, V_imag, phi)))
+
+    def _gated_query_halves(self, V_real, V_imag, phi) -> Tuple[torch.Tensor, torch.Tensor]:
+        """The two ``(B, N, M, H)`` query halves of the gated kernel.
+
+        Arm 2 folds the head into phi once, giving a per-(eigenvector, head) scalar
+        ``psi``. The gate is per NODE, so the fold has to happen per node too and
+        ``psi`` gains an N axis — this is the whole cost of the arm. Everything
+        downstream (the dense bias and the factorization) is a contraction of these
+        two tensors against ``V_real``/``V_imag``.
+        """
+        g = self._gate(V_real, V_imag, phi)                       # (B, N, m)
+        W1 = self.proj[0].weight                                  # (H, 2m)
+        m = W1.shape[1] // 2
+        # (B, M, m) x (m, H) broadcast -> (B, M, m, H), then gated per node.
+        pr = phi.unsqueeze(-1) * W1[:, :m].T                      # (B, M, m, H)
+        pi = phi.unsqueeze(-1) * W1[:, m:].T
+        psi_R = torch.einsum('bnd,bmdh->bnmh', g, pr)             # (B, N, M, H)
+        psi_I = torch.einsum('bnd,bmdh->bnmh', g, pi)
+        vr, vi = V_real.unsqueeze(-1), V_imag.unsqueeze(-1)       # (B, N, M, 1)
+        return vr * psi_R + vi * psi_I, vi * psi_R - vr * psi_I
+
+    def _phase_bias(self, V_real, V_imag, phi) -> torch.Tensor:
+        if getattr(self, "legacy_unfolded", False):
+            # Parity path: materialize [Re K ‖ Im K], scale by the query-node gate,
+            # then apply the head — the naive reading of the formula above.
+            g = self._gate(V_real, V_imag, phi).unsqueeze(2)      # (B, N, 1, m)
+            real = (torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phi)
+                    + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phi)) * g
+            imag = (torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phi)
+                    - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phi)) * g
+            return self.proj[0](torch.cat([real, imag], dim=-1))
+        # Folded path: two einsums instead of arm 2's four, because the head and
+        # the gate are already inside the query halves.
+        a_R, a_I = self._gated_query_halves(V_real, V_imag, phi)
+        return (torch.einsum('bimh,bjm->bijh', a_R, V_real)
+                + torch.einsum('bimh,bjm->bijh', a_I, V_imag)) + self.proj[0].bias
+
+    def _phase_factors(self, V_real, V_imag, phi) -> Tuple[torch.Tensor, torch.Tensor]:
+        """``(B, H, N, 2M)`` and ``(B, N, 2M)`` — the key side is still
+        parameter-free and head-agnostic, which is this arm's one structural
+        advantage over the magnitude channel: it broadcasts across GQA groups
+        with no per-group key block at all."""
+        a_R, a_I = self._gated_query_halves(V_real, V_imag, phi)
+        q_struct = torch.cat([a_R, a_I], dim=2).permute(0, 3, 1, 2)   # (B, H, N, 2M)
+        k_struct = torch.cat([V_real, V_imag], dim=-1)                # (B, N, 2M)
+        return q_struct, k_struct
+
+
 class MagneticSharedBias(MagneticBias):
     """MagneticBias computed ONCE per forward and shared by every layer.
 
@@ -746,6 +869,7 @@ BIAS_TYPES: list[type[BaseBias]] = [
     LinearMagneticBias,
     MagneticMagnitudeBias,
     MagneticHybridBias,
+    GatedLinearMagneticBias,
 ]
 """Add new bias types here — GraphAttentionBias picks them up automatically."""
 

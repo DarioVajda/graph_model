@@ -28,10 +28,12 @@ class GraphConfigMixin:
         magnetic_linear: bool = False,
         magnetic_magnitude: bool = False,
         magnetic_hybrid: bool = False,
+        magnetic_linear_v2: bool = False,
         magnetic_dim: int = 32,
         magnetic_content_dim: int = 128,
         magnetic_magnitude_dim: int = 64,
         magnetic_magnitude_repr_dim: int = 256,
+        magnetic_gate_repr_dim: int = 256,
         magnetic_q: float = 0.25,
         bias_self_node: bool = False,
         k_hop: int = 0,
@@ -63,17 +65,18 @@ class GraphConfigMixin:
         if magnetic_groups:
             if sum(map(bool, (magnetic, magnetic_shared, magnetic_content,
                               magnetic_linear, magnetic_magnitude,
-                              magnetic_hybrid))) > 0:
+                              magnetic_hybrid, magnetic_linear_v2))) > 0:
                 raise ValueError(
                     "magnetic_groups is mutually exclusive with magnetic / "
                     "magnetic_shared / magnetic_content / magnetic_linear / "
-                    "magnetic_magnitude / magnetic_hybrid; got "
+                    "magnetic_magnitude / magnetic_hybrid / magnetic_linear_v2; got "
                     f"magnetic_groups={magnetic_groups} alongside "
                     f"magnetic={magnetic}, magnetic_shared={magnetic_shared}, "
                     f"magnetic_content={magnetic_content}, "
                     f"magnetic_linear={magnetic_linear}, "
                     f"magnetic_magnitude={magnetic_magnitude}, "
-                    f"magnetic_hybrid={magnetic_hybrid}.")
+                    f"magnetic_hybrid={magnetic_hybrid}, "
+                    f"magnetic_linear_v2={magnetic_linear_v2}.")
             if n_layers is not None and not 1 <= magnetic_groups <= n_layers:
                 raise ValueError(
                     f"magnetic_groups={magnetic_groups} must be in [1, "
@@ -98,6 +101,12 @@ class GraphConfigMixin:
         # with NO bias at all, which trains cleanly and reads as a clean negative.
         self.magnetic_magnitude = magnetic_magnitude
         self.magnetic_hybrid = magnetic_hybrid
+        # Gated linear magnetic bias (see GatedLinearMagneticBias):
+        # `magnetic_linear` with the eigenvalue
+        # features scaled by a bounded per-node gate read off the spectral
+        # self-energy. Same magnetic_V / magnetic_lambdas features again, so the
+        # gate warning above applies verbatim.
+        self.magnetic_linear_v2 = magnetic_linear_v2
         # Every placement of the magnetic term is a different HEAD on the same
         # features, so at most one may be enabled. Checked as one rule rather than
         # per-flag so a new placement cannot be added past a stale enumeration.
@@ -106,8 +115,10 @@ class GraphConfigMixin:
                       ("magnetic_linear", magnetic_linear),
                       ("magnetic_magnitude", magnetic_magnitude),
                       ("magnetic_hybrid", magnetic_hybrid),
+                      ("magnetic_linear_v2", magnetic_linear_v2),
                       ("magnetic_groups", bool(magnetic_groups)))
-        for name in ("magnetic_linear", "magnetic_magnitude", "magnetic_hybrid"):
+        for name in ("magnetic_linear", "magnetic_magnitude", "magnetic_hybrid",
+                     "magnetic_linear_v2"):
             if not dict(placements)[name]:
                 continue
             clash = [n for n, v in placements if v and n != name]
@@ -124,6 +135,10 @@ class GraphConfigMixin:
         # every head, and it is not (MIXED_BIAS.md §2.5).
         self.magnetic_magnitude_dim = magnetic_magnitude_dim
         self.magnetic_magnitude_repr_dim = magnetic_magnitude_repr_dim
+        # Gate-MLP hidden width. Internal like magnetic_magnitude_repr_dim, and
+        # unlike it there is no output width to pay for at all: the gate's output
+        # is magnetic_dim by construction and never reaches attention.
+        self.magnetic_gate_repr_dim = magnetic_gate_repr_dim
         self.magnetic_q = magnetic_q
         # Keep the intra-node diagonal b_ii instead of zeroing it (see
         # MagneticBias._finalize / LINEAR_BIAS.md §7.3). Applies to the magnetic
