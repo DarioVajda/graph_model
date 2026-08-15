@@ -234,6 +234,12 @@ def compute_node_bias(
             # recomputed hidden state.
             hidden_states=getattr(module, "_captured_hidden_states", None),
             node_start_indices=ctx.node_start_indices,
+            # magnetic_nonlinear: E, computed once per forward by the causal-LM
+            # mixin. Read INSIDE the closure deliberately — the N²·H pooling that
+            # consumes it is per-layer and worth recomputing in backward, while E
+            # itself is saved once outside. Non-reentrant checkpoint propagates
+            # gradients to closure-captured tensors, which is how the trunk trains.
+            pair_features=ctx.shared_pair_features,
             k_hop_mask=None,
             cache_dict=ctx.cache,
         )

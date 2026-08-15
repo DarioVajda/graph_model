@@ -64,7 +64,9 @@ from .attention import GraphAttentionMixin
 from .causal_lm import GraphCausalLMMixin
 from .dispatch import compute_node_bias
 from .structural_mask import expand_node_to_token_bias
-from .bias import build_group_bias_modules, build_shared_bias_modules
+from .bias import (
+    build_group_bias_modules, build_pair_feature_trunk, build_shared_bias_modules,
+)
 
 # ── trust_remote_code bundling manifest (see modeling_gtlm_llama.py) ────────────
 from .context import GraphContext  # noqa: F401
@@ -234,6 +236,12 @@ class GTLMBloomForCausalLM(GraphCausalLMMixin, BloomForCausalLM):
         BloomForCausalLM.__init__(self, config)
         self.transformer = GTLMBloomModel(config)
         self.shared_graph_bias = build_shared_bias_modules(
+            config.num_attention_heads, config.head_dim, config)
+        # Replicated from GraphCausalLMMixin.__init__ alongside the line above: the
+        # shared forward reads this attribute, so omitting it would leave
+        # magnetic_nonlinear's per-layer heads with no E to pool — pair_features
+        # None, forward None, and a run that trains cleanly with NO bias at all.
+        self.shared_graph_bias_trunk = build_pair_feature_trunk(
             config.num_attention_heads, config.head_dim, config)
         self.group_graph_bias = build_group_bias_modules(
             config.num_attention_heads, config.head_dim, config, config.num_hidden_layers)

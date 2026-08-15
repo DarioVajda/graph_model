@@ -29,6 +29,11 @@ class GraphContext:
     block_mask:      Optional[Any] = None            # flex BlockMask
     node_ids_flex:   Optional[torch.Tensor] = None   # (B, kv_len) int32, flex path
     shared_node_bias: Optional[torch.Tensor] = None  # (B, H, N, N)
+    # Pair FEATURES, not a bias: E (B, N, N, magnetic_dim) from MagneticPairTrunk,
+    # computed once per forward and pooled by every layer's MagneticNonlinearBias.
+    # A separate field from shared_node_bias precisely because it is not summable
+    # into one (different rank, different meaning). See NON_LINEAR_BIAS.md §5.1.
+    shared_pair_features: Optional[torch.Tensor] = None  # (B, N, N, magnetic_dim)
     node_start_indices: Optional[torch.Tensor] = None  # (B, N) first-token pos per node (magnetic_content)
     group_bias:      Optional[Any] = None            # bias.GroupBiasCache (magnetic_groups)
 

@@ -29,6 +29,9 @@ class GraphConfigMixin:
         magnetic_magnitude: bool = False,
         magnetic_hybrid: bool = False,
         magnetic_linear_v2: bool = False,
+        magnetic_nonlinear: bool = False,
+        magnetic_struct_dim: int = 64,
+        magnetic_pool: str = "attn",
         magnetic_dim: int = 32,
         magnetic_content_dim: int = 128,
         magnetic_magnitude_dim: int = 64,
@@ -65,18 +68,21 @@ class GraphConfigMixin:
         if magnetic_groups:
             if sum(map(bool, (magnetic, magnetic_shared, magnetic_content,
                               magnetic_linear, magnetic_magnitude,
-                              magnetic_hybrid, magnetic_linear_v2))) > 0:
+                              magnetic_hybrid, magnetic_linear_v2,
+                              magnetic_nonlinear))) > 0:
                 raise ValueError(
                     "magnetic_groups is mutually exclusive with magnetic / "
                     "magnetic_shared / magnetic_content / magnetic_linear / "
-                    "magnetic_magnitude / magnetic_hybrid / magnetic_linear_v2; got "
+                    "magnetic_magnitude / magnetic_hybrid / magnetic_linear_v2 / "
+                    "magnetic_nonlinear; got "
                     f"magnetic_groups={magnetic_groups} alongside "
                     f"magnetic={magnetic}, magnetic_shared={magnetic_shared}, "
                     f"magnetic_content={magnetic_content}, "
                     f"magnetic_linear={magnetic_linear}, "
                     f"magnetic_magnitude={magnetic_magnitude}, "
                     f"magnetic_hybrid={magnetic_hybrid}, "
-                    f"magnetic_linear_v2={magnetic_linear_v2}.")
+                    f"magnetic_linear_v2={magnetic_linear_v2}, "
+                    f"magnetic_nonlinear={magnetic_nonlinear}.")
             if n_layers is not None and not 1 <= magnetic_groups <= n_layers:
                 raise ValueError(
                     f"magnetic_groups={magnetic_groups} must be in [1, "
@@ -107,6 +113,21 @@ class GraphConfigMixin:
         # self-energy. Same magnetic_V / magnetic_lambdas features again, so the
         # gate warning above applies verbatim.
         self.magnetic_linear_v2 = magnetic_linear_v2
+        # Non-linear pooled magnetic head (MagneticPairTrunk +
+        # MagneticNonlinearBias, see NON_LINEAR_BIAS.md): per-node features built
+        # by attention-pooling a whole row/column of the PAIRWISE non-linearity,
+        # instead of reading its diagonal. Same magnetic_V / magnetic_lambdas
+        # features again, so the gate warning above applies verbatim.
+        #   magnetic_struct_dim — d_struct, appended to each head. NOT free.
+        #   magnetic_pool       — 'attn' (learned pool) or 'uniform' (the ablation
+        #                         that separates a learned pool from any non-linear
+        #                         row summary). Architecture-only, not data.
+        self.magnetic_nonlinear = magnetic_nonlinear
+        self.magnetic_struct_dim = magnetic_struct_dim
+        if magnetic_pool not in ("attn", "uniform"):
+            raise ValueError(
+                f"magnetic_pool must be 'attn' or 'uniform'; got {magnetic_pool!r}.")
+        self.magnetic_pool = magnetic_pool
         # Every placement of the magnetic term is a different HEAD on the same
         # features, so at most one may be enabled. Checked as one rule rather than
         # per-flag so a new placement cannot be added past a stale enumeration.
@@ -116,9 +137,10 @@ class GraphConfigMixin:
                       ("magnetic_magnitude", magnetic_magnitude),
                       ("magnetic_hybrid", magnetic_hybrid),
                       ("magnetic_linear_v2", magnetic_linear_v2),
+                      ("magnetic_nonlinear", magnetic_nonlinear),
                       ("magnetic_groups", bool(magnetic_groups)))
         for name in ("magnetic_linear", "magnetic_magnitude", "magnetic_hybrid",
-                     "magnetic_linear_v2"):
+                     "magnetic_linear_v2", "magnetic_nonlinear"):
             if not dict(placements)[name]:
                 continue
             clash = [n for n, v in placements if v and n != name]

@@ -25,6 +25,10 @@ MagneticMagnitudeBias - per-node spectral self-energy through an MLP, the only
                       NON-linear channel a bilinear form admits (MIXED_BIAS.md)
 MagneticHybridBias  - LinearMagneticBias + MagneticMagnitudeBias, i.e. the linear
                       phase channel and the non-linear magnitude channel in tandem
+MagneticNonlinearBias - per-node features built by pooling a whole row (column) of
+                      the PAIRWISE non-linearity SiLU(K(i,j)), rather than reading
+                      its diagonal. Fed by MagneticPairTrunk, which computes that
+                      pairwise tensor once per forward (see NON_LINEAR_BIAS.md)
 GatedLinearMagneticBias - LinearMagneticBias with the eigenvalue features gated by
                       a bounded per-node factor read off the spectral self-energy,
                       i.e. the same non-linearity as the magnitude channel spent
@@ -42,6 +46,22 @@ from typing import Optional, Tuple
 
 
 # ── Base class ────────────────────────────────────────────────────────────────
+
+def finalize_node_bias(b: torch.Tensor, device, bias_self_node: bool) -> torch.Tensor:
+    """``(B, N, N, H)`` → ``(B, H, N, N)``, zeroing the intra-node diagonal unless
+    ``bias_self_node``.
+
+    Module-level because two families need it: the ``MagneticBias`` hierarchy via
+    ``_finalize``, and ``MagneticNonlinearBias``, which is not a ``MagneticBias``
+    (it owns no spectral trunk at all — see NON_LINEAR_BIAS.md §5.1). One
+    implementation so the diagonal convention cannot drift between them.
+    """
+    b = b.permute(0, 3, 1, 2).contiguous()                        # (B, H, N, N)
+    if bias_self_node:
+        return b
+    diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
+    return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
+
 
 class BaseBias(nn.Module):
     """
@@ -364,11 +384,7 @@ class MagneticBias(BaseBias):
         Default False, so every existing config and checkpoint keeps the masked
         behaviour bit-for-bit.
         """
-        b = b.permute(0, 3, 1, 2).contiguous()                    # (B, H, N, N)
-        if getattr(self, 'bias_self_node', False):
-            return b
-        diag = torch.eye(b.shape[-1], device=device, dtype=torch.bool)
-        return b.masked_fill(diag.unsqueeze(0).unsqueeze(0), 0.0)
+        return finalize_node_bias(b, device, getattr(self, 'bias_self_node', False))
 
     def forward(
         self, *, dtype, device,
@@ -840,6 +856,315 @@ class GatedLinearMagneticBias(LinearMagneticBias):
         return q_struct, k_struct
 
 
+class MagneticPairTrunk(MagneticBias):
+    """The pair-feature trunk of ``magnetic_nonlinear`` — computes E, not a bias.
+
+        E(i,j) = SiLU( proj[0]([Re K ‖ Im K](i,j)) )     (B, N, N, magnetic_dim)
+
+    This is EXACTLY ``MagneticBias``'s hidden activation: ``_folded_spectral``
+    followed by the ``SiLU`` in ``proj[1]``. What differs is only what happens
+    next — ``MagneticBias`` collapses it to a per-head scalar with ``proj[2]``,
+    while ``MagneticNonlinearBias`` pools it into per-node features. ``proj[2]``
+    therefore does not exist here, which is why ``proj`` is a 2-slot Sequential
+    and ``__init__`` does not call ``MagneticBias.__init__``.
+
+    **Not a BaseBias and deliberately not in BIAS_TYPES.** It returns
+    ``(B,N,N,magnetic_dim)``, not ``(B,H,N,N)``, so it must never be summed into
+    the shared node bias. It is built by ``build_pair_feature_trunk`` and threaded
+    on its own ``GraphContext.shared_pair_features`` field.
+
+    Computed ONCE per forward, outside the gradient-checkpointed decoder layers,
+    and every layer pools the same tensor. That amortization is what pays for
+    ``magnetic_dim=64`` — twice the code default — at one copy of the N² einsums
+    instead of one per layer per recompute. See NON_LINEAR_BIAS.md §5.1.
+    """
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        # NOT super().__init__: MagneticBias builds a 3-slot proj whose final
+        # layer (magnetic_dim -> num_heads) is exactly the head this arm replaces.
+        # Building it to leave it unused would put dead weights in the checkpoint
+        # and in the weight-decay group.
+        nn.Module.__init__(self)
+        magnetic_dim = getattr(bias_config, 'magnetic_dim', 32)
+        self.lambda_lin = nn.Linear(1, head_dim, bias=True)
+        self.deep_set = nn.Sequential(
+            nn.Linear(head_dim * 2, magnetic_dim, bias=True),
+            nn.SiLU(),
+        )
+        # Slot 0 is what _folded_spectral reads (self.proj[0].weight/bias); slot 1
+        # is the SiLU that makes the pre-activation h into E. Same two objects,
+        # same order, same shapes as MagneticBias — so _phi and _folded_spectral
+        # are inherited verbatim and the folded/unfolded parity argument carries.
+        self.proj = nn.Sequential(
+            nn.Linear(magnetic_dim * 2, magnetic_dim, bias=True),
+            nn.SiLU(),
+        )
+
+    def forward(
+        self, *, dtype, device,
+        magnetic: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        num_nodes: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Optional[torch.Tensor]:
+        """``(B, N, N, magnetic_dim)`` — E, or None when the magnetic input is absent."""
+        parts = self._phi(magnetic, num_nodes, device)
+        if parts is None:
+            return None
+        return self.proj[1](self._folded_spectral(*parts))         # (B, N, N, m)
+
+
+class MagneticNonlinearBias(BaseBias):
+    """Per-layer head of ``magnetic_nonlinear``: asymmetric attention pooling of E.
+
+        a^out_ijh = <E(i,j), W^out_attn[:,h]> / sqrt(m) , masked by Omega   (§2.2)
+        w^out     = softmax_j(a^out)
+        Ebar^out_ih = sum_j w^out_ijh E(i,j)                  (B, H_Q,  N, m)
+        z^out     = RMSNorm(Ebar^out W^out_val) * gamma^out   (B, H_Q,  N, d)
+
+        (and the same over i, giving z^in on H_KV heads)
+
+        b^(h)(i,j) = <z^out[h,i,:], z^in[h // n_rep, j,:]>
+
+    The one non-linearity a bilinear form has never been given: E is
+    ``SiLU`` of a PAIRWISE quantity, and the pool turns a whole row (column) of it
+    into a node feature. Every previous factorizable arm spent the node-level
+    diagonal ``Re K(i,i)`` instead — a local scalar that `mixed_bias` measured to
+    fail exactly where the answer is a path. This is the strongest node-level
+    feature the family admits, so a null here closes the line rather than
+    extrapolating from a weak one. See NON_LINEAR_BIAS.md.
+
+    Three properties, in the order they matter:
+
+    * **Pool before projecting.** ``W_val`` does not depend on the pooled index,
+      so it commutes with the sum and the per-PAIR value vectors never exist:
+      ``(B,N,H,m)`` instead of ``(B,N,N,H,d)``. This is an identity, not an
+      approximation. Ordinary attention materializes V because it is per-TOKEN and
+      reused by every query; here the value is per-pair and a linear image of a
+      tensor already held.
+    * **Padded slots are finite, not NaN.** ``Omega`` leaves the (p,p) diagonal
+      open for every node, so a fully-padded row attends entirely to itself
+      instead of softmaxing an all -inf row into 0/0. V is zero at a padded slot,
+      so E(p,p) = SiLU(proj[0].bias): finite, constant, and never gathered (
+      ``expand_node_to_token_bias`` indexes by node_ids, which names real nodes).
+    * **Zero-init on ONE gain.** gamma^out = 1, gamma^in = 0, so b == 0 at step 0
+      while gamma^in has a non-zero gradient immediately. Zeroing both is the dead
+      saddle (MIXED_BIAS.md §4.1); zeroing W_val instead puts the zero inside
+      RMSNorm, whose Jacobian at zero is I/eps (MIXED_BIAS.md §2.3).
+
+    ``magnetic_pool='uniform'`` replaces the softmax with 1/n_b over valid nodes —
+    the ablation that separates "the learned pool is doing the work" from "any
+    non-linear row summary would do".
+
+    Deliberately dense like every other arm: the same ``(B,H,N,N)`` output on the
+    same eager/flex path, so a measured delta is math and not an implementation.
+    ``structural_factors`` exists so the appended-Q/K form can be pinned in fp64
+    before any kernel is built on it.
+    """
+
+    config_key = 'magnetic_nonlinear'
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        super().__init__()
+        m = getattr(bias_config, 'magnetic_dim', 32)
+        d = getattr(bias_config, 'magnetic_struct_dim', 64)
+        self.bias_self_node = getattr(bias_config, 'bias_self_node', False)
+        self.pool = getattr(bias_config, 'magnetic_pool', 'attn')
+        if self.pool not in ('attn', 'uniform'):
+            raise ValueError(
+                f"magnetic_pool must be 'attn' or 'uniform'; got {self.pool!r}.")
+
+        # H_KV via getattr: the Bloom backbone is full MHA and carries no such
+        # attribute, where per-KV-group degenerates to per-head. Same rule as the
+        # magnitude channel (MIXED_BIAS.md §2.3).
+        h_q = num_heads
+        h_kv = getattr(bias_config, 'num_key_value_heads', num_heads) or num_heads
+        if h_q % h_kv != 0:
+            raise ValueError(
+                f"num_attention_heads={h_q} must be divisible by "
+                f"num_key_value_heads={h_kv} for the repeat_kv group map.")
+        self.num_heads, self.num_kv_heads, self.n_rep = h_q, h_kv, h_q // h_kv
+        self.magnetic_dim, self.struct_dim = m, d
+
+        # EVERY parameter below is initialised INSIDE the nn.Parameter(...) call,
+        # never by a separate nn.init.* afterwards. This is not style.
+        # `from_pretrained` materialises parameters absent from the checkpoint and
+        # then calls `_init_weights`, which only knows nn.Linear / nn.Embedding /
+        # RMSNorm — a bare nn.Parameter on a custom module is left holding
+        # uninitialised memory, and an in-place init applied after registration
+        # does not survive it. Measured: the deferred form yields exactly 0.0
+        # (and one NaN) through `from_pretrained` while looking perfectly correct
+        # under a direct constructor, which is what the unit tests build. That
+        # produced a whole GraphQA sweep of runs with W_attn == 0 — a silently
+        # degenerate pool. `_build_magnitude_channel` uses this same idiom and is
+        # why that arm was unaffected. Pinned by
+        # test_parameters_survive_from_pretrained.
+        bound = m ** -0.5
+
+        # Attention logits: one scalar per (pair, head). Absent under the uniform
+        # ablation — not zeroed but genuinely not built, so the ablation cannot
+        # accidentally train a pool it is meant not to have.
+        if self.pool == 'attn':
+            self.W_attn_out = nn.Parameter(torch.empty(m, h_q).uniform_(-bound, bound))
+            self.W_attn_in = nn.Parameter(torch.empty(m, h_kv).uniform_(-bound, bound))
+        else:
+            self.register_parameter('W_attn_out', None)
+            self.register_parameter('W_attn_in', None)
+
+        # Value projections, per head (query side) / per KV group (key side) — the
+        # finest granularity GQA physically allows, and free: every key row already
+        # exists in the (B,H_KV,N,d) tensor.
+        self.W_val_out = nn.Parameter(torch.empty(h_q, m, d).uniform_(-bound, bound))
+        self.W_val_in = nn.Parameter(torch.empty(h_kv, m, d).uniform_(-bound, bound))
+
+        # The zero sits HERE and on ONE side only. See the class docstring.
+        self.gamma_out = nn.Parameter(torch.ones(h_q, d))
+        self.gamma_in = nn.Parameter(torch.zeros(h_kv, d))
+
+        # Opt-in pool diagnostics (pool_audit.py). Off in training: reading them
+        # forces a device sync, and a null is only readable if the pool moved.
+        # Keyed by direction — the two pools are separately parameterized and can
+        # move by different amounts, and a single slot would just report whichever
+        # ran last.
+        self._record_pool_stats = False
+        self._pool_stats: dict = {}
+
+    # ── Pooling ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _pool_mask(num_nodes: torch.Tensor, n: int, device) -> torch.Tensor:
+        """``(B, N, N)`` bool — Omega of NON_LINEAR_BIAS.md §2.2, True where open.
+
+        Symmetric, so the same tensor serves both pools (the incoming pool runs on
+        E transposed). The ``eye`` term is what keeps a padded row finite.
+        """
+        valid = (torch.arange(n, device=device).unsqueeze(0)
+                 < num_nodes.unsqueeze(1))                        # (B, N)
+        allow = valid.unsqueeze(2) & valid.unsqueeze(1)           # (B, N, N)
+        return allow | torch.eye(n, dtype=torch.bool, device=device)
+
+    def _pool(self, E, allow, W_attn, W_val, direction: str = "out") -> torch.Tensor:
+        """Pool ``E`` over its LAST node axis → ``(B, H, N, d_struct)``.
+
+        Always the same axis: the incoming pool passes ``E.transpose(1,2)``, for
+        which pooling over the last axis IS pooling over the source node. One
+        implementation so the two directions cannot drift — a transposed pool is
+        invisible to every shape assertion and kills directionality outright.
+        """
+        heads = W_val.shape[0]
+        if W_attn is None:
+            # Uniform ablation: 1/n_b over open entries, head-independent.
+            w = allow.to(E.dtype)
+            w = w / w.sum(-1, keepdim=True)
+            e_bar = torch.einsum('bij,bijc->bic', w, E).unsqueeze(1)   # (B,1,N,m)
+            e_bar = e_bar.expand(-1, heads, -1, -1)                    # free view
+            if self._record_pool_stats:
+                self._stash_pool_stats(w.unsqueeze(-1), allow, direction)
+        else:
+            logits = torch.einsum('bijc,ch->bijh', E, W_attn) * (self.magnetic_dim ** -0.5)
+            logits = logits.masked_fill(~allow.unsqueeze(-1),
+                                        torch.finfo(logits.dtype).min)
+            w = logits.softmax(dim=2)                                  # (B,N,N,H)
+            # Pool BEFORE projecting: W_val commutes with the sum, so the
+            # (B,N,N,H,d) per-pair value tensor never exists.
+            e_bar = torch.einsum('bijh,bijc->bhic', w, E)              # (B,H,N,m)
+            if self._record_pool_stats:
+                self._stash_pool_stats(w, allow, direction)
+        z = torch.einsum('bhic,hcd->bhid', e_bar, W_val)               # (B,H,N,d)
+        return z
+
+    @staticmethod
+    def _rms_norm(z: torch.Tensor, gamma: torch.Tensor, eps: float = 1e-6):
+        """RMSNorm over d_struct, then the per-channel gain. Accumulated at least
+        in fp32 and cast back, as every RMSNorm in the backbone is: it is a
+        node-level op, so the precision is free.
+
+        This is what makes the bias degree-0 in the shared trunk — the property
+        MIXED_BIAS.md §5.8 had to engineer by hand after four runs diverged. The
+        cancellation is exact only once mean(z²) >> eps; below that the norm floors
+        out and the bias shrinks toward zero. That asymmetry is the safe one, and
+        it is pinned by the two scale tests in
+        tests/models/test_magnetic_nonlinear_bias.py. At the operating point
+        mean(z²) is ~1e-1, five orders clear of eps.
+        """
+        dtype = z.dtype
+        # promote_types, not .float(): bf16/fp16 are upcast to fp32 as every
+        # RMSNorm in the backbone does, while an fp64 input STAYS fp64. Hard-coding
+        # fp32 would silently downcast the fp64 correctness tests to a 1e-7 floor
+        # and cap what they are able to assert.
+        acc = torch.promote_types(dtype, torch.float32)
+        za = z.to(acc)
+        za = za * torch.rsqrt(za.pow(2).mean(-1, keepdim=True) + eps)
+        return (za * gamma.to(acc).unsqueeze(0).unsqueeze(2)).to(dtype)
+
+    def _factors(self, E: torch.Tensor, num_nodes: torch.Tensor):
+        """``(z_out, z_in)`` shaped ``(B, H_Q, N, d)`` and ``(B, H_KV, N, d)``."""
+        allow = self._pool_mask(num_nodes, E.shape[1], E.device)
+        z_out = self._pool(E, allow, self.W_attn_out, self.W_val_out, "out")
+        # allow is symmetric, so it needs no transpose; E does.
+        z_in = self._pool(E.transpose(1, 2), allow, self.W_attn_in, self.W_val_in, "in")
+        return (self._rms_norm(z_out, self.gamma_out),
+                self._rms_norm(z_in, self.gamma_in))
+
+    # ── Forward ───────────────────────────────────────────────────────────────
+
+    def forward(
+        self, *, dtype, device,
+        pair_features: Optional[torch.Tensor] = None,
+        num_nodes: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Optional[torch.Tensor]:
+        if pair_features is None or num_nodes is None:
+            return None
+        z_out, z_in = self._factors(pair_features.to(dtype), num_nodes)
+        # repeat_interleave IS repeat_kv: group g serves heads [g*n_rep,(g+1)*n_rep).
+        k = z_in.repeat_interleave(self.n_rep, dim=1)              # (B, H_Q, N, d)
+        b = torch.einsum('bhid,bhjd->bijh', z_out, k)              # (B, N, N, H)
+        return finalize_node_bias(b, device, self.bias_self_node)
+
+    def structural_factors(self, pair_features: torch.Tensor, num_nodes: torch.Tensor):
+        """The appended-Q/K factorization: ``b^(h)(i,j) = <z_out[h,i], z_in[h//n_rep,j]>``.
+
+        Not used by ``forward``. It exists so the equivalence can be pinned in
+        fp64 before any kernel is built on it — NON_LINEAR_BIAS.md §9. With
+        ``bias_self_node=False`` it reproduces the bias off the diagonal only: an
+        inner product yields <z_out_i, z_in_i> and cannot be forced to zero, which
+        is why every run of this arm sets the flag True.
+        """
+        return self._factors(pair_features, num_nodes)
+
+    # ── Diagnostics ───────────────────────────────────────────────────────────
+
+    def _stash_pool_stats(self, w: torch.Tensor, allow: torch.Tensor, direction: str) -> None:
+        """Mean normalized pool entropy ``H(w)/log n_b`` over real rows and heads.
+
+        1.0 is a pool that never left uniform, at which point a null result means
+        "the mechanism did not engage" and not "the feature does not help" — the
+        distinction `mixed_bias`'s arm-v2 gate audit exists to make.
+
+        Padded rows are excluded: their single open entry gives H = 0 by
+        construction, so including them would drag the mean toward 0 in proportion
+        to how ragged the batch is and make the statistic a measure of padding.
+        """
+        with torch.no_grad():
+            p = w.float().clamp_min(0)
+            ent = -(p * p.clamp_min(1e-12).log()).sum(dim=2)       # (B, N, H)
+            n_b = allow.sum(-1).clamp_min(2).float().unsqueeze(-1)  # (B, N, 1)
+            real = (allow.sum(-1) > 1).unsqueeze(-1)                # padded rows: 1 open
+            norm = (ent / n_b.log())[real.expand_as(ent)]
+            self._pool_stats[direction] = (
+                float(norm.mean()) if norm.numel() else float("nan"))
+
+    @property
+    def gain_bound(self) -> float:
+        """``max|gamma_out| * max|gamma_in| * d_struct`` — the §2.4 range bound on
+        |b|. The analogue of `bias_gain_absmax`: RMSNorm leaves ||z||_2 =
+        sqrt(d_struct) rather than 1, so the bound is a product rather than one
+        scalar, and it is logged so a divergence stays diagnosable."""
+        with torch.no_grad():
+            return float(self.gamma_out.abs().max() * self.gamma_in.abs().max()
+                         * self.struct_dim)
+
+
 class MagneticSharedBias(MagneticBias):
     """MagneticBias computed ONCE per forward and shared by every layer.
 
@@ -870,8 +1195,14 @@ BIAS_TYPES: list[type[BaseBias]] = [
     MagneticMagnitudeBias,
     MagneticHybridBias,
     GatedLinearMagneticBias,
+    MagneticNonlinearBias,
 ]
-"""Add new bias types here — GraphAttentionBias picks them up automatically."""
+"""Add new bias types here — GraphAttentionBias picks them up automatically.
+
+``MagneticPairTrunk`` is deliberately absent: it emits E ``(B,N,N,magnetic_dim)``
+rather than a ``(B,H,N,N)`` bias, so it must never be summed into the node bias.
+It is built by ``build_pair_feature_trunk`` and threaded on its own context field.
+"""
 
 
 # ── Top-level module ──────────────────────────────────────────────────────────
@@ -945,6 +1276,7 @@ class GraphAttentionBias(nn.Module):
         magnetic:    Optional[Tuple[torch.Tensor, torch.Tensor]]      = None,
         hidden_states: Optional[torch.Tensor]                         = None,
         node_start_indices: Optional[torch.Tensor]                    = None,
+        pair_features: Optional[torch.Tensor]                         = None,
         k_hop_mask:  Optional[torch.Tensor]                           = None,
         cache_dict:  Optional[dict]                                   = None,
     ) -> Optional[torch.Tensor]:
@@ -968,6 +1300,7 @@ class GraphAttentionBias(nn.Module):
                 num_nodes=num_nodes, spd=spd, laplacian=laplacian,
                 rwse=rwse, rrwp=rrwp, magnetic=magnetic,
                 hidden_states=hidden_states, node_start_indices=node_start_indices,
+                pair_features=pair_features,
             )
             if b is not None:
                 node_bias = b if node_bias is None else node_bias + b
@@ -1041,6 +1374,36 @@ def compute_shared_node_bias(
         if b is not None:
             node_bias = b if node_bias is None else node_bias + b
     return node_bias
+
+
+# ── Shared pair-feature trunk (magnetic_nonlinear) ────────────────────────────
+#
+# Separate from the shared-BIAS path above because the trunk emits pair FEATURES,
+# not a bias: (B,N,N,magnetic_dim) instead of (B,H,N,N). Summing it into
+# shared_node_bias would be a shape error at best. Same placement discipline
+# though — one instance on the top-level model, run once per forward outside the
+# checkpointed decoder layers, threaded to every layer via GraphContext.
+
+def build_pair_feature_trunk(num_heads: int, head_dim: int, bias_config):
+    """The :class:`MagneticPairTrunk` for ``magnetic_nonlinear`` (or None)."""
+    if not getattr(bias_config, 'magnetic_nonlinear', False):
+        return None
+    return MagneticPairTrunk(num_heads, head_dim, bias_config)
+
+
+def compute_shared_pair_features(
+    trunk,
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+    num_nodes: Optional[torch.Tensor],
+    features: dict,
+) -> Optional[torch.Tensor]:
+    """E ``(B, N, N, magnetic_dim)`` for the whole model (or None)."""
+    if trunk is None:
+        return None
+    return trunk(dtype=dtype, device=device, num_nodes=num_nodes,
+                 magnetic=features.get("magnetic"))
 
 
 # ── Layer-grouped bias (magnetic_groups) ──────────────────────────────────────

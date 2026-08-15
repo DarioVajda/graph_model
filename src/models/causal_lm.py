@@ -28,7 +28,7 @@ from .structural_mask import build_dense_structural_mask
 from .dispatch import GRAPH_ATTN_IMPLS, GTLM_ATTN_FN_NAMES, build_flex_block_mask, flex_block_size
 from .bias import (
     GroupBiasCache, build_group_bias_modules, build_shared_bias_modules,
-    compute_shared_node_bias,
+    build_pair_feature_trunk, compute_shared_node_bias, compute_shared_pair_features,
 )
 from .context import GraphContext
 from .io import load_bias_parameters
@@ -112,6 +112,12 @@ class GraphCausalLMMixin:
         # shared type is enabled. The attribute name contains "graph_bias" so
         # the standard active-params substring unfreezes it too.
         self.shared_graph_bias = build_shared_bias_modules(config.num_attention_heads, config.head_dim, config)
+        # magnetic_nonlinear's pair-feature trunk: also once per forward, but it
+        # emits E (B,N,N,magnetic_dim) rather than a bias, so it gets its own
+        # attribute and its own GraphContext field. The name contains
+        # "graph_bias" so io.save_bias_parameters' substring match captures it.
+        self.shared_graph_bias_trunk = build_pair_feature_trunk(
+            config.num_attention_heads, config.head_dim, config)
         # Layer-grouped magnetic bias (magnetic_groups): G instances owned here,
         # one per group of layers. See bias.GroupBiasCache for why placement at
         # the top level plus an owner/follower rule is what makes compute-once-
@@ -306,6 +312,21 @@ class GraphCausalLMMixin:
                 if shared_node_bias is not None and not self.training:
                     self._graph_bias_cache["shared_node_bias"] = shared_node_bias
 
+        # magnetic_nonlinear: the pair features E, computed ONCE here for the same
+        # reason — outside the checkpointed decoder layers, so the N² einsums run
+        # a single time per step instead of once per layer per recompute. That
+        # amortization is what pays for magnetic_dim=64 (NON_LINEAR_BIAS.md §5.1).
+        shared_pair_features = None
+        if self.shared_graph_bias_trunk is not None:
+            if not self.training and "shared_pair_features" in self._graph_bias_cache:
+                shared_pair_features = self._graph_bias_cache["shared_pair_features"]
+            else:
+                shared_pair_features = compute_shared_pair_features(
+                    self.shared_graph_bias_trunk, dtype=embed_dtype, device=device,
+                    num_nodes=num_nodes, features=features)
+                if shared_pair_features is not None and not self.training:
+                    self._graph_bias_cache["shared_pair_features"] = shared_pair_features
+
         # magnetic_content: first-token position per node (inverse of node_ids).
         # N node slots = the NODE count (magnetic_V's node dim), NOT the eigenvector
         # count: with truncated eigenvectors (magnetic_m < N) the two differ, and
@@ -338,6 +359,7 @@ class GraphCausalLMMixin:
             block_mask=block_mask,
             node_ids_flex=node_ids_flex,
             shared_node_bias=shared_node_bias,
+            shared_pair_features=shared_pair_features,
             node_start_indices=node_start_indices,
             group_bias=group_bias,
         )
