@@ -274,6 +274,18 @@ def build_parser():
     p.add_argument("--magnetic-gate-repr-dim", type=int, default=d.magnetic_gate_repr_dim,
                    help="gate-MLP hidden width for --magnetic-linear-v2. Computed "
                         "once per node and never enters attention, so it is free.")
+    p.add_argument("--magnetic-nonlinear", action=B, default=d.magnetic_nonlinear,
+                   help="per-node features built by attention-pooling a whole row "
+                        "and column of the PAIRWISE non-linearity SiLU(K(i,j)), "
+                        "instead of reading its diagonal. See NON_LINEAR_BIAS.md. "
+                        "Mutually exclusive with the other magnetic placements.")
+    p.add_argument("--magnetic-struct-dim", type=int, default=d.magnetic_struct_dim,
+                   help="d_struct: width Q/K append per head for --magnetic-"
+                        "nonlinear. NOT free — it is head width.")
+    p.add_argument("--magnetic-pool", choices=("attn", "uniform"), default=d.magnetic_pool,
+                   help="pooling for --magnetic-nonlinear: 'attn' is the learned "
+                        "pool, 'uniform' the 1/n_b ablation that separates a "
+                        "learned pool from any non-linear row summary.")
     p.add_argument("--magnetic-magnitude-dim", type=int, default=d.magnetic_magnitude_dim,
                    help="d_magnitude: width Q/K append per head for the magnitude "
                         "channel. NOT free — it is head width.")
@@ -397,6 +409,9 @@ def config_from_args(args):
         magnetic_magnitude=args.magnetic_magnitude, magnetic_hybrid=args.magnetic_hybrid,
         magnetic_linear_v2=args.magnetic_linear_v2,
         magnetic_gate_repr_dim=args.magnetic_gate_repr_dim,
+        magnetic_nonlinear=args.magnetic_nonlinear,
+        magnetic_struct_dim=args.magnetic_struct_dim,
+        magnetic_pool=args.magnetic_pool,
         magnetic_magnitude_dim=args.magnetic_magnitude_dim,
         magnetic_magnitude_repr_dim=args.magnetic_magnitude_repr_dim,
         bias_self_node=args.bias_self_node,

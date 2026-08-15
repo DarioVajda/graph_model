@@ -229,6 +229,13 @@ class RunConfig:
     # Same eigenvector data again, so architecture-only and NOT in the cache key.
     magnetic_linear_v2: bool = False
     magnetic_gate_repr_dim: int = 256         # gate-MLP hidden width — internal (free)
+    # Non-linear pooled magnetic head (NON_LINEAR_BIAS.md): per-node features
+    # obtained by attention-pooling a whole row/column of the pairwise
+    # non-linearity, rather than reading its diagonal. Same eigenvector data
+    # again, so architecture-only and NOT in the cache key.
+    magnetic_nonlinear: bool = False
+    magnetic_struct_dim: int = 64             # d_struct — appended per head (NOT free)
+    magnetic_pool: str = "attn"               # 'attn' | 'uniform' (the ablation arm)
     magnetic_dim: int = 128                   # magnetic-bias MLP hidden width (model architecture)
     magnetic_q: float = 0.25                  # magnetic-Laplacian charge
     magnetic_m: int = 128                     # # magnetic eigenvectors (data prep + collator; 0 = all N)
@@ -399,10 +406,10 @@ class RunConfig:
     def uses_magnetic(self) -> bool:
         """True when the run consumes magnetic eigenvector features.
 
-        Single source of truth for every dataset/collator gate. All seven
+        Single source of truth for every dataset/collator gate. All eight
         placements — `magnetic`, `magnetic_shared`, `magnetic_content`,
         `magnetic_linear`, `magnetic_magnitude`, `magnetic_hybrid`,
-        `magnetic_linear_v2` — read the same
+        `magnetic_linear_v2`, `magnetic_nonlinear` — read the same
         eigenvectors and differ only in where or how the head is applied, so a
         gate that enumerates a subset silently emits no features for the missing
         arm. The bias then returns None and the run trains with no graph bias at
@@ -411,7 +418,7 @@ class RunConfig:
         return bool(self.magnetic or self.magnetic_shared
                     or self.magnetic_content or self.magnetic_linear
                     or self.magnetic_magnitude or self.magnetic_hybrid
-                    or self.magnetic_linear_v2)
+                    or self.magnetic_linear_v2 or self.magnetic_nonlinear)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -467,6 +474,14 @@ class RunConfig:
             cfg.update(magnetic_linear_v2=True, magnetic_dim=self.magnetic_dim,
                        magnetic_q=self.magnetic_q,
                        magnetic_gate_repr_dim=self.magnetic_gate_repr_dim)
+        if self.magnetic_nonlinear:
+            # Same eigenvector features again. magnetic_dim here is the width of
+            # the SHARED pair-feature trunk E, not a per-layer hidden — it is
+            # computed once per forward, which is what makes 64 affordable.
+            cfg.update(magnetic_nonlinear=True, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q,
+                       magnetic_struct_dim=self.magnetic_struct_dim,
+                       magnetic_pool=self.magnetic_pool)
         if self.rrwp:
             # max_rw_steps is the RRWPBias MLP's INPUT width, so it must equal the
             # stored column's last dim — data prep and model read the same field.
@@ -645,9 +660,10 @@ class RunConfig:
                       "magnetic_magnitude": self.magnetic_magnitude,
                       "magnetic_hybrid": self.magnetic_hybrid,
                       "magnetic_linear_v2": self.magnetic_linear_v2,
+                      "magnetic_nonlinear": self.magnetic_nonlinear,
                       "magnetic_groups": bool(self.magnetic_groups)}
         for name in ("magnetic_linear", "magnetic_magnitude", "magnetic_hybrid",
-                     "magnetic_linear_v2"):
+                     "magnetic_linear_v2", "magnetic_nonlinear"):
             if not placements[name]:
                 continue
             clash = [k for k, v in placements.items() if v and k != name]

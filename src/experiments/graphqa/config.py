@@ -204,6 +204,13 @@ class RunConfig:
     # again, so it is a model-side knob sharing the built dataset.
     magnetic_linear_v2: bool = False
     magnetic_gate_repr_dim: int = 256           # gate-MLP hidden width — internal (free)
+    # Non-linear pooled magnetic head (MagneticPairTrunk + MagneticNonlinearBias;
+    # src/models/NON_LINEAR_BIAS.md): per-node features built by attention-pooling
+    # a whole row/column of the pairwise non-linearity instead of its diagonal.
+    # Same features and same data again, so a model-side knob sharing the build.
+    magnetic_nonlinear: bool = False
+    magnetic_struct_dim: int = 64               # d_struct — appended per head (NOT free)
+    magnetic_pool: str = "attn"                 # 'attn' | 'uniform' (the ablation arm)
     magnetic_dim: int = 32                      # model bias-MLP hidden width
     magnetic_q: float = 0.25                    # magnetic-Laplacian charge (data)
     magnetic_m: int = 0                         # eigenvectors kept (0 -> all N)
@@ -296,7 +303,7 @@ class RunConfig:
         """
         return bool(self.magnetic or self.magnetic_linear
                     or self.magnetic_magnitude or self.magnetic_hybrid
-                    or self.magnetic_linear_v2)
+                    or self.magnetic_linear_v2 or self.magnetic_nonlinear)
 
     @property
     def collate_magnetic_m(self) -> int:
@@ -352,6 +359,13 @@ class RunConfig:
             cfg.update(magnetic_linear_v2=True, magnetic_dim=self.magnetic_dim,
                        magnetic_q=self.magnetic_q,
                        magnetic_gate_repr_dim=self.magnetic_gate_repr_dim)
+        elif self.magnetic_nonlinear:
+            # Same features again. magnetic_dim is the width of the SHARED pair
+            # trunk E here, computed once per forward rather than per layer.
+            cfg.update(magnetic_nonlinear=True, magnetic_dim=self.magnetic_dim,
+                       magnetic_q=self.magnetic_q,
+                       magnetic_struct_dim=self.magnetic_struct_dim,
+                       magnetic_pool=self.magnetic_pool)
         if self.bias_self_node:
             # Model-side only; it does not touch feature generation or the cache key.
             cfg.update(bias_self_node=True)
@@ -367,7 +381,9 @@ class RunConfig:
         head = ("mag-linear" if self.magnetic_linear else
                 "mag-hybrid" if self.magnetic_hybrid else
                 "mag-magnitude" if self.magnetic_magnitude else
-                "mag-linear-v2" if self.magnetic_linear_v2 else None)
+                "mag-linear-v2" if self.magnetic_linear_v2 else
+                ("mag-nonlinear" + ("-uniform" if self.magnetic_pool == "uniform" else "")
+                 if self.magnetic_nonlinear else None))
         if head:
             # Without this the non-MLP heads report as 'no-magnetic' — the label of
             # the arm that has NO magnetic term at all, which is the one thing they
@@ -463,8 +479,10 @@ class RunConfig:
                       "magnetic_magnitude": self.magnetic_magnitude,
                       "magnetic_hybrid": self.magnetic_hybrid,
                       "magnetic_linear_v2": self.magnetic_linear_v2,
+                      "magnetic_nonlinear": self.magnetic_nonlinear,
                       "magnetic_groups": bool(self.magnetic_groups)}
-        for name in ("magnetic_magnitude", "magnetic_hybrid", "magnetic_linear_v2"):
+        for name in ("magnetic_magnitude", "magnetic_hybrid", "magnetic_linear_v2",
+                     "magnetic_nonlinear"):
             if not placements[name]:
                 continue
             clash = [k for k, v in placements.items() if v and k != name]
