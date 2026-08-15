@@ -38,6 +38,23 @@ residual is *pairwise* non-linearity, and the constraint `MIXED_BIAS.md` §1 sta
 is exactly why no per-node feature reaches it, wherever it is spent. This line of
 attack is finished.
 
+> **Superseded in part, 2026-08-15 — `nonlinear_bias`.** The *recommendation*
+> above stands and was reinforced. The *reason* given for it is false as stated:
+> "no per-node feature reaches it" was refuted by an arm this document did not
+> anticipate. All three placements here spend the same weak feature — the
+> **diagonal** `Re K(i,i)`. `magnetic_nonlinear` spends a learned pool of the whole
+> kernel **row and column**, and it reaches 101.0% of headroom on GraphQA's
+> `shortest_path`, beating arm 2 (95.6%) and arm 4 (96.9%) — the first factorizable
+> arm to reach the dense ceiling there. So a per-node feature *can* carry pairwise
+> structure; the diagonal simply cannot.
+>
+> It is still null on WebQSP (22.7% of headroom vs arm 2's 87.8%), and `036`
+> measured why: the deficit is **flat in graph size** (Pearson +0.09), 17.7 pp even
+> on graphs under 32 nodes. A pooled marginal is a good *structural* summary and a
+> poor *identity* resolver — which is a statement about the form of the feature,
+> not about per-node features as a class. See
+> `src/experiments/nonlinear_bias/README.md`.
+
 **Recommendation: build the $O(N)$ backend with phase only.** Spend head width on
 $M$, not on the magnitude channel. Nothing in arms 3, 4 or v2 changes this, and v2
 in particular gets the recommendation for free — it costs no appended width. The
@@ -340,6 +357,8 @@ result" pre-registered: *if it lands at arm 2 ± noise, the negative closure of*
 of the per-node magnitude feature — alone (arm 3), additive (arm 4), multiplicative
 inside the spectral sum (v2) — now all fail to move the 12.2% residual. That
 residual is *pairwise* non-linearity, and no per-node feature reaches it.
+(**Revised 2026-08-15**: true of the *diagonal* feature all three arms spend, false
+of per-node features in general — see the superseded-in-part note above.)
 
 **Comparability, checked run-record against run-record:** every field logged by
 `train.py` is identical across `021` arm 2, `023` arm 4 and `025` — model, LoRA,

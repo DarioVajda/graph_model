@@ -721,6 +721,12 @@ postponed" are distinguishable without re-deriving anything. Log $g$ and read it
 * Whether the non-linearity `MagneticBias` uses at L5 is *the same* non-linearity
   arm 3 adds. §1 argues no per-node channel can be, and §5.6 reads the arms
   accordingly, but nothing here measures the mechanism.
+  **Measured since, 2026-08-15 (`NON_LINEAR_BIAS.md`):** §1's argument holds for
+  the *diagonal* feature every arm in this plan spends, and fails as a general
+  claim about per-node channels. A pooled row/column of the kernel reaches the
+  dense ceiling on GraphQA `shortest_path` (101.0% of headroom). It is still null
+  on WebQSP, but for a reason orthogonal to §1 — pooling marginalizes the partner
+  index, so it cannot resolve *which* node, at any width.
 * Whether `magnetic` itself gains from a wider $d_{mag}$ — still open from
   `linear_bias` §3 (`014` widened only the linear head).
 * The speed/memory of the factorized backbone. Every arm here is dense; §2.5's
