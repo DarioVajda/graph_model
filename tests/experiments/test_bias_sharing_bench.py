@@ -11,10 +11,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.experiments.bias_sharing.bench.speed import (  # noqa: E402
+from src.experiments.bias_experiments.bias_sharing.bench.speed import (  # noqa: E402
     SOURCES, _backend, load_run_config, sweep_argv,
 )
-from src.experiments.bias_sharing.bench.synth import (  # noqa: E402
+from src.experiments.bias_experiments.bias_sharing.bench.synth import (  # noqa: E402
     SynthSpec, build_batch, build_items, verify_against_webqsp,
 )
 
@@ -134,7 +134,7 @@ def test_llm_causal_drops_only_the_attention_mask():
     cannot use is_causal; that handicaps the floor by exactly the block skipping
     flex gets for free. This pins the one input difference between the two floors.
     """
-    from src.experiments.bias_sharing.bench.speed import LLM_KEYS, time_arm
+    from src.experiments.bias_experiments.bias_sharing.bench.speed import LLM_KEYS, time_arm
     import inspect
 
     src = inspect.getsource(time_arm)
@@ -176,7 +176,7 @@ def test_llm_causal_drops_only_the_attention_mask():
 @pytest.mark.parametrize("source", SOURCE_NAMES)
 def test_llm_causal_shares_the_llm_recipe(source):
     """Both floors are the same model on the same backend — only the mask differs."""
-    from src.experiments.bias_sharing.bench.speed import ARMS
+    from src.experiments.bias_experiments.bias_sharing.bench.speed import ARMS
     assert "llm_causal" in ARMS
     assert SOURCES[source]["llm_attn"] in ("sdpa", "eager")
 
@@ -193,7 +193,7 @@ def test_bias_modes_runs_each_cell_in_a_fresh_subprocess():
     flex compile cache, this fails.
     """
     import inspect
-    from src.experiments.bias_sharing.bench import bias_modes
+    from src.experiments.bias_experiments.bias_sharing.bench import bias_modes
 
     src = inspect.getsource(bias_modes._one_cell)
     assert "subprocess.run" in src
@@ -203,7 +203,7 @@ def test_bias_modes_runs_each_cell_in_a_fresh_subprocess():
 
 def test_bias_modes_matches_the_production_recipe():
     """The decomposition must be measured at the settings training actually uses."""
-    from src.experiments.bias_sharing.bench import bias_modes
+    from src.experiments.bias_experiments.bias_sharing.bench import bias_modes
 
     assert bias_modes.K_HOP == 0                    # all three sweeps
     assert bias_modes.MAGNETIC_M == 128             # 002_webqsp_g_sweep
@@ -219,6 +219,6 @@ def test_bias_modes_defaults_to_production_node_id_dtype():
     The collator emits long node_ids and src/models/flex_kernel.py has no cast, so
     measuring at int32 would price an optimization the model path never adopted.
     """
-    from src.experiments.bias_sharing.bench.bias_modes import main
+    from src.experiments.bias_experiments.bias_sharing.bench.bias_modes import main
     import inspect
     assert '"--node-id-dtype", default="int64"' in inspect.getsource(main)

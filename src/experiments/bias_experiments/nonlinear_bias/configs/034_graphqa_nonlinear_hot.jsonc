@@ -1,0 +1,91 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 034 — the SAME arms as 033 at bias_lr 2e-2, the LR mixed_bias used.
+  //
+  // Why: 033 measured a monotone LR trend on the only discriminating task —
+  // shortest_path recovers 43% of headroom at 1e-3 and 72% at 5e-3 — and the pool
+  // audit explains it, ||W_attn||_F sitting at 3.33 (init 3.27) at 1e-3 against
+  // 4.2-9.8 at 5e-3. The pool simply trains more at higher LR. There is direct
+  // precedent that this keeps paying on this task: mixed_bias measured arm 3
+  // going 0.655 @5e-3 -> 0.749 @2e-2 on shortest_path.
+  //
+  // 033's 5e-3 result puts this arm at 72% against arm 2's 96% and arm 4's 97%.
+  // If 2e-2 closes most of that, the GraphQA verdict changes; if it does not, the
+  // 72% is a ceiling rather than an artifact of an under-trained pool. Either way
+  // this is the cell that decides which, and it is ~12 GPU-h.
+  //
+  // NOT run on WebQSP, deliberately: there the reference arms DEGRADE at 2e-2
+  // (arm 1 0.7198 -> 0.6297, arm 2 0.6876 -> 0.6734), so a 2e-2 cell would
+  // compare this arm against weaker baselines at 30 GPU-h. See the README.
+  //
+  // Both pool settings are kept so the ablation carries over.
+  // 2 arms x 3 tasks x 3 seeds = 18 runs.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "034_graphqa_nonlinear_hot",
+  "results_dir": "src/experiments/bias_experiments/nonlinear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      // 36 short runs; 18 at a time is two waves of ~40 min. A100 is in the pool
+      // because these are tiny (35-token sequences, v2-eager) and the Blackwell
+      // nodes are better spent on 030's 5-hour runs.
+      "max_concurrent": 18,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["A100", "H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "00:40:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+  "task": ["node_degree", "shortest_path", "edge_count"],
+  "seed": [42, 43, 44],
+
+  "arm": [
+    {"magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "attn", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2},
+    {"magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "uniform", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 2e-2}
+  ],
+
+  // See 030's header: 1x head_dim, against arm 2's 2x.
+  "magnetic_struct_dim": 64,
+
+  // ── 024_graphqa_linear_v2, verbatim below this line ──────────────────────
+  "spd": false,
+  "rrwp": false,
+  "question_node": "isolated",
+  "graph_type": "standard",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  // 64, not 024's 32 — the shared trunk is paid once here, not per layer. Not in
+  // the cache identity (uses_default_cache ignores it), so the build is shared.
+  "magnetic_dim": 64,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

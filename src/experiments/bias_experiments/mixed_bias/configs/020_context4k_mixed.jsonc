@@ -1,0 +1,171 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // MIXED_BIAS.md Phase 2 on the 4k context task — ALL FIVE arms, in one sweep.
+  //
+  // This is the sweep that closes the hole linear_bias/README.md §7 names as the
+  // single blocker on the factorized backbone. 011's B ran 2 epochs at bias_lr
+  // 5e-3 MASKED and 016's C ran 4 epochs unmasked, so reusing either as a
+  // control would be a cross-sweep comparison at a different budget. Arms 0-2
+  // are therefore run HERE rather than quoted. That is not a change to the task —
+  // the generator is untouched — it is including the controls instead of
+  // borrowing them.
+  //
+  // ── arms (MIXED_BIAS.md §5.1) ────────────────────────────────────────────
+  //   0  no soft bias,       —          the floor (headroom denominator)
+  //   1  magnetic,           mask ON    the incumbent target (the ceiling)
+  //   2  magnetic_linear,    mask off
+  //   3  magnetic_magnitude, mask off
+  //   4  magnetic_hybrid,    mask off
+  //
+  // ── budget: 6 epochs, the same for every arm ─────────────────────────────
+  // The principle is that each arm is read at ITS OWN ceiling, so the budget is
+  // set by the slowest arm and then shared. Evidence: 011 ran 2 epochs at 3.6 h
+  // (~1.8 h/epoch); 012's header computes the masked linear arm's transition at
+  // ~epoch 4.75 at bias_lr 5e-3; and at 2e-2 with 4 epochs 012's C landed at
+  // 0.590 with seeds spanning 0.435-0.775 — a transition caught mid-flight, i.e.
+  // 4 epochs is demonstrably NOT convergence there. 016 shows the unmasked arm
+  // saturating by 4, and README §7 asks for >= 6.
+  //
+  // This REVERSES 012's recorded decision that 8 epochs was "padding". That was
+  // right for 012's objective — separating "cannot" from "under-stepped" only
+  // needs the transition to START. It does not carry to an experiment whose
+  // question is where each arm plateaus, and arms 3 and 4 are new heads with
+  // unknown transition points. Arm 3 is the exposure: it is the arm predicted
+  // weak here, and the context metric is all-or-nothing on a 3-token code, so an
+  // under-budgeted arm reads as a clean FLOOR rather than as an unfinished run.
+  //
+  // 6 clears the latest projected transition by ~1.25 epochs. It is a deliberate
+  // trim from the 8 the plan first argued for (which would have given >= 3
+  // epochs of margin) and it is the tightest number the evidence supports: an
+  // arm that has not moved by 6 has had a full epoch past 012's measured
+  // transition to do so.
+  //
+  // ── two things to keep in view when reading the result ───────────────────
+  //   * SATURATION MAKES THIS A CEILING TEST, NOT A RANKING. Unmasked arm 2 has
+  //     already reached 1.000 and masked arm 1 0.995. If arms 1-4 all land at
+  //     ceiling, the finding is "every factorizable arm reaches the ceiling in
+  //     the long-context regime" — which is what the §7 verdict needs — and it
+  //     must NOT be read as "the arms are equivalent" in general. If a ranking is
+  //     wanted later, `hops` and `fan_out` raise the bar without touching what
+  //     the task tests; that is a follow-up, not a change to make now.
+  //   * ARM 3 IS PREDICTED WEAK HERE, BY CONSTRUCTION. data.py attaches the
+  //     QUESTION node to EVERY content node so SPD(QUESTION, .) == 1 uniformly,
+  //     and adds fan_out-1 decoy edges that "enter the DiGraph identically", so
+  //     ~fan_out^hops nodes sit at the same distance. Arm 3 consumes a PER-NODE
+  //     feature, and the discriminating information lives in relative position
+  //     along the chain — the phase channel. This is a falsifiable prediction
+  //     read off the generator, and the sweep tests it rather than acting on it:
+  //     if arm 3 works here anyway, that is informative about what the magnitude
+  //     channel actually encodes.
+  //
+  // ── M = 64 ───────────────────────────────────────────────────────────────
+  // Node counts reach 128 here, so truncation now genuinely binds on the larger
+  // graphs — unlike GraphQA, where it is a no-op. Nothing is lost by that:
+  // 011's M-curve was measured at 2 epochs, before the transition, so it was
+  // already void. 64 is the operating point the optimized backbone would ship
+  // (MIXED_BIAS.md §2.5) and every dataset in this plan runs there.
+  //
+  // 4 arms x 2 bias_lr x 3 seeds, PLUS arm 0 at 3 = 27 runs. ~1.8 h/epoch x 6 =
+  // ~10.8 h each => ~292 GPU-h. Context dominates this plan's cost: an epoch
+  // here is ~10x a WebQSP epoch (every sample is a 4096-token sequence at batch
+  // 1 x accum 8, and expand_node_to_token_bias lifts the node bias to a
+  // (B,H,T,T) object at T=4096), and five arms run instead of two.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/bias_experiments/mixed_bias/configs/020_context4k_mixed.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/mixed_bias/results/020_context4k_mixed
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "020_context4k_mixed",
+  "results_dir": "src/experiments/bias_experiments/mixed_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 16,
+      "partition": "frida",
+      "account": "povejmo",
+      // B200 or B300, as 016. The list form renders as `--gres gpu:1
+      // --constraint GPU_BRD:B200|GPU_BRD:B300`, since Slurm gres cannot
+      // express an OR.
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      // ~10.8 h expected at 6 epochs; 16 h leaves headroom for a slow node
+      // without asking for the 24 h that would make the job harder to schedule.
+      "time": "16:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1, 2],
+
+  // A BUNDLE: head flag, mask and LR vary together, for the same reason 012 and
+  // 016 bundled them — bias_lr is not independent of the arm, and crossing it
+  // would generate combinations that are not coherent settings.
+  //
+  // Arm 0 appears ONCE rather than at both LRs: no soft bias means no bias
+  // parameters, so bias_lr is inert and a second copy would be three duplicate
+  // runs (012 ran D at one LR for exactly this reason). It also omits
+  // magnetic_m_collate entirely — validate() rejects that knob with no magnetic
+  // bias enabled, on the grounds that it would silently do nothing.
+  "arm": [
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "bias_self_node": false, "bias_lr": 5e-3},
+
+    {"spd": false, "magnetic": true,  "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": false, "bias_lr": 5e-3},
+    {"spd": false, "magnetic": true,  "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": false, "bias_lr": 2e-2},
+
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true,  "bias_lr": 5e-3},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true,  "bias_lr": 2e-2},
+
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true,  "bias_lr": 5e-3},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": true,  "magnetic_hybrid": false, "magnetic_m_collate": 64, "bias_self_node": true,  "bias_lr": 2e-2},
+
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true,  "bias_lr": 5e-3},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": true,  "magnetic_m_collate": 64, "bias_self_node": true,  "bias_lr": 2e-2}
+  ],
+
+  // ── magnitude-channel widths (MIXED_BIAS.md §2.5, §2.6) ───────────────────
+  "magnetic_magnitude_dim": 64,
+  "magnetic_magnitude_repr_dim": 256,
+
+  // ── 016_context4k_selfnode, verbatim below this line (bias_lr moved into the
+  //    bundle, num_epochs 4 -> 6) ────────────────────────────────────────────
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 4096,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "compile_mode": "default",
+
+  "num_epochs": 6,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 500,
+
+  "wandb_project": "GraphLLM"
+}

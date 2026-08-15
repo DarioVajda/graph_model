@@ -6,7 +6,7 @@
 |---|---|
 | **Objective** | Recover the pairwise non-linearity `magnetic_linear` gives up, while keeping the bias expressible as a dot product between appended Q/K channels — i.e. **flash-attention-compatible**, with no N² tensor inside the attention kernel. |
 | **Scope** | Evaluation only. The dense simulation measures whether the bias type works; the fused kernel is out of scope (§9). |
-| **Status** | **COMPLETE, 2026-08-15 — negative on WebQSP.** 72 training runs + `036`, a 9-run eval-only pass that measured the mechanism; results and verdict in `src/experiments/nonlinear_bias/README.md`. |
+| **Status** | **COMPLETE, 2026-08-15 — negative on WebQSP.** 72 training runs + `036`, a 9-run eval-only pass that measured the mechanism; results and verdict in `src/experiments/bias_experiments/nonlinear_bias/README.md`. |
 
 **Headline.** The arm reaches the **dense ceiling on GraphQA's path task**
 (0.951±0.008, 101.0% of headroom, beating `magnetic_linear`'s 95.6% and
@@ -482,7 +482,7 @@ Ordered by dependency. Nothing below step 5 runs until step 5 is green.
 
 ### Step 7 — sweeps
 
-- [ ] `src/experiments/nonlinear_bias/` — `preflight.py`, `README.md`, configs
+- [ ] `src/experiments/bias_experiments/nonlinear_bias/` — `preflight.py`, `README.md`, configs
       `030_webqsp_nonlinear` and `031_graphqa_nonlinear`.
 - [ ] Preflight green → submit both.
 
@@ -490,7 +490,7 @@ Ordered by dependency. Nothing below step 5 runs until step 5 is green.
 
 - [x] Pool audit first: if the pool never left uniform, the result is unreadable.
 - [x] `sweep.report`, paired by seed, against the reused arm-0/1/2 references.
-- [x] Verdict into `src/experiments/nonlinear_bias/README.md`.
+- [x] Verdict into `src/experiments/bias_experiments/nonlinear_bias/README.md`.
 
 **All steps complete.** One defect reached the queue and voided a sweep: the head's
 parameters were initialised by an `nn.init.*` applied *after* registration, which

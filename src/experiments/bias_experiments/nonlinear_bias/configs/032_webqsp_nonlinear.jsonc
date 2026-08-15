@@ -1,0 +1,178 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 032 — the non-linear pooled magnetic head (`magnetic_nonlinear`) on WebQSP.
+  //
+  // ── RESUBMISSION of 030, which is VOID ───────────────────────────────────
+  // 030 was cancelled ~1 h in and 031 (GraphQA) ran to completion, but both are
+  // discarded: `MagneticNonlinearBias` initialised its parameters with a separate
+  // `nn.init.uniform_` AFTER registration, which does not survive
+  // `from_pretrained`'s materialisation of checkpoint-missing keys. On the real
+  // training path W_attn_out/W_attn_in/W_val_in came out exactly 0.0 and
+  // W_val_out came out NaN, while every direct-constructor unit test passed.
+  // With W_attn == 0 the pool logits are equal and the LEARNED pool silently
+  // degenerates into the uniform ablation — which is why several attn/uniform
+  // pairs in 031 returned byte-identical metrics at the no-bias floor. The fix
+  // initialises inside the nn.Parameter(...) call (`_build_magnitude_channel`'s
+  // idiom, which is why that arm was never affected) and is pinned by
+  // test_parameters_survive_from_pretrained. Records kept under
+  // results/030_webqsp_nonlinear_VOID and results/031_graphqa_nonlinear_VOID.
+  // Nothing else about the grid changed.
+  //
+  // Per-node features built by attention-pooling a whole ROW and COLUMN of the
+  // pairwise non-linearity SiLU(K(i,j)), rather than reading its diagonal. See
+  // src/models/NON_LINEAR_BIAS.md; §8 is this grid.
+  //
+  // ── what this is asking ──────────────────────────────────────────────────
+  // `mixed_bias` closed negatively and concluded that WebQSP's residual is
+  // PAIRWISE non-linearity, which no per-node feature reaches. Arms 3, 4 and v2
+  // all spent the same per-node feature — Re K(i,i), the spectral self-energy,
+  // a strictly local scalar its README diagnoses as failing "exactly where the
+  // answer is a path". This arm is also a per-node feature and by the letter of
+  // that conclusion should also be null. It is worth GPU-hours anyway because it
+  // is the STRONGEST node-level feature the family admits: a path-reachability
+  // signature can live in a pooled row, and provably cannot live in K(i,i).
+  //
+  // So the prior arms asked "is the diagonal enough?"; this asks "is ANY
+  // node-level feature enough?". A null here closes the line properly instead of
+  // by extrapolation from a weak feature. Set expectations accordingly: the
+  // prior is against, and the value is in the strength of the conclusion.
+  //
+  // ── read against 021 and 023, which are REUSED not re-run ────────────────
+  // Same recipe, same M=64, same data build, same bias_self_node=true, same
+  // 15 epochs. Everything below the "verbatim" line is copied from 025.
+  //   arm 2 (`magnetic_linear`, 021) is the PRIMARY comparator: this arm
+  //     REPLACES the phase channel rather than adding to it, so it has to beat
+  //     arm 2 outright to justify anything further.
+  //   arm 1 (dense `magnetic`, 021) is context only, NOT like-for-like — it runs
+  //     with the intra-node diagonal MASKED, which an inner product cannot
+  //     express (LINEAR_BIAS.md §7.3). Its gap is the headroom, not the target.
+  //
+  // ── one deliberate difference from the reused baselines ──────────────────
+  // magnetic_dim is 64 here, 128 there. It is not the same quantity: for arm 2
+  // it is a per-layer DeepSets width, here it is the width of the shared pair
+  // tensor E, computed ONCE per forward and pooled by all 16 layers. The
+  // amortization is what makes 64 (twice the code default) affordable at all.
+  // magnetic_dim is not in data_config_key, so the build is byte-identical —
+  // pinned by test_experiment_config_gates_accept_the_new_arm.
+  //
+  // ── the ablation arm is not optional ─────────────────────────────────────
+  // `magnetic_pool: "uniform"` replaces the softmax with 1/n_b. It separates
+  // "the LEARNED pool is doing the work" from "any non-linear row summary would
+  // do". Without it a positive result cannot be attributed and a null cannot be
+  // distinguished from a pool that never engaged — the failure mode
+  // `mixed_bias`'s gate_audit.py exists to rule out. pool_audit.py is the other
+  // half of that and runs before anything here is read.
+  //
+  // ── grid ─────────────────────────────────────────────────────────────────
+  // 2 arms x 2 bias_lr x 3 seeds = 12 runs, ~4-5.3 GPU-h each = ~60 GPU-h.
+  //
+  // bias_lr is {1e-3, 5e-3}, DOWN from mixed_bias's {5e-3, 2e-2}: this head is
+  // ~2.7M parameters, ~4.6x MagneticBias's own head (NON_LINEAR_BIAS.md §4).
+  // 5e-3 is retained deliberately — it is the LR at which arms 1 and 2 were
+  // measured in 021/023, so it is the cell that makes the reused baselines
+  // comparable, and it is listed FIRST so it gets the array's low-index slots.
+  // If only half this grid ever runs, the half that runs is the comparable half.
+  //
+  // Standing caveat on how hard this can be read, carried over from 025: 022 and
+  // 023 ran one byte-identical cell and got 0.6946 vs 0.6781 — 1.65 pp apart at
+  // FIXED seed. A 3-seed median here bounds an effect rather than resolving one.
+  //
+  //   python3 -m src.experiments.bias_experiments.nonlinear_bias.preflight
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_experiments/nonlinear_bias/configs/032_webqsp_nonlinear.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/nonlinear_bias/results/032_webqsp_nonlinear
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "032_webqsp_nonlinear",
+  "results_dir": "src/experiments/bias_experiments/nonlinear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      // The whole grid in one wave: 12 runs of ~5 h, so a second wave would cost
+      // another 5 h of wall time for nothing. Blackwell alone carries 48 GPUs.
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      // 021/023/025's pool. Absolute step times are not comparable across
+      // brands; accuracy, the only thing read here, is unaffected.
+      "gpus": ["H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      // 128G, as 021/023/025 — at 64G four runs were OOM-killed at ~3 h with
+      // MaxRSS pinned exactly to the cgroup cap. Host RAM, unrelated to the arm.
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── the grid (seed inside the bundle, 021/023/025's pattern) ─────────────
+  // Every head flag written explicitly in every object, even where false, so the
+  // resolved JSON is self-describing rather than relying on defaults.
+  "arm": [
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "attn", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "attn", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "attn", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 2},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "uniform", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "uniform", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "uniform", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 5e-3, "seed": 2},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "attn", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 1e-3, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "attn", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 1e-3, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "attn", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 1e-3, "seed": 2},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "uniform", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 1e-3, "seed": 0},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "uniform", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 1e-3, "seed": 1},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_magnitude": false, "magnetic_hybrid": false, "magnetic_linear_v2": false, "magnetic_nonlinear": true, "magnetic_pool": "uniform", "magnetic_m_collate": 64, "bias_self_node": true, "bias_lr": 1e-3, "seed": 2}
+  ],
+
+  // ── head width ───────────────────────────────────────────────────────────
+  // d_struct: what Q/K append to EVERY head, so unlike the internal widths of
+  // the previous arms it is not free. 64 = 1x Llama-1B's head_dim, against arm
+  // 2's 2M = 128 = 2x at the same M — this arm's one structural advantage on
+  // cost. 32 is a follow-up axis if the arm lands well (NON_LINEAR_BIAS.md §4).
+  "magnetic_struct_dim": 64,
+
+  // ── 025_webqsp_linear_v2, verbatim below this line ───────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "magnetic_shared": false,
+  // max_spd stays at the built value even where spd is off: it is part of
+  // data_config_key, so changing it would fork the dataset cache.
+  "max_spd": 64,
+  // 64, not 025's 128 — see the header. E is shared across layers here, so this
+  // width is paid once rather than per layer.
+  "magnetic_dim": 64,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

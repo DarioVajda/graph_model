@@ -1,0 +1,108 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // D2 (PLAN §3.1) — magnetic bias SHARING GRANULARITY on a 4k-capped context.
+  //
+  // Sweeps `magnetic_groups` G (see 001 for the mechanism). This is the
+  // sub-experiment where the bias is LARGEST relative to everything else: the
+  // context task is many nodes carrying little text, which PLAN §D5 names as the
+  // corner where GTLM overhead is worst (7.9x at 2048 nodes x 2 tokens). If
+  // sharing buys speed anywhere, it buys the most here.
+  //
+  // RECIPE: 021_mainsweep_graph, with two deliberate changes:
+  //
+  //   1. max_train_len 16384 -> 4096. Shrinks the training distribution from 13
+  //      cells to 6 (960..4032 packed tokens); the other 10 are still scored as
+  //      length extrapolation. Needs its own build — see sbatch_context4k_data.sh,
+  //      which must COMPLETE before this config is submitted.
+  //   2. gpus_per_config 2 -> 1, with accumulation_steps 4 -> 8. The effective
+  //      batch is unchanged (1 x 4 x 2 ranks == 1 x 8 x 1 rank = 8) and so is the
+  //      step count (16000 / 8 = 2000 steps/epoch x 2 epochs = 4000). Single-GPU
+  //      because DDP all-reduce sits inside the wall-clock this experiment is
+  //      trying to MEASURE — a two-rank step time is not a clean read on bias
+  //      cost. Cheaper too, at 4k.
+  //
+  // Everything else is 021 verbatim. `magnetic_groups` does not enter
+  // data_config_key(), so all six arms read one build.
+  //
+  // 6 arms x 3 seeds = 18 runs. The 16k runs took ~12 h on 2xH100; at a 4x
+  // shorter cap on 1 GPU expect roughly 3-5 h, hence the 12 h wall.
+  //
+  //   ./src/experiments/bias_experiments/bias_sharing/sbatch_context4k_data.sh     # first, once
+  //   python3 -m sweep src.experiments.context src/experiments/bias_experiments/bias_sharing/configs/003_context4k_g_sweep.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/bias_sharing/results/003_context4k_g_sweep
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "003_context4k_g_sweep",
+  "results_dir": "src/experiments/bias_experiments/bias_sharing/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 9,
+      "partition": "frida",
+      "account": "povejmo",
+      // Same single GPU type as every other bias_sharing sub-experiment; see 001.
+      "gpus": "H100",
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1, 2],
+  "magnetic_groups": [0, 1, 2, 4, 8, 16],
+
+  // k is a MIXTURE drawn per graph, not an axis — a JSON list here would expand
+  // into four separate runs on one-k datasets. Keep it a comma-joined string.
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+
+  // Must match sbatch_context4k_data.sh exactly — these form the cache key.
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 4096,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,          // gates the eigenvector features; magnetic_groups
+                             // supersedes it model-side when non-zero
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+
+  // 021 measured max-autotune vs default at 0.99x on this workload while
+  // max-autotune costs ~2 h of compile before step 1. Chosen for risk, not speed.
+  "compile_mode": "default",
+
+  // 16000 / (1 x 8 x 1 rank) = 2000 steps/epoch, so 2 epochs = 4000 steps —
+  // identical to 021's 2-rank arithmetic.
+  "num_epochs": 2,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 500,
+
+  "wandb_project": "GraphLLM"
+}

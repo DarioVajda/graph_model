@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Done** | Phases 0–2, 2026-08-05; Phase 3 (the §7.3 diagonal-mask ablation), 2026-08-06. Results and verdict: `src/experiments/linear_bias/README.md`. |
+| **Done** | Phases 0–2, 2026-08-05; Phase 3 (the §7.3 diagonal-mask ablation), 2026-08-06. Results and verdict: `src/experiments/bias_experiments/linear_bias/README.md`. |
 | **Deferred** | The $O(N)$ factorized implementation. **Not cleared to start** — see the README §7. It needs a purpose-built backbone; §7 records the constraints so they are not re-derived. |
 
 Headline: linearization is free on GraphQA, costs **18.8% of the magnetic
@@ -431,7 +431,7 @@ wall-clock given cluster width, and Phase 0 is expected to prune the grid first.
 ### 6.3 Results
 
 Five sweeps ran, all 2026-08-05; full tables, per-dataset reading and the verdict
-live in **`src/experiments/linear_bias/README.md`**. Summary of B→C, quoted as a
+live in **`src/experiments/bias_experiments/linear_bias/README.md`**. Summary of B→C, quoted as a
 fraction of the D→B magnetic headroom:
 
 | sweep | dataset | B→C | notes |

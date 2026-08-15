@@ -1,0 +1,146 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 011 follow-up — is the linear head's context collapse a CAPACITY limit or
+  // just a slower approach to the same solution?
+  //
+  // 011 ran the recipe's own 2 epochs and produced a stark result: arm B
+  // (magnetic MLP head) reaches code_acc 0.995, arm C (magnetic_linear) reaches
+  // 0.08, arm D (no bias) 0.03. Read as a table that says linearization destroys
+  // the context task. But the eval-loss trajectories say something different:
+  //
+  //   B  M=128   1.129  0.932  0.087  0.018  0.010  0.018  0.012  0.014
+  //   C  M=128   1.417  1.218  1.177  1.150  1.124  1.123  1.098  1.083
+  //   D  (none)  2.005  1.897  1.922  1.818  1.786  1.740  1.710  1.702
+  //
+  // B falls off a cliff between eval 2 and 3 — the point where it starts using
+  // the graph. C never gets there, but it is not flat either: it is monotonically
+  // descending at ~0.02/eval when the budget runs out, and it sits far below D's
+  // plateau. code_acc is all-or-nothing on an exact 3-token code, so it stays at
+  // noise until that transition happens; 0.08-vs-0.03 is not a small win, it is
+  // an unfired metric.
+  //
+  // ── why the budget is 4 epochs and the real axis is bias_lr ──────────────
+  // C's last four evals fall 1.124 -> 1.083, i.e. 0.0137/eval (an eval is 500
+  // optimizer steps; 16000 samples at batch 1 x accum 8 = 2000 steps/epoch, so 4
+  // evals/epoch). The gap to B's cliff EDGE — 0.932, the last point before B
+  // transitions, not the ~0.01 it settles at afterwards — is 0.151, about 11
+  // evals or 2.75 epochs. That puts the transition near epoch 4.75 at the
+  // observed rate, so 4 epochs is the right order and 8 was padding.
+  //
+  // More importantly, epochs are the wrong lever to lead with. bias_lr 5e-3 was
+  // tuned for the MLP head's 36 864 bias params; the linear head has 8 192 and no
+  // hidden nonlinearity (LINEAR_BIAS.md §2.5), so it may simply be under-stepped
+  // — and "slow" and "under-stepped" are indistinguishable in a loss curve.
+  // Buying epochs tests patience; raising bias_lr tests the hypothesis. So LR is
+  // the swept axis and the budget is merely doubled.
+  //
+  // ── arms ─────────────────────────────────────────────────────────────────
+  //   C   magnetic_linear, bias_lr 5e-3   011's setting at 2x budget. A CONTROL,
+  //                                       not the hypothesis: the extrapolation
+  //                                       above says 4 epochs may be just short
+  //                                       of enough for it, which is fine — its
+  //                                       job is to isolate the LR effect.
+  //   C'  magnetic_linear, bias_lr 2e-2   4x
+  //   C'' magnetic_linear, bias_lr 5e-2   10x. Zero-init means a too-high LR
+  //                                       shows up as divergence, which is a
+  //                                       readable outcome, not a wasted run.
+  //   D   no soft bias                    the floor, re-measured at the SAME 4
+  //                                       epochs — it may move, since the context
+  //                                       main sweep already found the flat arm
+  //                                       undertrained and D is still descending
+  //                                       at 2 epochs. A floor from a shorter run
+  //                                       would flatter every C arm above it.
+  //
+  // Reading it: if a higher-LR arm transitions, the 011 collapse was an
+  // optimization artifact and the M-grid needs re-running at the winning LR. If
+  // none transition but the 5e-3 control is still descending, LR is not the
+  // binding constraint and the budget question comes back — but with the
+  // confound eliminated rather than assumed away.
+  //
+  // Arm B is deliberately NOT re-run. It is at 0.995 after 2 epochs, so extra
+  // budget cannot meaningfully raise it, and comparing C-at-8-epochs against
+  // B-at-2-epochs is generous to C — if C still loses on 4x the budget, the
+  // conclusion holds a fortiori and costs 3 fewer runs.
+  //
+  // Only M=128 is swept. If the complete eigenbasis cannot transition, no
+  // truncation of it can; the M grid is 011's job and only becomes interesting
+  // again if C clears the bar here.
+  //
+  // 4 arms x 3 seeds = 12 runs, ~7.2 GPU-h each (011 measured 3.6 h for 2
+  // epochs), so ~86 GPU-h — less than the 9-run 8-epoch version it replaces,
+  // and it answers a question that one could not.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/bias_experiments/linear_bias/configs/012_context4k_linear_long.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/linear_bias/results/012_context4k_linear_long
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "012_context4k_linear_long",
+  "results_dir": "src/experiments/bias_experiments/linear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      // 2x the epochs of 011, whose runs took 3.6 h — 12 h covers ~7.2 h with room.
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1, 2],
+
+  // bias_lr rides inside the bundle because it is not independent of the arm:
+  // crossing it would produce a D arm at 2e-2 that has no bias to apply it to.
+  "arm": [
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128, "bias_lr": 5e-3},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128, "bias_lr": 2e-2},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128, "bias_lr": 5e-2},
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_m_collate": 0,   "bias_lr": 5e-3}
+  ],
+
+  // ── 011_context4k_linear verbatim below this line, except num_epochs ───────
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 4096,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "dtype": "bf16",
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "compile_mode": "default",
+
+  "num_epochs": 4,
+  "batch_size": 1,
+  "accumulation_steps": 8,
+  "lr": 1e-4,
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+  "eval_steps": 500,
+
+  "wandb_project": "GraphLLM"
+}

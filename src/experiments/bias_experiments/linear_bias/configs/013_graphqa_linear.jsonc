@@ -1,0 +1,129 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 2, third dataset — does WebQSP's linearization cost generalize?
+  //
+  // WebQSP said linearization costs 4.91 pp of test F1, 18.8% of what the
+  // magnetic bias is worth. Context said something apparently far worse, but at
+  // the recipe's own budget could not distinguish "cannot" from "not yet" (see
+  // 012). GraphQA is the third dataset with a working magnetic recipe and the
+  // only one whose task is explicitly algorithmic, so it is the cleanest test of
+  // whether the WebQSP number is a property of the method or of one dataset.
+  //
+  // RECIPE: bias_sharing/001_graphqa_g_sweep verbatim — same three tasks
+  // (node_degree, shortest_path, edge_count), same seeds (42/43/44), same
+  // question_node, LoRA, schedule and dtype — with the bias axes changed as
+  // below and magnetic_groups dropped back to per-layer.
+  //
+  // ── what changes from 001, and why ───────────────────────────────────────
+  // 001 runs spd + rrwp + magnetic together. Here BOTH are off, matching the
+  // WebQSP (010) and context (011) arms. That is not cosmetic: spd and rrwp are
+  // pairwise lookups with no f(i)·g(j) form, so neither can survive the
+  // factorization this campaign exists to price — keeping them would price a
+  // recipe the optimization can never reach. They would also mask the thing being
+  // measured, since two strong alternative structural channels can absorb
+  // whatever the magnetic head loses. Expect ABSOLUTE accuracy below 001's for
+  // every arm here; only the within-config gaps are meant to be read.
+  //
+  // ── arms ─────────────────────────────────────────────────────────────────
+  //   B  magnetic          the incumbent head, at two bias_lr values
+  //   C  magnetic_linear   the candidate, at the same two
+  //   D  no soft bias      the headroom denominator
+  //
+  // bias_lr is swept at 5e-3 (the tuned value, and 001's) and 2e-2 for both B and
+  // C. Sweeping it for C alone would confound "the linear head likes a higher LR"
+  // with "this dataset likes a higher LR"; running both makes the comparison
+  // fair at each LR and lets each arm be read at its own best.
+  //
+  // D is the one addition beyond a straight B-vs-C comparison. Without it the
+  // result is only "B beats C by X pp", which cannot be compared to WebQSP's
+  // headline — that is quoted as a FRACTION of what the bias buys, and the
+  // fraction needs a floor. bias_lr is irrelevant with no bias module, so D runs
+  // once rather than twice, and magnetic_m_collate must be 0 (validate() rejects
+  // the knob when nothing consumes it).
+  //
+  // ── M ────────────────────────────────────────────────────────────────────
+  // magnetic_m_collate 128 matches 010/011. GraphQA graphs have ~20 nodes and the
+  // cache is built at magnetic_m 0 (= all N), so min(N, 128) = N: every arm keeps
+  // the COMPLETE eigenbasis and the rank ceiling 2M never binds. This is the same
+  // regime as context, and deliberately so — no M-sweep here, because M cannot
+  // truncate anything at this graph size. Setting it explicitly rather than
+  // leaving it 0 keeps the three configs literally comparable.
+  //
+  // 5 arms x 3 tasks x 3 seeds = 45 runs, <=4 GPU-h each (sacct, 001).
+  //
+  //   python3 -m sweep src.experiments.graphqa src/experiments/bias_experiments/linear_bias/configs/013_graphqa_linear.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/linear_bias/results/013_graphqa_linear
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "013_graphqa_linear",
+  "results_dir": "src/experiments/bias_experiments/linear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      // No max_concurrent: this measures accuracy per arm, not step time, so
+      // nothing depends on serialisation.
+      "partition": "frida",
+      "account": "povejmo",
+      // A LIST of one entry on purpose. A bare "A100:1" renders as
+      // `--gres gpu:A100:1`, which pins the GRES NAME and so excludes `ana` —
+      // whose gres is `gpu:A100_80GB`. The list form renders as
+      // `--gres gpu:1 --constraint GPU_BRD:A100`, and all three A100 nodes
+      // (aga/axa at 40 GB, ana at 80 GB) carry that feature. So this is exactly
+      // "any A100, either memory size".
+      "gpus": ["A100:1"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "task": ["node_degree", "shortest_path", "edge_count"],
+  "seed": [42, 43, 44],
+
+  "arm": [
+    {"magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 128, "bias_lr": 5e-3},
+    {"magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 128, "bias_lr": 2e-2},
+    {"magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128, "bias_lr": 5e-3},
+    {"magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128, "bias_lr": 2e-2},
+    {"magnetic": false, "magnetic_linear": false, "magnetic_m_collate": 0,   "bias_lr": 5e-3}
+  ],
+
+  // The two pairwise biases the factorization cannot represent (see header).
+  "spd": false,
+  "rrwp": false,
+
+  // ── 001_graphqa_g_sweep, verbatim below this line ─────────────────────────
+  "question_node": "isolated",
+  "graph_type": "standard",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+  // Kept at the built values even where the feature is off: they are part of the
+  // data cache identity, so changing them would fork the cache.
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

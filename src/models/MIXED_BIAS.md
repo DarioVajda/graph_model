@@ -8,7 +8,7 @@
 |---|---|
 | **Objective** | Isolate and measure the individual and tandem contributions of linear phase features (directed flow) and non-linear magnitude features (structural role) against the standard magnetic baseline (from the $O(N^2)$ implementation). |
 | **Method** | Implement `magnetic_magnitude` and `magnetic_hybrid` bias arms. Gate with correctness tests before committing GPU-days. |
-| **Next Step** | **Phase 2 is submitted** — 87 runs across `018`/`019`/`020` in `src/experiments/mixed_bias/`. Phase 1 is complete and the §4.2 gate is green. Aggregate with `python3 -m sweep.report` as each sweep lands. |
+| **Next Step** | **Phase 2 is submitted** — 87 runs across `018`/`019`/`020` in `src/experiments/bias_experiments/mixed_bias/`. Phase 1 is complete and the §4.2 gate is green. Aggregate with `python3 -m sweep.report` as each sweep lands. |
 
 **There is no offline Phase 0.** `linear_bias` ran one and its own Conclusion 6 is
 "offline imitation $R^2$ did not predict trained quality" — $R^2 \approx 0.96$
@@ -603,7 +603,7 @@ fails to exist.
 the form, not of the implementation.** Three runs diverged to `NaN` at
 `bias_lr` 2e-2 — arm 3 on WebQSP at epochs 2.48 and 3.17 (2 of 2 seeds), arm 4 on
 context at 0.27 — while `magnetic` and `magnetic_linear` never diverged at either
-LR on either dataset. See `experiments/mixed_bias/README.md` for the full record.
+LR on either dataset. See `experiments/bias_experiments/mixed_bias/README.md` for the full record.
 
 *Why it is the form.* In $b = \langle Z_i \odot s^{(h)}, Z_j W_K^{(g)}\rangle$ the
 same $Z$ feeds **both** sides, so $\mathrm{MLP}_{magnitude}$, `deep_set` and

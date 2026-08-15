@@ -1,0 +1,125 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Is WebQSP's 4.91 pp linearization cost really about LINEARITY, or just about
+  // the linear head being smaller?
+  //
+  // Arm C in 010 changes two things at once: it drops the hidden nonlinearity AND
+  // shrinks the bias head. Counted from the trained tensors in
+  // bias_parameters.pt, per layer at head_dim 64 / 32 heads:
+  //
+  //     magnetic(d) = 2d^2 + 162d + 160        linear(d) = 193d + 160
+  //
+  // (Both arms carry lambda_lin = 128 and deep_set = 129d IDENTICALLY; only the
+  // proj stack differs. Comparing the proj stack alone gives a bogus 4.5x.)
+  //
+  //     d=128:  magnetic 53 664   linear 24 864   -> 2.16x
+  //
+  // So C ran with 46% of B's bias parameters. GraphQA (013) is the reason to care:
+  // there magnetic_dim is 32, the gap is only 1.17x, and linearization cost
+  // NOTHING (mean +0.2% of headroom, and it won edge_count). Cost tracking the
+  // parameter gap rather than the dataset is exactly what a capacity effect looks
+  // like.
+  //
+  // This sweep gives the linear head the same budget and re-measures. Solving
+  // 193d + 160 = 53 664 puts parity at d ~ 277; 256 reaches 49 568/layer, 92.4% of
+  // it. The remaining 8% is not worth a second arm — if capacity is the story, a
+  // 92%-matched head should recover most of the 4.91 pp, and if it recovers none
+  // of it, 8% more would not have changed that.
+  //
+  // ── what this is compared against ────────────────────────────────────────
+  // Nothing else is re-run: 010 already holds, at 3 seeds on byte-identical data
+  // with the same recipe, test-F1 medians
+  //     B magnetic  d=128  0.7190      C linear  d=128  0.6699      D floor 0.4580
+  // so this adds only the missing cell. magnetic_dim is model-side only (it is NOT
+  // in data_config_key), so these runs read the same cached build as 010 — no
+  // rebuild, and the comparison stays exact.
+  //
+  // ── interpreting it ──────────────────────────────────────────────────────
+  //   -> ~0.719   capacity was the whole story; linearity is nearly free, and the
+  //               deferred backend just needs a wider Psi (which costs nothing in
+  //               the factorization: Psi is O(M) and outside the 2M head width).
+  //   -> ~0.670   capacity was irrelevant; 4.91 pp is the bilinear family's real
+  //               price and is the number to design against.
+  // A limit worth stating: magnetic at d=256 is NOT run, so this cannot tell us
+  // whether the MLP head would also gain from a wider d. The comparison being made
+  // is parameter-matched (linear d=256 vs magnetic d=128), which is the question
+  // asked; "is 128 under-provisioned for BOTH heads" is a different one.
+  //
+  // 1 arm x 3 seeds = 3 runs, ~2.8 GPU-h each (sacct, 010).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_experiments/linear_bias/configs/014_webqsp_magdim256.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/linear_bias/results/014_webqsp_magdim256
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "014_webqsp_magdim256",
+  "results_dir": "src/experiments/bias_experiments/linear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200:1",
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1, 2],
+
+  // ── the arm ───────────────────────────────────────────────────────────────
+  // The ONLY change from 010's arm C is magnetic_dim 128 -> 256. bias_lr stays at
+  // 010's 5e-3 rather than being re-tuned: 013 showed the linear head is markedly
+  // less bias_lr-sensitive than the MLP head (max swing 0.020 vs 0.046), and a
+  // second axis here would make it impossible to attribute a change to width.
+  "magnetic": false,
+  "magnetic_linear": true,
+  "magnetic_dim": 256,
+  "magnetic_m_collate": 128,
+  "spd": false,
+
+  // ── 010_webqsp_linear, verbatim below this line ───────────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

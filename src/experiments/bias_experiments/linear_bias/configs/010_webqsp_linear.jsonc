@@ -1,0 +1,141 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 2 (LINEAR_BIAS.md §6) — what does LINEARIZING the magnetic bias cost,
+  // on WebQSP, as a function of the eigenvector count M?
+  //
+  // RECIPE: 002_webqsp_g_sweep verbatim (itself 029_question_node_webqsp's
+  // `isolated` arm), with ONLY the bias axes changed. Everything on the data
+  // path is untouched, so every arm here reads byte-identical inputs to the
+  // g-sweep and arm A can be reused from it rather than re-run.
+  //
+  // ── the four arms (§6.1) ─────────────────────────────────────────────────
+  //   A  magnetic + spd     the incumbent — NOT rerun here, taken from
+  //                         002_webqsp_g_sweep's magnetic_groups=0 arm.
+  //   B  magnetic, no spd   A->B prices dropping SPD.
+  //   C  magnetic_linear    B->C is the headline: the cost of linearization.
+  //   D  no soft bias       the headroom denominator, so B->C can be reported
+  //                         as a FRACTION of what the magnetic term is worth.
+  //
+  // SPD is absent from B/C/D on purpose: it is a learned lookup on a genuinely
+  // pairwise quantity with no f(i)·g(j) form, so it cannot survive the
+  // factorization this whole line of work is aimed at. Keeping it would price a
+  // recipe the optimization can never reach. That makes the comparison
+  // two-variable, which is exactly why arm B exists as the pivot.
+  //
+  // ── the M axis (§2.6) ────────────────────────────────────────────────────
+  // M is swept through `magnetic_m_collate`, a COLLATOR-ONLY knob that is not in
+  // data_config_key — so the whole grid reuses the one cached m=128 build. This
+  // is sound because eigh returns ascending eigenvalues and both the builder and
+  // the collator truncate by prefix slice, making a late truncation to M
+  // bit-identical to a dataset built at m=M (pinned by
+  // tests/models/test_linear_magnetic_bias.py::test_collate_truncation_equals_built_at_m).
+  // Do NOT sweep `magnetic_m` instead: it IS in the cache key and would rebuild
+  // the ~3.4 GB dataset once per value.
+  //
+  // C is swept over the full M grid because quality-vs-M is implementation-
+  // INDEPENDENT: the deferred factorized backend computes the same bias by
+  // different arithmetic, so it inherits this curve and only needs speed/memory
+  // measured against it. B is swept at the two endpoints so that a drop at M=16
+  // can be attributed — linearization, or just fewer eigenvectors? The two can
+  // differ in shape because the rank ceiling 2M binds C and not B.
+  //
+  // 7 arms x 3 seeds = 21 runs, ~2.8 GPU-h each (sacct, 002).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_experiments/linear_bias/configs/010_webqsp_linear.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/linear_bias/results/010_webqsp_linear
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "010_webqsp_linear",
+  "results_dir": "src/experiments/bias_experiments/linear_bias/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      // No max_concurrent: every arm should run at once. This sweep measures
+      // QUALITY (F1 per arm per M), not step time, so nothing depends on the runs
+      // being serialised — the throttle would only add wall-clock.
+      "partition": "frida",
+      "account": "povejmo",
+      // Any of the three current-generation cards. A list renders as
+      // `--gres gpu:1 --constraint GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100`, which
+      // is how Slurm expresses "one of these types" (gres itself cannot OR).
+      // A100 and L4 are excluded deliberately: the L4's 24 GB will not hold a
+      // 4096-token flex step.
+      //
+      // NOTE this breaks step-time comparability ACROSS arms, which is why 002
+      // pinned a single type. Accepted here: the deliverable is quality-vs-M and
+      // GPU type does not move F1. Do not quote s/it between arms from this sweep.
+      "gpus": ["B200:1", "B300:1", "H100:1"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1, 2],
+
+  // A BUNDLE: each object is one coherent arm. Bundles vary together rather than
+  // crossing, which is what lets B carry 2 M values and C carry 4 without
+  // expanding into meaningless combinations.
+  "arm": [
+    // B — magnetic MLP head, no SPD. The pivot.
+    {"spd": false, "magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 128},
+    {"spd": false, "magnetic": true,  "magnetic_linear": false, "magnetic_m_collate": 16},
+    // C — linear head, no SPD. The candidate.
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 128},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 64},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 32},
+    {"spd": false, "magnetic": false, "magnetic_linear": true,  "magnetic_m_collate": 16},
+    // D — no soft bias at all. magnetic_m_collate must be 0 here: the config
+    // raises if it is set with no magnetic term, which is the guard that stops a
+    // silently-inert knob from making an arm look like something it is not.
+    {"spd": false, "magnetic": false, "magnetic_linear": false, "magnetic_m_collate": 0}
+  ],
+
+  // ── 002_webqsp_g_sweep, verbatim below this line ──────────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "magnetic_shared": false,
+  // max_spd stays at the built value even where spd is off: it is part of
+  // data_config_key, so changing it would fork the dataset cache.
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
