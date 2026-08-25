@@ -14,6 +14,8 @@ To add a new bias type:
 Supported bias types
 --------------------
 SPDBias       - learnable lookup table keyed by shortest-path distance
+LandmarkBias  - anchor-coordinate bias: a learned soft-min over the landmark
+                distance oracle, factorized by construction (see LANDMARK_BIAS.md)
 LaplacianBias - learnable scalar weight × L2 distance between spectral embeddings
 RWSEBias      - same pattern for random-walk structural encodings
 RRWPBias      - small MLP applied to multi-hop random-walk probability vectors
@@ -1183,8 +1185,192 @@ class MagneticSharedBias(MagneticBias):
 
 # ── Registration list ─────────────────────────────────────────────────────────
 
+class LandmarkBias(BaseBias):
+    """Anchor-coordinate bias — a learned soft-min over the landmark distance
+    oracle. See ``src/models/biases/LANDMARK_BIAS.md``.
+
+        b^(h)(u,v) = (1/k_val) * sum_c sum_j F_c[D_q[u,c,j], h] * G_c[D_k[v,c,j]]
+
+    with three channels c: (1) u->a_j->v, reading D_out against D_in; (2) the
+    reverse; (3) the undirected route, reading D_und against itself. Phase 0
+    measured 94.4% of WebQSP node pairs with no directed path at all, and
+    gold-answer pairs *less* directed-visible than average (0.034 vs 0.052), so
+    channel 3 is what makes the initialization non-trivial on a KG — it is not a
+    refinement (`landmark/README.md` §6).
+
+    Every head-indexed parameter is F, on the QUERY side, so K_pos carries no head
+    dimension and broadcasts across GQA groups — `LinearMagneticBias`'s property
+    (§2.4 of LINEAR_BIAS.md), and the reason this is GQA-native.
+
+    F and G are indexed by *distance*, never by anchor slot, so the sum runs over
+    an unordered set: the bias is invariant to anchor permutation by construction
+    and anchors need not correspond across graphs.
+
+    Two forms, selected by ``landmark_norm``:
+
+    * NORMALIZED (default, and the only one to build on). Both per-(node, channel)
+      factors are L2-normalized and a per-head ``gain`` carries the magnitude, so
+      Cauchy-Schwarz bounds |b| <= n_chan * max|gain| REGARDLESS of the tables.
+      Init F = G = exp(-d/tau), gain = 0: b is 0 at step 0, and db/dgain =
+      <q_hat, k_hat> != 0, so gain moves at step 1 and the tables at step 2.
+      Zeroing G instead would make k_hat = normalize(0) = 0 and kill db/dgain too
+      — the dead saddle of NON_LINEAR_BIAS.md §2.4.
+    * UNNORMALIZED (``--no-landmark-norm``), F = exp(-d/tau), G = 0. Kept only so
+      sweep 040's numbers stay reproducible. b is the product of two *trainable*
+      tables, i.e. degree-2 in the learned parameters with no bound on |F||G| at
+      all, and it ran away: |b| reached 64-240 against O(1-10) attention logits
+      (`landmark/README.md` §8). This is `MIXED_BIAS.md` §5.7 in a new costume;
+      the normalized form is that section's own remedy (§5.8).
+
+    This is the dense simulation. ``structural_factors`` returns the (Q_pos,
+    K_pos) the deferred fused backbone would append to each head, so the
+    equivalence is pinned in fp64 before anything is built on it.
+    """
+
+    config_key = 'landmark'
+
+    def __init__(self, num_heads: int, head_dim: int, bias_config):
+        super().__init__()
+        self.d_max = int(getattr(bias_config, 'landmark_d_max', 8))
+        self.n_chan = int(getattr(bias_config, 'landmark_channels', 3))
+        if self.n_chan not in (2, 3):
+            raise ValueError(
+                f"landmark_channels must be 2 (directed only, the ablation) or 3 "
+                f"(with the undirected channel); got {self.n_chan}.")
+        self.k_collate = int(getattr(bias_config, 'landmark_k_collate', 0))
+        self.bias_self_node = getattr(bias_config, 'bias_self_node', False)
+        S = self.d_max + 3                      # 0..d_max, UNREACH, PAD
+        self.S, self.pad_idx = S, S - 1
+        tau = float(getattr(bias_config, 'landmark_tau', 2.0))
+
+        self.norm = bool(getattr(bias_config, 'landmark_norm', True))
+        f0 = torch.zeros(S)
+        f0[:self.d_max + 1] = torch.exp(-torch.arange(self.d_max + 1) / tau)
+        self.F = nn.Parameter(f0.view(1, S, 1).repeat(self.n_chan, 1, num_heads))
+        if self.norm:
+            # Normalized form: BOTH tables are anchored at the oracle profile and a
+            # per-head gain (init 0) carries the whole magnitude. b = 0 at step 0
+            # via gamma, and d b/d gamma = <q_hat, k_hat> != 0 — so gamma moves at
+            # step 1 and F/G at step 2. Zeroing G instead would make k_hat =
+            # normalize(0) = 0 and kill d b/d gamma too: a dead saddle.
+            self.G = nn.Parameter(f0.view(1, S).repeat(self.n_chan, 1).clone())
+            self.gain = nn.Parameter(torch.zeros(num_heads))
+            self.gain._no_weight_decay = True
+            # A FIXED multiplier on the gain, not a parameter. The trainer puts
+            # every bias parameter in ONE group with one `bias_lr`
+            # (`text_graph_trainer_v2.py:94`), so a tandem arm cannot give
+            # landmark and magnetic_linear different learning rates. That matters
+            # because gamma does not converge, it RAMPS: under AdamW the step size
+            # is ~lr regardless of gradient scale, so |gamma| ~ lr*steps and the
+            # LEARNING RATE is landmark's magnitude knob (README §9). If the two
+            # arms' preferred LRs differ, the shared group forces one of them off
+            # its optimum.
+            #
+            # Because |b| ~ gain_scale * lr * steps, this scalar buys back exactly
+            # that degree of freedom: run the tandem at magnetic's LR and set
+            # gain_scale = lr_landmark / lr_magnetic. Caveat, stated because it is
+            # not an exact LR decoupling: it rescales the MAGNITUDE channel only —
+            # F and G still learn their SHAPE at the shared bias_lr. That is the
+            # benign half (normalization makes the bias degree-0 in table scale),
+            # but it is not nothing.
+            self.gain_scale = float(getattr(bias_config, 'landmark_gain_scale', 1.0))
+        else:
+            # Unnormalized (the 040 form, kept so those numbers stay reproducible).
+            self.G = nn.Parameter(torch.zeros(self.n_chan, S))
+            self.register_parameter('gain', None)
+        # Globally shared additive logit lookups (a few hundred values per head);
+        # they cannot memorize examples, so they follow SPDBias's decay exemption.
+        self.F._no_weight_decay = True
+        self.G._no_weight_decay = True
+
+    # ── factorization ────────────────────────────────────────────────────────
+
+    def _factors(self, landmark: torch.Tensor, dtype):
+        """``(B,N,C,k)`` int coordinates -> ``(Q_pos, K_pos)``.
+
+        Q_pos ``(B, H, N, C*k)`` carries the 1/k_val and every learned head; K_pos
+        ``(B, N, C*k)`` is the head-free structural dictionary.
+        """
+        lm = landmark[:, :, :self.n_chan, :]
+        if self.k_collate:
+            lm = lm[..., :self.k_collate]
+        # Out-of-place, deliberately: `.long()` on an already-int64 feature returns
+        # the SAME tensor, so an in-place clamp would mutate the batch the caller
+        # owns and bump its version counter. With checkpoint_graph_bias the bias
+        # forward is recomputed in backward — i.e. this runs twice on one tensor —
+        # and autograd rejects the second pass. Cheap fix, invisible failure.
+        lm = lm.long().clamp(0, self.S - 1)
+        B, N, C, k = lm.shape
+
+        # Channel c reads a different coordinate block on each side: c=0 is
+        # (D_out | D_in), c=1 is (D_in | D_out), c=2 is (D_und | D_und). Swapping
+        # blocks 0 and 1 on the key side is exactly that pairing.
+        key_src = lm.clone()
+        key_src[:, :, 0, :], key_src[:, :, 1, :] = lm[:, :, 1, :], lm[:, :, 0, :]
+
+        # k_val = the number of REAL anchor slots. A padded slot is padded for
+        # every node, so any real node's row reports it; node 0 always exists.
+        k_val = (lm[:, 0, 0, :] != self.pad_idx).sum(-1).clamp(min=1)   # (B,)
+
+        # PAD must be inert STRUCTURALLY, not merely at init. F[PAD] and G[PAD]
+        # are trainable rows like any other, so once training moves them a padded
+        # anchor slot would inject a constant into every pair — and k_val already
+        # excludes those slots from the mean, so the bias would not even be
+        # normalized for it. Masking the query side is enough: a slot is PAD for
+        # every node on both sides simultaneously.
+        live = (lm != self.pad_idx)                                    # (B,N,C,k)
+
+        # F: (C,S,H) -> gather per (b,n,c,j) -> (B,N,C,k,H)
+        q = self.F.permute(0, 2, 1)                                    # (C,H,S)
+        q = torch.stack([q[c][:, lm[:, :, c, :]] for c in range(C)], 0)  # (C,H,B,N,k)
+        q = q.permute(2, 1, 3, 0, 4)                                   # (B,H,N,C,k)
+        q = q * live.unsqueeze(1).to(q.dtype)                          # PAD -> 0
+        kk = torch.stack([self.G[c][key_src[:, :, c, :]] for c in range(C)], 2)
+        kk = kk * live.to(kk.dtype)                                    # (B,N,C,k)
+
+        if self.norm:
+            # L2-normalize each side's per-(node, channel) anchor vector, then let
+            # ONE per-head gain carry the magnitude. Cauchy-Schwarz then bounds
+            # |b| <= C * max|gamma| — a hard bound, unlike the unnormalized form
+            # whose only bound was C*max|F|*max|G| and which measured |b|max = 9-240
+            # against O(1-10) attention logits (`landmark/README.md` §8).
+            # This is MIXED_BIAS.md §5.8's remedy: normalize the FACTORS, not the
+            # tables, so the bias is degree-0 in table scale and degree-1 in gamma.
+            q = (F.normalize(q, dim=-1, eps=1e-6)
+                 * (self.gain_scale * self.gain).view(1, -1, 1, 1, 1))
+            kk = F.normalize(kk, dim=-1, eps=1e-6)
+            # k_val is not needed here: normalizing over the anchor axis already
+            # removes the k-dependence that 1/k_val existed to remove.
+        else:
+            q = q / k_val.view(B, 1, 1, 1, 1).to(q.dtype)
+
+        q = q.reshape(B, -1, N, C * k)                                 # (B,H,N,Ck)
+        kk = kk.reshape(B, N, C * k)                                   # (B,N,Ck)
+        return q.to(dtype), kk.to(dtype)
+
+    def structural_factors(self, landmark: torch.Tensor, dtype=torch.float32):
+        """``(Q_pos, K_pos)`` with ``b^(h)(u,v) = <Q_pos[b,h,u,:], K_pos[b,v,:]>``.
+
+        Not used by ``forward`` (which stays dense, so a measured quality delta is
+        attributable to the math and not to an implementation). It exists so the
+        equivalence can be tested in fp64 before the fused backbone is built —
+        LINEAR_BIAS.md §7. With the default ``bias_self_node=False`` this
+        reproduces the bias off the diagonal only; an inner product cannot express
+        the zeroing, which is why every landmark arm runs with the flag ON.
+        """
+        return self._factors(landmark, dtype)
+
+    def forward(self, *, dtype, device, landmark=None, **kwargs) -> Optional[torch.Tensor]:
+        if landmark is None:
+            return None
+        q, k = self._factors(landmark, dtype)
+        b = torch.einsum('bhnc,bmc->bnmh', q, k)                       # (B,N,N,H)
+        return finalize_node_bias(b, device, self.bias_self_node)
+
+
 BIAS_TYPES: list[type[BaseBias]] = [
     SPDBias,
+    LandmarkBias,
     LaplacianBias,
     RWSEBias,
     RRWPBias,
@@ -1262,6 +1448,9 @@ class GraphAttentionBias(nn.Module):
     @property
     def require_magnetic_content(self) -> bool: return 'magnetic_content' in self._active
 
+    @property
+    def require_landmark(self) -> bool:   return 'landmark'  in self._active
+
     # ── Forward ───────────────────────────────────────────────────────────────
 
     def forward(
@@ -1274,6 +1463,7 @@ class GraphAttentionBias(nn.Module):
         rwse:        Optional[torch.Tensor]                           = None,
         rrwp:        Optional[torch.Tensor]                           = None,
         magnetic:    Optional[Tuple[torch.Tensor, torch.Tensor]]      = None,
+        landmark:    Optional[torch.Tensor]                           = None,
         hidden_states: Optional[torch.Tensor]                         = None,
         node_start_indices: Optional[torch.Tensor]                    = None,
         pair_features: Optional[torch.Tensor]                         = None,
@@ -1298,7 +1488,7 @@ class GraphAttentionBias(nn.Module):
             b = module(
                 dtype=dtype, device=device,
                 num_nodes=num_nodes, spd=spd, laplacian=laplacian,
-                rwse=rwse, rrwp=rrwp, magnetic=magnetic,
+                rwse=rwse, rrwp=rrwp, magnetic=magnetic, landmark=landmark,
                 hidden_states=hidden_states, node_start_indices=node_start_indices,
                 pair_features=pair_features,
             )

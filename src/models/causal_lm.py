@@ -205,6 +205,7 @@ class GraphCausalLMMixin:
         rrwp: Optional[torch.Tensor] = None,
         magnetic_V: Optional[torch.Tensor] = None,
         magnetic_lambdas: Optional[torch.Tensor] = None,
+        landmark: Optional[torch.Tensor] = None,
         k_hop_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
@@ -296,6 +297,9 @@ class GraphCausalLMMixin:
             "rwse": rwse,
             "rrwp": rrwp,
             "magnetic": magnetic,
+            # (B, N, 3, k) integer anchor coordinates. Deliberately NOT run through
+            # _to_dtype: it is an index tensor, and LandmarkBias gathers with it.
+            "landmark": landmark,
         }
         # Shared bias: computed ONCE here — outside the (gradient-checkpointed)
         # decoder layers, so training saves its activations a single time and

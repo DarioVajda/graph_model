@@ -38,6 +38,14 @@ class GraphConfigMixin:
         magnetic_magnitude_repr_dim: int = 256,
         magnetic_gate_repr_dim: int = 256,
         magnetic_q: float = 0.25,
+        landmark: bool = False,
+        landmark_k: int = 32,
+        landmark_k_collate: int = 0,
+        landmark_d_max: int = 8,
+        landmark_tau: float = 2.0,
+        landmark_channels: int = 3,
+        landmark_norm: bool = True,
+        landmark_gain_scale: float = 1.0,
         bias_self_node: bool = False,
         k_hop: int = 0,
         k_hop_directed: bool = False,
@@ -162,6 +170,42 @@ class GraphConfigMixin:
         # is magnetic_dim by construction and never reaches attention.
         self.magnetic_gate_repr_dim = magnetic_gate_repr_dim
         self.magnetic_q = magnetic_q
+        # Landmark anchor-coordinate bias (LandmarkBias, see biases/LANDMARK_BIAS.md).
+        # Consumes a `landmark` (B,N,3,k) integer feature — a different column from
+        # every magnetic arm, so it is NOT part of the `placements` exclusivity rule
+        # below and may run in tandem with one of them. That is deliberate: the
+        # tandem is the experiment.
+        #   landmark_k          — anchors stored in the dataset (the built value).
+        #   landmark_k_collate  — prefix slice applied at collate. Anchors are stored
+        #                         round-robin across weakly connected components, so a
+        #                         prefix keeps every component covered; this is what
+        #                         keeps the k-sweep OFF the dataset cache key, exactly
+        #                         as magnetic_m_collate does for M.
+        #   landmark_channels   — 3 (with the undirected block) or 2 (directed only,
+        #                         the ablation that prices it).
+        self.landmark = landmark
+        self.landmark_k = landmark_k
+        if landmark_k_collate and landmark_k_collate > landmark_k:
+            raise ValueError(
+                f"landmark_k_collate={landmark_k_collate} exceeds the built "
+                f"landmark_k={landmark_k}; a slice cannot invent anchors.")
+        self.landmark_k_collate = landmark_k_collate
+        self.landmark_d_max = landmark_d_max
+        self.landmark_tau = landmark_tau
+        if landmark_channels not in (2, 3):
+            raise ValueError(
+                f"landmark_channels must be 2 or 3; got {landmark_channels}.")
+        self.landmark_channels = landmark_channels
+        # Normalize the per-(node, channel) factors and carry magnitude in a
+        # per-head gain (MIXED_BIAS.md §5.8). Default ON: the unnormalized form
+        # measured |b|max = 9-240 against O(1-10) attention logits and scored
+        # BELOW the no-bias floor. False reproduces sweep 040 exactly.
+        self.landmark_norm = landmark_norm
+        # Fixed multiplier on the landmark per-head gain. Exists because the
+        # trainer gives ALL bias parameters one shared `bias_lr`, and |b| grows
+        # ~ gain_scale * bias_lr * steps, so a tandem arm can only put landmark
+        # and magnetic_linear at different effective magnitudes through this.
+        self.landmark_gain_scale = landmark_gain_scale
         # Keep the intra-node diagonal b_ii instead of zeroing it (see
         # MagneticBias._finalize / LINEAR_BIAS.md §7.3). Applies to the magnetic
         # family and RRWP. Default False = today's behaviour, bit-for-bit.

@@ -227,6 +227,7 @@ def compute_node_bias(
             rwse=feats["rwse"],
             rrwp=feats["rrwp"],
             magnetic=feats["magnetic"],
+            landmark=feats["landmark"],
             # magnetic_content: the live residual-stream hidden state of this
             # layer, stashed on the attention module by a forward pre-hook (see
             # GraphCausalLMMixin). None for every other bias type. Read inside the
