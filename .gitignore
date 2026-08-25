@@ -26,3 +26,5 @@ CLAUDE_CONTEXT.md
 *.egg-info/
 build/
 dist/
+
+CLAUDE.md
