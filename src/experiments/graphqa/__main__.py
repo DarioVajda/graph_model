@@ -207,6 +207,44 @@ def build_parser():
     p.add_argument("--laplacian", action=B, default=d.laplacian)
     p.add_argument("--rwse", action=B, default=d.rwse)
 
+    # ── landmark (src/models/biases/LANDMARK_BIAS.md) ─────────────────────────
+    p.add_argument("--landmark", action=B, default=d.landmark,
+                   help="anchor-distance factorized bias. Reads the `landmark` "
+                        "column, which is added to an existing cache in place by "
+                        "bias_experiments/landmark/add_landmark_column.py — so it "
+                        "is outside the cache key and shares the standard build.")
+    p.add_argument("--landmark-k", type=int, default=d.landmark_k,
+                   help="anchors stored in the column. GraphQA graphs average "
+                        "12.9 nodes, so k=16 already makes nearly every node an "
+                        "anchor (measured anchors_mean 12.2, oracle exact on "
+                        "99.5%% of pairs).")
+    p.add_argument("--landmark-k-collate", type=int, default=d.landmark_k_collate,
+                   help="collator-only prefix slice of the anchor axis (0 = use "
+                        "all stored). Anchors are emitted round-robin across "
+                        "components, so a prefix is a valid smaller-k selection "
+                        "and a k-sweep reuses one build.")
+    p.add_argument("--landmark-d-max", type=int, default=d.landmark_d_max,
+                   help="largest distance with its own table row; above it "
+                        "clamps. GraphQA pairs reach 9, so 8 clamps a negligible "
+                        "tail while keeping the table identical to WebQSP's.")
+    p.add_argument("--landmark-tau", type=float, default=d.landmark_tau,
+                   help="F/G init = exp(-d/tau).")
+    p.add_argument("--landmark-channels", type=int, default=d.landmark_channels,
+                   choices=(2, 3),
+                   help="3 = directed pair + undirected block; 2 = directed only, "
+                        "the ablation that prices the undirected channel.")
+    p.add_argument("--landmark-norm", action=B, default=d.landmark_norm,
+                   help="normalize the per-(node,channel) factors and carry the "
+                        "magnitude in a per-head gain. Default on; the "
+                        "unnormalized form is degree-2 in the learned parameters "
+                        "and ran away on WebQSP (landmark/README.md §8).")
+    p.add_argument("--landmark-gain-scale", type=float, default=d.landmark_gain_scale,
+                   help="fixed multiplier on the per-head gain. The trainer gives "
+                        "every bias parameter one shared --bias-lr, and "
+                        "|b| ~ gain_scale * bias_lr * steps, so this is how a "
+                        "tandem arm runs landmark and magnetic at different "
+                        "effective magnitudes.")
+
     # ── dataset ────────────────────────────────────────────────────────────────
     p.add_argument("--max-length", type=int, default=d.max_length,
                    help="per-node token cap (a data-prep knob).")
@@ -272,6 +310,12 @@ def config_from_args(args):
         magnetic_q=args.magnetic_q, magnetic_m=args.magnetic_m,
         magnetic_m_collate=args.magnetic_m_collate,
         laplacian=args.laplacian, rwse=args.rwse,
+        landmark=args.landmark, landmark_k=args.landmark_k,
+        landmark_k_collate=args.landmark_k_collate,
+        landmark_d_max=args.landmark_d_max, landmark_tau=args.landmark_tau,
+        landmark_channels=args.landmark_channels,
+        landmark_norm=args.landmark_norm,
+        landmark_gain_scale=args.landmark_gain_scale,
         max_length=args.max_length, val_fraction=args.val_fraction, use_gpu=args.use_gpu,
         lora=args.lora, lora_r=args.lora_r, lora_dropout=args.lora_dropout,
         num_epochs=args.num_epochs, batch_size=args.batch_size,

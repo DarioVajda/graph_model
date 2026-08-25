@@ -308,6 +308,38 @@ def build_parser():
                         "(0 = follow --magnetic-m). NOT in the data cache key, so "
                         "the whole M-grid reuses one build; truncating the stored "
                         "eigenvectors by prefix is bit-identical to building at M.")
+    p.add_argument("--landmark", action=B, default=d.landmark,
+                   help="landmark anchor-coordinate bias (biases/LANDMARK_BIAS.md). "
+                        "Needs the `landmark` column: add it to an existing cache "
+                        "with bias_experiments/landmark/add_landmark_column.py. "
+                        "NOT in the data cache key.")
+    p.add_argument("--landmark-k", type=int, default=d.landmark_k,
+                   help="anchors stored in the column (the built value).")
+    p.add_argument("--landmark-k-collate", type=int, default=d.landmark_k_collate,
+                   help="collator-side prefix slice for the k-sweep (0 = use all "
+                        "stored). Anchors are stored round-robin across components, "
+                        "so a prefix keeps every component covered.")
+    p.add_argument("--landmark-d-max", type=int, default=d.landmark_d_max,
+                   help="distance clip. 8 is measured, not assumed: 99.999%% of "
+                        "finite WebQSP anchor distances are <= 8.")
+    p.add_argument("--landmark-tau", type=float, default=d.landmark_tau)
+    p.add_argument("--landmark-channels", type=int, default=d.landmark_channels,
+                   choices=(2, 3),
+                   help="3 = directed pair + undirected block; 2 = directed only, "
+                        "the ablation that prices the undirected channel.")
+    p.add_argument("--landmark-gain-scale", type=float, default=d.landmark_gain_scale,
+                   help="fixed multiplier on the landmark per-head gain. The "
+                        "trainer gives every bias parameter one shared --bias-lr, "
+                        "and |b| ~ gain_scale * bias_lr * steps, so this is the "
+                        "only way a tandem arm can run landmark and "
+                        "magnetic_linear at different effective magnitudes: set "
+                        "bias_lr to magnetic's optimum and gain_scale to "
+                        "lr_landmark/lr_magnetic.")
+    p.add_argument("--landmark-norm", action=B, default=d.landmark_norm,
+                   help="normalize the per-(node,channel) factors and carry the "
+                        "magnitude in a per-head gain. Default on; --no-landmark-norm "
+                        "reproduces sweep 040, whose bias reached |b|=9-240 against "
+                        "O(1-10) logits and scored below the no-bias floor.")
     p.add_argument("--rrwp", action=B, default=d.rrwp,
                    help="relative random-walk-probability bias (data prep + model). "
                         "Adds an (n, n, --max-rw-steps) float32 column: ~45 GB for a "
@@ -412,6 +444,12 @@ def config_from_args(args):
         magnetic_nonlinear=args.magnetic_nonlinear,
         magnetic_struct_dim=args.magnetic_struct_dim,
         magnetic_pool=args.magnetic_pool,
+        landmark=args.landmark, landmark_k=args.landmark_k,
+        landmark_k_collate=args.landmark_k_collate,
+        landmark_d_max=args.landmark_d_max, landmark_tau=args.landmark_tau,
+        landmark_channels=args.landmark_channels,
+        landmark_norm=args.landmark_norm,
+        landmark_gain_scale=args.landmark_gain_scale,
         magnetic_magnitude_dim=args.magnetic_magnitude_dim,
         magnetic_magnitude_repr_dim=args.magnetic_magnitude_repr_dim,
         bias_self_node=args.bias_self_node,

@@ -226,6 +226,21 @@ class RunConfig:
     laplacian: bool = False                     # unwired (see UNWIRED_FEATURES)
     rwse: bool = False                          # unwired
 
+    # ── landmark (anchor-distance factorized bias; src/models/biases/LANDMARK_BIAS.md)
+    # The `landmark` column is added to an EXISTING cache in place by
+    # `bias_experiments/landmark/add_landmark_column.py`, because it is a pure
+    # function of the stored topology. It is therefore NOT part of the cache key:
+    # a landmark run reads the same cache directory as every other GraphQA arm,
+    # which is what makes 013/017's controls reusable against it.
+    landmark: bool = False
+    landmark_k: int = 16                      # anchors stored in the column
+    landmark_k_collate: int = 0               # prefix slice; 0 = use all stored
+    landmark_d_max: int = 8                   # GraphQA pairs top out at 9; see 045
+    landmark_tau: float = 2.0                 # F/G init = exp(-d/tau)
+    landmark_channels: int = 3                # 3 = with undirected; 2 = ablation
+    landmark_norm: bool = True                # normalize factors + per-head gain
+    landmark_gain_scale: float = 1.0          # fixed gain multiplier (tandem knob)
+
     # ── dataset ────────────────────────────────────────────────────────────────
     max_length: int = 1024                      # per-node tokenization cap
     # Fallback val size for the tasks with no official validation split; ignored for
@@ -366,6 +381,17 @@ class RunConfig:
                        magnetic_q=self.magnetic_q,
                        magnetic_struct_dim=self.magnetic_struct_dim,
                        magnetic_pool=self.magnetic_pool)
+        if self.landmark:
+            # Its own `if`, deliberately NOT another branch of the magnetic
+            # if/elif chain: landmark reads a different column and composes with
+            # magnetic rather than replacing it, which is what the tandem arm needs.
+            cfg.update(landmark=True, landmark_k=self.landmark_k,
+                       landmark_k_collate=self.landmark_k_collate,
+                       landmark_d_max=self.landmark_d_max,
+                       landmark_tau=self.landmark_tau,
+                       landmark_channels=self.landmark_channels,
+                       landmark_norm=self.landmark_norm,
+                       landmark_gain_scale=self.landmark_gain_scale)
         if self.bias_self_node:
             # Model-side only; it does not touch feature generation or the cache key.
             cfg.update(bias_self_node=True)
@@ -377,6 +403,12 @@ class RunConfig:
         # whichever bias is active rather than replacing it, and appending keeps
         # every existing label byte-identical while it is off (the default).
         self_node = "+selfnode" if self.bias_self_node else ""
+        # Landmark is not in WIRED_FEATURES (it rides an added column, not the
+        # builder), so without this a landmark-only arm reports as
+        # "no-spd+no-magnetic+no-rrwp" — the label of the arm with NO graph bias
+        # at all. That is the one thing it must never be confused with, since the
+        # no-bias floor is its comparator.
+        lm = "+landmark" if self.landmark else ""
         off = [f for f in WIRED_FEATURES if not getattr(self, f)]
         head = ("mag-linear" if self.magnetic_linear else
                 "mag-hybrid" if self.magnetic_hybrid else
@@ -390,10 +422,14 @@ class RunConfig:
             # must never be confused with.
             off = [f for f in off if f != "magnetic"]
             tag = head if not off else head + "+no-" + "+".join(off)
-            return tag + self_node
+            return tag + lm + self_node
+        if self.landmark and len(off) == len(WIRED_FEATURES):
+            # Landmark alone: name it for what it is rather than for the three
+            # things it is not.
+            return "landmark" + self_node
         if not off:
-            return "base" + self_node
-        return "no-" + "+".join(off) + self_node
+            return "base" + lm + self_node
+        return "no-" + "+".join(off) + lm + self_node
 
     def uses_default_cache(self):
         """True when this config's feature settings match the built-on-disk cache."""
@@ -511,10 +547,38 @@ class RunConfig:
                     "self-distance 0), so with spd=True the flag would apply to only "
                     "some of the active biases. Drop spd from this arm — the "
                     "factorization cannot express SPD anyway (LINEAR_BIAS.md §3).")
-            if not (self.uses_magnetic or self.rrwp):
+            if not (self.uses_magnetic or self.rrwp or self.landmark):
                 raise ValueError(
                     "bias_self_node is set but no bias with a diagonal is enabled; it "
                     "would silently do nothing.")
+
+        if self.landmark_k_collate:
+            if not self.landmark:
+                raise ValueError(
+                    f"landmark_k_collate={self.landmark_k_collate} set with "
+                    "landmark=False — it would silently do nothing.")
+            if self.landmark_k_collate > self.landmark_k:
+                raise ValueError(
+                    f"landmark_k_collate={self.landmark_k_collate} exceeds the built "
+                    f"landmark_k={self.landmark_k}; the collator can only truncate "
+                    "what the column stores, so this would silently fall back to the "
+                    "smaller value and mislabel the run.")
+        if self.landmark_gain_scale != 1.0:
+            # Every way this flag can be a no-op is a way to produce a
+            # clean-looking negative from a run that never applied it.
+            if not self.landmark:
+                raise ValueError(
+                    f"landmark_gain_scale={self.landmark_gain_scale:g} set with "
+                    "landmark=False — it would silently do nothing.")
+            if not self.landmark_norm:
+                raise ValueError(
+                    f"landmark_gain_scale={self.landmark_gain_scale:g} requires "
+                    "landmark_norm=True: the gain only exists in the normalized "
+                    "form, so under --no-landmark-norm this scales nothing.")
+            if self.landmark_gain_scale <= 0:
+                raise ValueError(
+                    f"landmark_gain_scale must be > 0; got "
+                    f"{self.landmark_gain_scale:g}.")
 
         if self.lora_r < 0:
             raise ValueError("lora_r must be >= 0.")

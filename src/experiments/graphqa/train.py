@@ -57,6 +57,18 @@ def _save_train_record(cfg, run_name, sizes, results, runs_jsonl, sweep_meta=Non
         "magnetic_struct_dim": cfg.magnetic_struct_dim,
         "magnetic_pool": cfg.magnetic_pool,
         "magnetic_m_collate": cfg.collate_magnetic_m,
+        # The landmark arm's identity. `landmark_k_collate` in particular is the
+        # ONLY thing distinguishing the cells of a k-sweep: without it every k
+        # lands in one indistinguishable bucket and the dimension sweep collapses
+        # to a single point at the REPORTING layer, which looks exactly like a
+        # flat scaling curve rather than like missing data.
+        "landmark": cfg.landmark,
+        "landmark_k": cfg.landmark_k,
+        "landmark_k_collate": cfg.landmark_k_collate or cfg.landmark_k,
+        "landmark_d_max": cfg.landmark_d_max,
+        "landmark_channels": cfg.landmark_channels,
+        "landmark_norm": cfg.landmark_norm,
+        "landmark_gain_scale": cfg.landmark_gain_scale,
         "bias_self_node": cfg.bias_self_node,
         "seed": cfg.seed,
         # ── hyperparameters ──
@@ -131,10 +143,14 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None):
     # The collator's eigenvector cap (0 -> keep all, which is what the cached
     # datasets store); it is NOT the model's magnetic_dim. Gated on `uses_magnetic`,
     # not `magnetic`, so the linear arm is fed the same eigenvectors.
+    # `landmark_required` makes a missing column a hard error rather than a
+    # silently bias-free run: the landmark column is added to caches out of band,
+    # so "the cache predates the column" is a real and otherwise invisible state.
     collator = GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
         magnetic_m=cfg.collate_magnetic_m,
-        pad_to_block=(cfg.backend() == "flex"), max_spd=cfg.max_spd)
+        pad_to_block=(cfg.backend() == "flex"), max_spd=cfg.max_spd,
+        landmark_d_max=cfg.landmark_d_max, landmark_required=cfg.landmark)
 
     steps_per_epoch = max(1, len(train_dataset) // cfg.batch_size // cfg.accumulation_steps)
     gc = cfg.gradient_checkpointing

@@ -109,7 +109,8 @@ class GraphCollatorV2:
                  k_hop_directed: bool = False, magnetic_m: int = 0,
                  pad_to_block: bool = False, block_size: int = 128,
                  len_buckets=None, node_buckets=None,
-                 node_position_mode: str = "reset", max_spd: int = 64):
+                 node_position_mode: str = "reset", max_spd: int = 64,
+                 landmark_d_max: int = 8, landmark_required: bool = False):
         """
         Args:
             tokenizer:   Optional tokenizer; used only to source ``pad_token_id``.
@@ -176,6 +177,15 @@ class GraphCollatorV2:
         self.node_buckets   = node_buckets if node_buckets is not None else default_node_buckets
         self.node_position_mode = node_position_mode
         self.max_spd        = max_spd
+        # PAD symbol for the landmark block: the alphabet is {0..d_max}, UNREACH
+        # (d_max+1), PAD (d_max+2). Must match the value the dataset column was
+        # built with — `landmark_d_max` is part of that column, not a free knob.
+        self.landmark_d_max = landmark_d_max
+        # A cache built before the landmark column existed yields items with no
+        # 'landmark' key, LandmarkBias then returns None, and the run trains
+        # cleanly with NO bias at all — the exact silent-negative this repo has
+        # been bitten by (see config.py's gate warnings). Refuse instead.
+        self.landmark_required = landmark_required
 
         if pad_token_id is not None:
             self.pad_token_id = pad_token_id
@@ -358,6 +368,26 @@ class GraphCollatorV2:
         magnetic_lambdas = torch.zeros(B, max_m, dtype=torch.float)
         any_magnetic = False
 
+        # Landmark anchor coordinates (B, n_pad, 3, k), integer symbols. Padded
+        # NODES and padded ANCHOR slots both take the PAD symbol, which LandmarkBias
+        # maps to a zero table row — so padding contributes exactly 0 rather than a
+        # spurious distance. PAD is d_max+2 and lives in the stored column already;
+        # here the only pad written is for node slots beyond num_nodes.
+        lm_k = max((item['landmark'].shape[-1]
+                    for item in batch if item.get('landmark') is not None),
+                   default=0)
+        if self.landmark_required and lm_k == 0:
+            raise ValueError(
+                "landmark bias is enabled but no item carries a 'landmark' column. "
+                "Add it to the cache in place:\n  python -m "
+                "src.experiments.bias_experiments.landmark.add_landmark_column "
+                "--roots <processed_datasets>/<cache>\n"
+                "Refusing to train an unbiased run that would read as a clean null.")
+        landmark, any_landmark = None, False
+        if lm_k:
+            pad_sym = self.landmark_d_max + 2
+            landmark = torch.full((B, n_pad, 3, lm_k), pad_sym, dtype=torch.long)
+
         for i, item in enumerate(batch):
             n = item['num_nodes']
             if "laplacian_coordinates" in item:
@@ -375,6 +405,10 @@ class GraphCollatorV2:
                 magnetic_V[i, :n, :m_eff, :] = item['magnetic_V'][:, :m_eff, :].detach().clone()
                 magnetic_lambdas[i, :m_eff]  = item['magnetic_lambdas'][:m_eff].detach().clone()
                 any_magnetic = True
+            if landmark is not None and item.get("landmark") is not None:
+                lm = item['landmark']
+                landmark[i, :n, :, :lm.shape[-1]] = lm.detach().clone()
+                any_landmark = True
 
         return {
             'laplacian_coordinates': laplacian_coordinates,
@@ -383,4 +417,5 @@ class GraphCollatorV2:
             'rrwp': rrwp,
             'magnetic_V': magnetic_V if any_magnetic else None,
             'magnetic_lambdas': magnetic_lambdas if any_magnetic else None,
+            'landmark': landmark if any_landmark else None,
         }

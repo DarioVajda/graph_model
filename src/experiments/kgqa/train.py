@@ -107,6 +107,16 @@ def _save_train_record(cfg, run_name, dev_metrics, test_metrics,
         "magnetic_struct_dim": cfg.magnetic_struct_dim,
         "magnetic_pool": cfg.magnetic_pool,
         "magnetic_m_collate": cfg.collate_magnetic_m,
+        "landmark": cfg.landmark,
+        "landmark_k": cfg.landmark_k,
+        "landmark_k_collate": cfg.landmark_k_collate,
+        "landmark_channels": cfg.landmark_channels,
+        # `landmark_norm` distinguishes two DIFFERENT models — one with a
+        # Cauchy-Schwarz bound on |b| and one provably without (sweep 040's
+        # runaway). Unrecorded, the analysis cannot separate them and would pool
+        # 040 into 042/043's cells, averaging the defect into the fix.
+        "landmark_norm": cfg.landmark_norm,
+        "landmark_gain_scale": cfg.landmark_gain_scale,
         "bias_self_node": cfg.bias_self_node,
         "data_format_version": cfg.data_format_version,
         "cvt_collapse": cfg.resolved_cvt_collapse("graph"),
@@ -184,12 +194,14 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None, resume=Fa
     train_collator = GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
         magnetic_m=magnetic_m, pad_to_block=(cfg.graph_attn_impl == "flex"),
-        node_position_mode=cfg.node_position_mode, max_spd=cfg.max_spd)
+        node_position_mode=cfg.node_position_mode, max_spd=cfg.max_spd,
+        landmark_d_max=cfg.landmark_d_max, landmark_required=cfg.landmark)
     # Generation runs the dense decode path; keep its collator unbucketed.
     gen_collator = GraphCollatorV2(
         tokenizer=tokenizer, k_hop=cfg.k_hop, k_hop_directed=cfg.k_hop_directed,
         magnetic_m=magnetic_m, pad_to_block=False,
-        node_position_mode=cfg.node_position_mode, max_spd=cfg.max_spd)
+        node_position_mode=cfg.node_position_mode, max_spd=cfg.max_spd,
+        landmark_d_max=cfg.landmark_d_max, landmark_required=cfg.landmark)
 
     active_params = list(cfg.active_params)
     model = select_active_params(model, active_params=active_params, lora=cfg.lora_config())

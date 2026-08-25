@@ -251,6 +251,20 @@ class RunConfig:
     # reuses the same build as every other arm. Not compatible with spd (the SPD
     # lookup has no self-distance row; the model config raises).
     bias_self_node: bool = False
+    # ── Landmark anchor-coordinate bias (biases/LANDMARK_BIAS.md) ───────────
+    # The `landmark` column is added to an EXISTING cache in place by
+    # `bias_experiments/landmark/add_landmark_column.py`, because it is a pure
+    # function of the stored topology and rebuilding a 3.5 GB cache to obtain an
+    # O(k(N+E)) feature would be absurd. It is therefore deliberately OUT of
+    # data_config_key() — like magnetic_m_collate, and for the same reason.
+    landmark: bool = False
+    landmark_k: int = 32                      # anchors stored in the column
+    landmark_k_collate: int = 0               # prefix slice; 0 = use all stored
+    landmark_d_max: int = 8                   # measured: 99.999% of WebQSP <= 8
+    landmark_tau: float = 2.0                 # F init = exp(-d/tau)
+    landmark_channels: int = 3                # 3 = with undirected; 2 = ablation
+    landmark_norm: bool = True                # normalize factors + per-head gain
+    landmark_gain_scale: float = 1.0          # fixed gain multiplier; see below
     # RRWP (Relative Random Walk Probabilities) — the third encoding of the
     # paper's SPD+RRWP+MagLap suite, absent from the KGQA arm until now. It was
     # dropped here for storage: the column is (n, n, max_rw_steps) float32 per
@@ -486,6 +500,14 @@ class RunConfig:
             # max_rw_steps is the RRWPBias MLP's INPUT width, so it must equal the
             # stored column's last dim — data prep and model read the same field.
             cfg.update(rrwp=True, max_rw_steps=self.max_rw_steps)
+        if self.landmark:
+            cfg.update(landmark=True, landmark_k=self.landmark_k,
+                       landmark_k_collate=self.landmark_k_collate,
+                       landmark_d_max=self.landmark_d_max,
+                       landmark_tau=self.landmark_tau,
+                       landmark_channels=self.landmark_channels,
+                       landmark_norm=self.landmark_norm,
+                       landmark_gain_scale=self.landmark_gain_scale)
         if self.bias_self_node:
             # Model-side only: it changes what the bias EMITS on the diagonal, not
             # what the dataset stores, so it is out of data_config_key().
@@ -682,6 +704,25 @@ class RunConfig:
                     f"magnetic_m={self.magnetic_m}; the collator can only truncate what the "
                     "dataset stores, so this would silently fall back to the smaller value "
                     "and mislabel the run.")
+        if self.landmark_gain_scale != 1.0:
+            # Every way this flag can be a no-op is a way to produce a clean-looking
+            # negative from a run that never applied it.
+            if not self.landmark:
+                raise ValueError(
+                    f"landmark_gain_scale={self.landmark_gain_scale:g} set with "
+                    "landmark=False — it would silently do nothing.")
+            if not self.landmark_norm:
+                raise ValueError(
+                    f"landmark_gain_scale={self.landmark_gain_scale:g} requires "
+                    "landmark_norm=True: the gain only exists in the normalized "
+                    "form, so under --no-landmark-norm this scales nothing.")
+            if self.landmark_gain_scale <= 0:
+                raise ValueError(
+                    f"landmark_gain_scale must be > 0; got "
+                    f"{self.landmark_gain_scale:g}. Zero would pin the bias at "
+                    "exactly 0 with no gradient path back (a dead arm that trains "
+                    "and scores like the floor); negative just reflects the "
+                    "gain, which the sign of a free parameter already covers.")
         if self.bias_self_node:
             # Fail here rather than in the model config: this is the layer that can
             # name the offending flag combination in the run's own vocabulary.
@@ -691,7 +732,7 @@ class RunConfig:
                     "self-distance 0), so with spd=True the flag would apply to only "
                     "some of the active biases. Drop spd from this arm — the "
                     "factorization cannot express SPD anyway (LINEAR_BIAS.md §3).")
-            if not (self.uses_magnetic or self.rrwp):
+            if not (self.uses_magnetic or self.rrwp or self.landmark):
                 raise ValueError(
                     "bias_self_node is set but no bias with a diagonal is enabled; it "
                     "would silently do nothing.")

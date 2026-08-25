@@ -154,7 +154,7 @@ class TextGraphDataset(Dataset):
         """
         node_indexed = {
             "input_ids", "laplacian_coordinates", "shortest_path_dists",
-            "rwse", "rrwp", "magnetic_V",
+            "rwse", "rrwp", "magnetic_V", "landmark",
         }
         present = node_indexed & set(self._hf_dataset.column_names)
         if present:
@@ -271,6 +271,17 @@ class TextGraphDataset(Dataset):
                     item['shortest_path_dists'] = flat_spd.reshape((n, n))
                 else:
                     item['shortest_path_dists'] = torch.zeros((n,n))
+
+        # Handle Landmark anchor coordinates (flat -> (n, 3, k))
+        if 'landmark' in item and item['landmark'] is not None:
+            n = item['num_nodes']
+            flat = item['landmark']
+            if len(flat) == 0:
+                item['landmark'] = None
+            else:
+                k = len(flat) // (n * 3)
+                item['landmark'] = torch.tensor(
+                    flat, dtype=torch.long).reshape((n, 3, k))
 
         # Handle RWSE (Convert list back to torch tensor)
         if 'rwse' in item and item['rwse'] is not None:
