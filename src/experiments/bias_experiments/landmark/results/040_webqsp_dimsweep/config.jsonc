@@ -1,0 +1,132 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 040 — the structural-dimension scaling law, for BOTH factorized bias types.
+  //
+  // The question this sweep exists to answer is not "does landmark beat
+  // magnetic_linear". It is "how does each one's quality scale with the head
+  // width it costs", because head width is the currency the deferred fused
+  // backbone actually spends (LINEAR_BIAS.md §2.6) and because the 128-dim
+  // allocation in the follow-up sweep has to be read off these two curves.
+  //
+  // ── the dimension axis is MATCHED, not each type's native knob ────────────
+  // magnetic_linear appends 2M dims (M = magnetic_m); landmark appends 3k (three
+  // channels x k anchors). Sweeping M and k at their own natural values would
+  // compare two curves on different x-axes. The grid is therefore in DIMS:
+  //
+  //     dims 24  ->  magnetic_m_collate 12   |  landmark_k_collate  8
+  //     dims 48  ->  magnetic_m_collate 24   |  landmark_k_collate 16
+  //     dims 96  ->  magnetic_m_collate 48   |  landmark_k_collate 32
+  //
+  // 96 is the largest landmark point the stored column supports (built k=32) and
+  // sits just under the 128 budget, so the follow-up extrapolates over a short
+  // interval rather than off the end of the measured range.
+  //
+  // ── bias_self_node is ON for every biased arm, and that is forced ─────────
+  // Neither bias can express the intra-node diagonal zeroing: an inner product
+  // gives <q_i, k_i> and there is nothing to subtract it with. Unmasked is the
+  // only configuration the factorized backbone can run, so it is the only
+  // configuration worth measuring here. linear_bias Phase 3 established the mask
+  // is NOT a free choice (WebQSP: penalty 15.4% -> 5.6% of headroom when
+  // unmasked), which is exactly why both arms are measured unmasked rather than
+  // compared against 010's masked numbers.
+  //
+  // ── bias_lr is swept per arm, not shared ─────────────────────────────────
+  // linear_bias Conclusion 5: the linear head wanted ~4x the MLP head's LR, and
+  // "any B-vs-C comparison at one shared LR prices optimization, not math".
+  // landmark's head is a different shape again (~18k params of lookup table vs
+  // magnetic_linear's dense projection), so both arms get the same two-point
+  // bracket and the better one is read per arm.
+  //
+  // ── floor ────────────────────────────────────────────────────────────────
+  // `none` is included as a within-sweep denominator measured on the same
+  // cluster in the same week. bias_self_node must be false there — with no bias
+  // there is no diagonal, and the validator rejects the flag.
+  //
+  // 2 types x 3 dims x 2 bias_lr x 2 seeds = 24, + 2 floor runs = 26 runs.
+  // ~2.8 GPU-h each (sacct, 010) = ~73 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_experiments/landmark/configs/040_webqsp_dimsweep.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/landmark/results/040_webqsp_dimsweep
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "040_webqsp_dimsweep",
+  "results_dir": "src/experiments/bias_experiments/landmark/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 13,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "seed": [0, 1],
+  "bias_lr": [5e-3, 2e-2],
+
+  // A BUNDLE: one object per (bias type, dim) cell. The knobs ride together so
+  // no run can be generated with, say, landmark_k_collate set and landmark off —
+  // the validator rejects that, and a crossed axis would hit it constantly.
+  "arm": [
+    {"magnetic_linear": true,  "landmark": false, "magnetic_m_collate": 12, "landmark_k_collate": 0,  "bias_self_node": true},
+    {"magnetic_linear": true,  "landmark": false, "magnetic_m_collate": 24, "landmark_k_collate": 0,  "bias_self_node": true},
+    {"magnetic_linear": true,  "landmark": false, "magnetic_m_collate": 48, "landmark_k_collate": 0,  "bias_self_node": true},
+    {"magnetic_linear": false, "landmark": true,  "magnetic_m_collate": 0,  "landmark_k_collate": 8,  "bias_self_node": true},
+    {"magnetic_linear": false, "landmark": true,  "magnetic_m_collate": 0,  "landmark_k_collate": 16, "bias_self_node": true},
+    {"magnetic_linear": false, "landmark": true,  "magnetic_m_collate": 0,  "landmark_k_collate": 32, "bias_self_node": true}
+  ],
+
+  "landmark_k": 32,
+  "landmark_d_max": 8,
+  "landmark_channels": 3,
+
+  // ── 015_webqsp_selfnode's recipe, verbatim below this line ────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": false,
+  "magnetic": false,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

@@ -1,0 +1,125 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 044 — `magnetic_linear` at the SAME sub-bracket learning rates 043 gives
+  // landmark. This is the fairness control, and it exists so the step-6 budget
+  // split cannot be an artifact of having tuned one arm and not the other.
+  //
+  // ── why it is needed ─────────────────────────────────────────────────────
+  // 043 re-centres landmark's LR bracket on the evidence that landmark's optimum
+  // lies below it (README §9). Extending one arm's search and not the other's is
+  // exactly the asymmetry `linear_bias` Conclusion 5 warns about — "any B-vs-C
+  // comparison at one shared LR prices optimization, not math" — and it would
+  // bias the comparison toward landmark, the arm currently losing. Correcting an
+  // unfairness in the direction that flatters the hypothesis under test is not a
+  // correction, so magnetic gets the same treatment.
+  //
+  // ── why it is not the full 043 grid ──────────────────────────────────────
+  // 040 already measured magnetic's LR sensitivity, and it is nearly nil:
+  //
+  //     dims   F1 @ 5e-3   F1 @ 2e-2    delta    seed spread
+  //       24      0.6202      0.6161   -0.004          0.019
+  //       48      0.6565      0.6565    0.000          0.005
+  //       96      0.6825      0.6610   -0.021          0.002
+  //
+  // At 24 and 48 dims the 4x LR change is inside the seed spread — flat. Landmark
+  // moved 0.14 F1 over that same 4x. So magnetic is at a plateau and landmark is
+  // on a slope, which is what justifies extending landmark's bracket further; it
+  // is not licence to skip magnetic entirely.
+  //
+  // 96 dims is the exception and gets the full 2-LR probe: it is the only cell
+  // with a real LR effect (-0.021 against a 0.002 spread), it prefers the LOWER
+  // end, and — decisively — a 3:1 budget split of 128 dims puts magnetic at
+  // exactly 96. The number step 6 leans on hardest is the one showing sensitivity
+  // at the bracket edge.
+  //
+  // 24 and 48 dims get the midpoint LR only, enough to confirm the CURVE SHAPE
+  // does not reorder at the new scale. If it does, that is itself the finding and
+  // the grid gets filled in.
+  //
+  //   96 dims x 2 LRs x 2 seeds  = 4
+  //   {24,48} x 1e-3   x 2 seeds = 4
+  //   8 runs, ~2.8 GPU-h each = ~22 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_experiments/landmark/configs/044_webqsp_magnetic_lowlr.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "044_webqsp_magnetic_lowlr",
+  "results_dir": "src/experiments/bias_experiments/landmark/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 8,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // A bundle object's values are taken LITERALLY (a list inside a bundle is a
+  // list-valued parameter, not a nested axis), so the (dims, LR) pairs are
+  // enumerated. `seed` stays a top-level axis and multiplies through all four.
+  "bundles": [
+    // 96 dims — the cell the budget split leans on, both sub-bracket LRs.
+    { "magnetic_m_collate": 48, "bias_lr": 3e-4 },
+    { "magnetic_m_collate": 48, "bias_lr": 1e-3 },
+    // 24 and 48 dims — midpoint LR only, a curve-shape check.
+    { "magnetic_m_collate": 12, "bias_lr": 1e-3 },
+    { "magnetic_m_collate": 24, "bias_lr": 1e-3 }
+  ],
+
+  "seed": [0, 1],
+
+  "magnetic_linear": true,
+  "landmark": false,
+  "landmark_k_collate": 0,
+  "bias_self_node": true,
+
+  // ── 040/042/043's recipe, verbatim below this line ───────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": false,
+  "magnetic": false,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

@@ -1,0 +1,172 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 045 — the landmark arm on GraphQA, on the three subtasks every other bias
+  // experiment in this directory uses (`node_degree`, `shortest_path`,
+  // `edge_count`).
+  //
+  // ── why a second dataset, and why now ────────────────────────────────────
+  // On WebQSP landmark is losing to `magnetic_linear` on F1 while BEATING the
+  // no-bias floor on loss and EM (README §9). Two readings survive that: the bias
+  // carries real structure that WebQSP's generation metric does not reward, or it
+  // carries little and the EM gain is incidental. WebQSP cannot separate them,
+  // because it is one dataset with one metric family and a severe coverage limit
+  // — 94.4% of its node pairs have no directed path at all, so two of the three
+  // channels are silent almost everywhere.
+  //
+  // GraphQA is the opposite regime and that is the point of running it:
+  //
+  //     WebQSP                        GraphQA
+  //     ~500 nodes/graph              12.9 nodes/graph (measured, Phase 0)
+  //     1 weak component              1.81 components, 23.7% multi-component
+  //     94.4% pairs unreachable       16.7% directed-unreachable
+  //     free-generation F1            exact-answer accuracy
+  //
+  // The tasks are also directly about the structure landmark encodes, and the
+  // controls already exist at this exact recipe, so nothing has to be re-burned.
+  //
+  // ── the k axis, and the honest caveat on it ──────────────────────────────
+  // GraphQA graphs average 12.9 nodes, so k does NOT mean the same thing it means
+  // on WebQSP. Phase 0 measured, under the `degree` rule:
+  //
+  //     k     anchors_mean   oracle exact_frac
+  //     8         7.78            0.885-0.897
+  //    16        12.23            0.994-0.995
+  //    32        12.90            1.000
+  //
+  // At k=16 nearly every node is an anchor and the "landmark oracle" is no longer
+  // an approximation — it is the exact all-pairs distance matrix in factorized
+  // form. **On `shortest_path` that is close to encoding the label**, which is
+  // precisely why every GraphQA bias config here runs `spd: false` and takes its
+  // floor from 013 D's no-spd arm. So:
+  //
+  //   * k=4 and k=8 are the honest landmark cells — a genuine approximation, and
+  //     the ones any claim about the method must rest on;
+  //   * k=16 is a CEILING, reported as one. It answers "how much is in the exact
+  //     distance matrix at all", which is worth knowing and is not a method
+  //     result. On `shortest_path` specifically it must never be quoted as a win.
+  //
+  // ── bias_lr: the WebQSP bracket transfers here, for a reason ─────────────
+  // WebQSP showed bias_lr is landmark's MAGNITUDE knob, not a convergence knob:
+  // the per-head gain ramps, |gamma| ~ lr * steps (README §9). That makes the
+  // step COUNT part of the effective magnitude, and GraphQA has far fewer steps —
+  // ~1000 train rows at batch 4 x accum 8 x 20 epochs is ~625 optimizer steps
+  // against WebQSP's 4890, roughly 8x fewer. So {5e-3, 2e-2} here lands near where
+  // {6e-4, 2.5e-3} landed there, i.e. inside the range 043 is probing rather than
+  // above it. Keeping the standard bracket therefore costs nothing AND keeps these
+  // numbers directly comparable to 013/017/019/024, which is worth more than a
+  // bespoke bracket. If the k-curve turns out to be flat in lr, that is the same
+  // "already in range" evidence.
+  //
+  // ── controls are REUSED, as in 019/024 ──────────────────────────────────
+  // No-bias floors from 013 D: node_degree 0.086, shortest_path 0.470,
+  // edge_count 0.026. Unmasked `magnetic_linear` from 017 C. Same recipe, same
+  // cache, same seeds — re-running them would burn GPU to reproduce numbers that
+  // cannot have moved.
+  //
+  // ── data ────────────────────────────────────────────────────────────────
+  // The `landmark` column is added to the EXISTING qn-isolated caches in place
+  // (add_landmark_column.py, k=16, d_max=8), so it is outside the cache key and
+  // this sweep reads byte-identical data to the controls. d_max=8 clamps a
+  // negligible tail — GraphQA pairs reach distance 9 — and keeps the distance
+  // table identical to WebQSP's, so the two datasets' arms differ in data, not in
+  // model shape.
+  //
+  // 3 tasks x 3 k x 2 bias_lr x 3 seeds = 54 runs, 11-27 min each = ~18 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.graphqa src/experiments/bias_experiments/landmark/configs/045_graphqa_landmark.jsonc
+  //   python3 -m sweep.report src/experiments/bias_experiments/landmark/results/045_graphqa_landmark
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "045_graphqa_landmark",
+  "results_dir": "src/experiments/bias_experiments/landmark/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 18,
+      "partition": "frida",
+      "account": "povejmo",
+      // Deliberately wider than 042-044's Blackwell-only pool: those are still
+      // draining and hold every free B200/B300, so restricting this array to the
+      // same brands would serialize it behind them for no benefit. This recipe is
+      // known to run on all four (019/024 used exactly this list).
+      "gpus": ["A100", "H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      // Measured max on this recipe is 26:53 (sacct, 019). 024's 00:40:00 was cut
+      // to fit a maintenance window; the next one is 5 days out, so this is sized
+      // to the workload with margin instead.
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "train",
+
+  // ── axes ──────────────────────────────────────────────────────────────────
+  "task": ["node_degree", "shortest_path", "edge_count"],
+  "seed": [42, 43, 44],
+  "bias_lr": [5e-3, 2e-2],
+  // dims = 3k: 12 / 24 / 48. See the header on what k=16 does and does not mean.
+  "landmark_k_collate": [4, 8, 16],
+
+  "landmark": true,
+  "landmark_k": 16,
+  "landmark_d_max": 8,
+  "landmark_channels": 3,
+  "landmark_norm": true,
+
+  // Unmasked: an inner product yields <q_i, k_i> on the diagonal and cannot be
+  // forced to zero, so unmasked is the only configuration a factorized backbone
+  // can run (MIXED_BIAS.md §5.1). Same setting as 017 C / 024, which is what
+  // makes those the comparable controls.
+  "bias_self_node": true,
+
+  // The magnetic family is OFF: this sweep measures landmark alone against the
+  // floor. Every flag written out explicitly even where false, so the resolved
+  // JSON is self-describing rather than depending on defaults.
+  "magnetic": false,
+  "magnetic_linear": false,
+  "magnetic_magnitude": false,
+  "magnetic_hybrid": false,
+  "magnetic_linear_v2": false,
+  "magnetic_nonlinear": false,
+  "magnetic_m_collate": 0,
+
+  // Required, not merely preferred: bias_self_node does not cover SPDBias (its
+  // lookup has no self-distance row) and validate() rejects the combination
+  // rather than half-applying the flag. spd is also the bias landmark would be
+  // trivially reading off on `shortest_path`.
+  "spd": false,
+  "rrwp": false,
+
+  // ── 024_graphqa_linear_v2's recipe, verbatim below this line ──────────────
+  "question_node": "isolated",
+  "graph_type": "standard",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-eager",
+  "dtype": "fp32",
+  "k_hop": 0,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_epochs": 20,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "eval_steps": 20,
+  "max_steps": -1,
+  "num_workers": 4,
+  // Kept at the built values even where the feature is off: they are part of the
+  // data cache identity, so changing them would fork the cache.
+  "max_spd": 8,
+  "max_rw_steps": 16,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "magnetic_m": 0,
+
+  "wandb_project": "GraphLLM"
+}

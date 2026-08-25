@@ -1,0 +1,5730 @@
+[
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "degree",
+    "k": 8,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 8.0,
+    "unreach_frac": 0.76560222967065,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.8191489361702128,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8936404100177475,
+    "oracle_inf_frac": 0.09958674608127926,
+    "gap_mean": 0.024733651857662412,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.5513656679357722,
+        "inf_frac": 0.42092368813110415,
+        "gap_mean": 0.15173517809158996
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.9652241357477523,
+        "inf_frac": 0.02632328732430037,
+        "gap_mean": 0.029197080291970802
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9977912235156184,
+        "inf_frac": 0.0013817938196130977,
+        "gap_mean": 0.0032915426223321734
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 0.9999695570551524,
+        "inf_frac": 3.0442944847531585e-05,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 0.9999791105262058,
+        "inf_frac": 2.0889473794155127e-05,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.0945,
+      0.17973,
+      0.29813,
+      0.25122,
+      0.10645,
+      0.05353,
+      0.01451,
+      0.00156,
+      0.00038,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.990280815559626,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.024250444324793768,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.5506068846587517
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9922156602788156
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9980416590908083
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 0.9993824433554443
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 0.9998081818345941
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 0.999995471691278
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.8143398426114835,
+    "pair_visible_dir": 0.050175282517289956,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "degree",
+    "k": 16,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 15.972,
+    "unreach_frac": 0.8257195305542839,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.6825269600699505,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9080285296738916,
+    "oracle_inf_frac": 0.08754099792217265,
+    "gap_mean": 0.015990880047288644,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.6374772388677371,
+        "inf_frac": 0.34795563648402583,
+        "gap_mean": 0.07088093424727088
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.9791534760035456,
+        "inf_frac": 0.01700012663036596,
+        "gap_mean": 0.013091365817526006
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9990997403902521,
+        "inf_frac": 0.0005966836948329286,
+        "gap_mean": 0.0012150286474426788
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 0.9999898523517174,
+        "inf_frac": 1.0147648282510528e-05,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09692,
+      0.14437,
+      0.27712,
+      0.26814,
+      0.13597,
+      0.05699,
+      0.01842,
+      0.00126,
+      0.0008,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.992298704194615,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.01887160251472519,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.6368640976321549
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9952866497930979
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9990651760333841
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 0.9997431603603973
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 0.9999684064198155
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 0.999995471691278
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.6779000291460215,
+    "pair_visible_dir": 0.05084652854169583,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "degree",
+    "k": 32,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 30.332,
+    "unreach_frac": 0.8671500113319858,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.5124599242203439,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.927106529103709,
+    "oracle_inf_frac": 0.07048175287467029,
+    "gap_mean": 0.008648630725573144,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.7377917563317331,
+        "inf_frac": 0.25763946366495616,
+        "gap_mean": 0.01935512643268073
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.9909617576294796,
+        "inf_frac": 0.008183487400278586,
+        "gap_mean": 0.002745016677572256
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9997382966250733,
+        "inf_frac": 0.00026170337492672303,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09596,
+      0.12313,
+      0.24572,
+      0.27113,
+      0.17016,
+      0.06908,
+      0.01984,
+      0.00378,
+      0.00119,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.9944458327357956,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.013429214172708596,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.7373482788353121
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9980298099714756
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9997560943161107
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 0.9999429245245327
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.5095817545904984,
+    "pair_visible_dir": 0.05179715031016146,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "degree",
+    "k": 64,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 48.332,
+    "unreach_frac": 0.9003580430079525,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.3273098222092684,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9476510791089742,
+    "oracle_inf_frac": 0.050933738111565714,
+    "gap_mean": 0.005049821659567328,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.8375434530706837,
+        "inf_frac": 0.1616288693924847,
+        "gap_mean": 0.0030407139754373494
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.9982904900595163,
+        "inf_frac": 0.0016936811447385083,
+        "gap_mean": 6.34226006437394e-05
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9999790637300059,
+        "inf_frac": 2.0936269994137844e-05,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08839,
+      0.105,
+      0.21102,
+      0.26045,
+      0.2087,
+      0.0807,
+      0.0357,
+      0.00873,
+      0.00132,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.9962760873541543,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.008690417612350699,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.8372686874046561
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9993298782692539
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9999973392107212
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.32636257650830663,
+    "pair_visible_dir": 0.052886458090919054,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 8,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 8.0,
+    "unreach_frac": 0.6965375437190323,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.8662197610026231,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8865953167980398,
+    "oracle_inf_frac": 0.1063955474394438,
+    "gap_mean": 0.02525264138145112,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.4984274126800199,
+        "inf_frac": 0.4701539480218507,
+        "gap_mean": 0.18632841789552612
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.9503134101557553,
+        "inf_frac": 0.03778333544383943,
+        "gap_mean": 0.04020464228725592
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9956766602462105,
+        "inf_frac": 0.0034335482790386063,
+        "gap_mean": 0.00351890756302521
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 0.9999695570551524,
+        "inf_frac": 3.0442944847531585e-05,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 0.9999791105262058,
+        "inf_frac": 2.0889473794155127e-05,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.10316,
+      0.15752,
+      0.29415,
+      0.27759,
+      0.11033,
+      0.04415,
+      0.01212,
+      0.00067,
+      0.00031,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.9865123917168527,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.033422899593903314,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.49764542017642766
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9809184042424973
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9956975037361916
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 0.9976724621104456
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 0.9989122781679334
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 0.999995471691278
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.8579495773826873,
+    "pair_visible_dir": 0.049795863922257974,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 16,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 15.972,
+    "unreach_frac": 0.765740620537453,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.7446079860099096,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9010913088257578,
+    "oracle_inf_frac": 0.09519479952433421,
+    "gap_mean": 0.013015030444100658,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.5722562489654031,
+        "inf_frac": 0.4124151630524748,
+        "gap_mean": 0.08068514762226729
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.969023046726605,
+        "inf_frac": 0.02557933392427504,
+        "gap_mean": 0.017641325536062378
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9981366719705217,
+        "inf_frac": 0.0015597521145632694,
+        "gap_mean": 0.0012162006311661896
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.10163,
+      0.12853,
+      0.27934,
+      0.28425,
+      0.1381,
+      0.05065,
+      0.01634,
+      0.00061,
+      0.00053,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.9891156526844259,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.02631914156077725,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.5715659613981562
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9844731027278936
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9976035157895671
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 0.9989520942704213
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 0.9997833583073062
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.7365199650247741,
+    "pair_visible_dir": 0.050420022538981646,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 32,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 30.332,
+    "unreach_frac": 0.8213814438445458,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.582337510929758,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9205109040988932,
+    "oracle_inf_frac": 0.07801740854606022,
+    "gap_mean": 0.0049753045493672226,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.6684985929481874,
+        "inf_frac": 0.3267670915411356,
+        "gap_mean": 0.021096631423653797
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.9841870330505255,
+        "inf_frac": 0.014214258579207294,
+        "gap_mean": 0.00488133851440316
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9992462942802111,
+        "inf_frac": 0.0007537057197889624,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09803,
+      0.11178,
+      0.24751,
+      0.28511,
+      0.17599,
+      0.05965,
+      0.01981,
+      0.00118,
+      0.00094,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.991883648017477,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.01928751742878137,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.6679379186840884
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9878799566108232
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9993622975028492
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 0.9998321981021263
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 0.9999977433157011
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.5723185660157388,
+    "pair_visible_dir": 0.05137722795715361,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 64,
+    "graphs": 2000,
+    "nodes": 219584,
+    "anchors_mean": 48.332,
+    "unreach_frac": 0.8663519042545192,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.39175896240163216,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9421084939219055,
+    "oracle_inf_frac": 0.05746258498159749,
+    "gap_mean": 0.0014551360306941053,
+    "by_distance": {
+      "1": {
+        "pairs": 241640,
+        "exact_frac": 0.7726535341830822,
+        "inf_frac": 0.22675053799039893,
+        "gap_mean": 0.0023120397328309644
+      },
+      "2": {
+        "pairs": 505408,
+        "exact_frac": 0.9953779916423958,
+        "inf_frac": 0.0043370900341901985,
+        "gap_mean": 0.0008584782677816286
+      },
+      "3": {
+        "pairs": 764224,
+        "exact_frac": 0.9998325098400469,
+        "inf_frac": 0.00016749015995310275,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 788360,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 382968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 141184,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08985,
+      0.09902,
+      0.21197,
+      0.27434,
+      0.21395,
+      0.07214,
+      0.03249,
+      0.00518,
+      0.00106,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3114792,
+    "pairs_total": 55896048,
+    "und_exact_frac": 0.9941698919394086,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.013395437187258748,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482464,
+        "exact_frac": 0.7722690190356172
+      },
+      "2": {
+        "pairs": 9956400,
+        "exact_frac": 0.9906761480053031
+      },
+      "3": {
+        "pairs": 18039760,
+        "exact_frac": 0.9999858091238465
+      },
+      "4": {
+        "pairs": 14016528,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 7090048,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 3533328,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.3844360244826581,
+    "pair_visible_dir": 0.052522639883234676,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 2000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9442752732715558
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "degree",
+    "k": 8,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 7.9809582309582305,
+    "unreach_frac": 0.7789613282768397,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.8305556862068786,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8972223792570903,
+    "oracle_inf_frac": 0.09630770416263228,
+    "gap_mean": 0.023209954659901447,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.5497490831885736,
+        "inf_frac": 0.4210287589268481,
+        "gap_mean": 0.15985198273131865
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.9723962133209958,
+        "inf_frac": 0.020755111482819368,
+        "gap_mean": 0.02313257390771048
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.9982594623069049,
+        "inf_frac": 0.0012707825902785132,
+        "gap_mean": 0.001832472832366799
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 0.9999172287586421,
+        "inf_frac": 8.277124135792994e-05,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 0.9999468519138001,
+        "inf_frac": 5.31480861999431e-05,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09291,
+      0.17615,
+      0.30618,
+      0.24724,
+      0.1094,
+      0.05432,
+      0.01072,
+      0.0018,
+      0.00055,
+      0.00053,
+      9e-05,
+      7e-05,
+      1e-05,
+      3e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.990995731857919,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0224975965295107,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.5490353386947108
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9936468087045914
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9985047249365171
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.9995119713028785
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 0.9998004765049846
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 0.9999868805142839
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.8258261083151728,
+    "pair_visible_dir": 0.04934040190198409,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "degree",
+    "k": 16,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 15.923218673218674,
+    "unreach_frac": 0.8320907993459259,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.6950650382285771,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9100520279522866,
+    "oracle_inf_frac": 0.08552943095484922,
+    "gap_mean": 0.015629036017816754,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.6308579424821463,
+        "inf_frac": 0.35247056552789036,
+        "gap_mean": 0.08085309328285914
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.9835378223036817,
+        "inf_frac": 0.01328362723988825,
+        "gap_mean": 0.010432728289194868
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.9993605356837381,
+        "inf_frac": 0.0005172736825813179,
+        "gap_mean": 0.00048629873684582294
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 0.9999984950683389,
+        "inf_frac": 1.5049316610532715e-06,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09421,
+      0.14026,
+      0.29135,
+      0.26605,
+      0.13038,
+      0.05477,
+      0.01558,
+      0.00606,
+      0.0006,
+      0.00032,
+      0.00014,
+      8e-05,
+      9e-05,
+      4e-05,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.9928235903088468,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.017661303337743767,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.6302727729662851
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9964104933611301
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9993712153590768
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.9998457896232841
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 0.9999733738143567
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.691035751428019,
+    "pair_visible_dir": 0.04992888133721999,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "degree",
+    "k": 32,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 30.347665847665848,
+    "unreach_frac": 0.8691862093785243,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.5239849698718049,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9272069570327396,
+    "oracle_inf_frac": 0.07012593076166632,
+    "gap_mean": 0.009357150878443004,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.7271376182204208,
+        "inf_frac": 0.26640127388535034,
+        "gap_mean": 0.027671987949826022
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.9921726248732139,
+        "inf_frac": 0.00695989109738954,
+        "gap_mean": 0.0028379628488935976
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.9997990642912807,
+        "inf_frac": 0.00019143199276631449,
+        "gap_mean": 3.8022142466251954e-05
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09328,
+      0.11839,
+      0.26505,
+      0.2733,
+      0.15604,
+      0.06213,
+      0.02251,
+      0.00761,
+      0.00103,
+      0.00025,
+      0.00017,
+      8e-05,
+      0.00011,
+      3e-05,
+      4e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.9946137607539834,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.013064664183845592,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.726705072687906
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9983757898286295
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9998123316227288
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.999957873496696
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 0.9999996542053813
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.5215182728940313,
+    "pair_visible_dir": 0.050769892037133835,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "degree",
+    "k": 64,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 49.92137592137592,
+    "unreach_frac": 0.8996425070658649,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.3460639982440462,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9470048729619924,
+    "oracle_inf_frac": 0.051466947721071986,
+    "gap_mean": 0.005354507903451067,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.8253812005404362,
+        "inf_frac": 0.17305539471144565,
+        "gap_mean": 0.0058701335076090004
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.9980203569585565,
+        "inf_frac": 0.0019418296350338987,
+        "gap_mean": 0.00013817603180723106
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.9999714888521412,
+        "inf_frac": 2.8511147858812794e-05,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08607,
+      0.10073,
+      0.22372,
+      0.27779,
+      0.20096,
+      0.07472,
+      0.02617,
+      0.00712,
+      0.00211,
+      0.00027,
+      0.00014,
+      6e-05,
+      8e-05,
+      2e-05,
+      3e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.996319138101062,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.008702095659550817,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.825104392205382
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9994973351418035
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9999933658272864
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.9999998479187606
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.3447313547496982,
+    "pair_visible_dir": 0.05178864778679103,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "betweenness",
+    "k": 8,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 7.9809582309582305,
+    "unreach_frac": 0.722011099460706,
+    "dead_node_frac": 0.0032976393918964825,
+    "collision_frac": 0.8731898259201772,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8905338941458562,
+    "oracle_inf_frac": 0.10247083262367576,
+    "gap_mean": 0.0246880444903941,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.5006176413819726,
+        "inf_frac": 0.46715402431962944,
+        "gap_mean": 0.1908862868682478
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.9577757709486272,
+        "inf_frac": 0.031778831610228306,
+        "gap_mean": 0.034487432487381946
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.9963600767900249,
+        "inf_frac": 0.0028293920065602792,
+        "gap_mean": 0.0027897667705964846
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 0.9994326407637829,
+        "inf_frac": 0.0003280751021096132,
+        "gap_mean": 0.0004892633049510436
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 0.9996373424706357,
+        "inf_frac": 0.00018758148070568154,
+        "gap_mean": 0.0003502177916892067
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.10045,
+      0.15108,
+      0.29633,
+      0.28027,
+      0.12015,
+      0.03808,
+      0.01152,
+      0.00157,
+      0.0003,
+      0.00015,
+      6e-05,
+      3e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.9824865390219587,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.04890637054890545,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.4998695097432725
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9794039176752906
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9923342696512348
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.9920478240748556
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 0.9906670032400956
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 0.9937799060499051
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.8654291373354447,
+    "pair_visible_dir": 0.04900390325455491,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "betweenness",
+    "k": 16,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 15.923218673218674,
+    "unreach_frac": 0.7801069323039779,
+    "dead_node_frac": 0.0016723369340837944,
+    "collision_frac": 0.7573961713936316,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9037736739065542,
+    "oracle_inf_frac": 0.0919925060160358,
+    "gap_mean": 0.014644584588943178,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.5709563790773982,
+        "inf_frac": 0.41030689056166764,
+        "gap_mean": 0.09928155276250328
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.973704112319163,
+        "inf_frac": 0.02065724148975924,
+        "gap_mean": 0.01799954121043224
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.9986396109450224,
+        "inf_frac": 0.0011608110199659496,
+        "gap_mean": 0.0007339958325347731
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 0.9998976646470483,
+        "inf_frac": 7.825644637477012e-05,
+        "gap_mean": 4.0636334903601584e-05
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 0.9999906209259647,
+        "inf_frac": 0.0,
+        "gap_mean": 1.8758148070568152e-05
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09888,
+      0.12374,
+      0.2786,
+      0.28959,
+      0.14708,
+      0.04341,
+      0.01573,
+      0.00214,
+      0.00049,
+      0.00014,
+      0.00011,
+      5e-05,
+      2e-05,
+      2e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.9878688266304353,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.03221811372061832,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.5702955845963501
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9845191320466237
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9963118497456582
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.9966501065405122
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 0.9970438018043564
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 0.9987485468347419
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.748788862236019,
+    "pair_visible_dir": 0.04957600600287164,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "betweenness",
+    "k": 32,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 30.347665847665848,
+    "unreach_frac": 0.8284405697008925,
+    "dead_node_frac": 5.226052919011858e-06,
+    "collision_frac": 0.5935646384355288,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9213254110942793,
+    "oracle_inf_frac": 0.07647378023816408,
+    "gap_mean": 0.007448199280952253,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.6637762980119668,
+        "inf_frac": 0.3275815479637136,
+        "gap_mean": 0.03996354555370572
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.9854551844404505,
+        "inf_frac": 0.011771090983504458,
+        "gap_mean": 0.008593602290426845
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.9995587560450422,
+        "inf_frac": 0.0004168058282216918,
+        "gap_mean": 9.236030842910055e-05
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 0.9999909704100337,
+        "inf_frac": 9.029589966319629e-06,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09537,
+      0.10778,
+      0.24274,
+      0.29428,
+      0.18488,
+      0.05093,
+      0.01965,
+      0.00295,
+      0.00103,
+      0.00021,
+      0.0001,
+      3e-05,
+      4e-05,
+      1e-05,
+      1e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.9922239047373037,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.01848316530649402,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.663248144138571
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9889405090631964
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9994893935882633
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.9998086818008791
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 0.9999588504403695
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.5848057737432649,
+    "pair_visible_dir": 0.050423307867028144,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp",
+    "split": "test",
+    "rule": "betweenness",
+    "k": 64,
+    "graphs": 1628,
+    "nodes": 191349,
+    "anchors_mean": 49.92137592137592,
+    "unreach_frac": 0.8681429071185126,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.40226497133509975,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9423069098262579,
+    "oracle_inf_frac": 0.05707951393527419,
+    "gap_mean": 0.002129729837068221,
+    "by_distance": {
+      "1": {
+        "pairs": 207240,
+        "exact_frac": 0.7695425593514765,
+        "inf_frac": 0.22926076047095156,
+        "gap_mean": 0.005252679555243915
+      },
+      "2": {
+        "pairs": 449576,
+        "exact_frac": 0.9948507037742228,
+        "inf_frac": 0.004762264889584853,
+        "gap_mean": 0.0013767362857174785
+      },
+      "3": {
+        "pairs": 736554,
+        "exact_frac": 0.999903605166763,
+        "inf_frac": 9.503715952937599e-05,
+        "gap_mean": 5.431210997116027e-06
+      },
+      "4": {
+        "pairs": 664482,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 319861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 128794,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08692,
+      0.09469,
+      0.22039,
+      0.29154,
+      0.20852,
+      0.06553,
+      0.02564,
+      0.00453,
+      0.0017,
+      0.00021,
+      0.00015,
+      5e-05,
+      8e-05,
+      2e-05,
+      3e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 2777161,
+    "pairs_total": 50864989,
+    "und_exact_frac": 0.9943557837002579,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.013045790691117618,
+    "und_by_distance": {
+      "1": {
+        "pairs": 413824,
+        "exact_frac": 0.7691772347664708
+      },
+      "2": {
+        "pairs": 9258654,
+        "exact_frac": 0.9913816846379614
+      },
+      "3": {
+        "pairs": 17786694,
+        "exact_frac": 0.9999262369949131
+      },
+      "4": {
+        "pairs": 13150866,
+        "exact_frac": 0.9999764274078985
+      },
+      "5": {
+        "pairs": 5783780,
+        "exact_frac": 0.9999861682152502
+      },
+      "6": {
+        "pairs": 2744010,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.39605642046731365,
+    "pair_visible_dir": 0.0514822091085088,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1628,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.9454013250646727
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "degree",
+    "k": 8,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 8.0,
+    "unreach_frac": 0.7827016507730097,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.8321413090593844,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.891316758558262,
+    "oracle_inf_frac": 0.10143392034233048,
+    "gap_mean": 0.02648388758514109,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.53760805484715,
+        "inf_frac": 0.4318550657437154,
+        "gap_mean": 0.17033927946834557
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9622410725632228,
+        "inf_frac": 0.02832316685728809,
+        "gap_mean": 0.03256551521195377
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.9975161919134754,
+        "inf_frac": 0.0015720304345092121,
+        "gap_mean": 0.0036108661880169626
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 0.999969503517261,
+        "inf_frac": 3.049648273899077e-05,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 0.9999790558371382,
+        "inf_frac": 2.0944162861810414e-05,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.10633,
+      0.18688,
+      0.29805,
+      0.24377,
+      0.09868,
+      0.05178,
+      0.01276,
+      0.00154,
+      0.00021,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.989853165317943,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.025413408151312517,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.5368256917258311
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9915102755939748
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.9977620678954991
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 0.9992425161279987
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 0.9997242221142217
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 0.9999954754202204
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.8280234070221066,
+    "pair_visible_dir": 0.04971911871005196,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "degree",
+    "k": 16,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 15.988,
+    "unreach_frac": 0.833646796913983,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.6895679815055628,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.906435154707044,
+    "oracle_inf_frac": 0.08886911619486504,
+    "gap_mean": 0.016965560842887223,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.6288543702182625,
+        "inf_frac": 0.3552147848839135,
+        "gap_mean": 0.07843640846517362
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9778561443639598,
+        "inf_frac": 0.017838988435633498,
+        "gap_mean": 0.014685665302689676
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.9989939005219141,
+        "inf_frac": 0.0006392923767004129,
+        "gap_mean": 0.0014681669935086045
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 0.9999898345057536,
+        "inf_frac": 1.0165494246330257e-05,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.10244,
+      0.14601,
+      0.27738,
+      0.26488,
+      0.13309,
+      0.05618,
+      0.01799,
+      0.00126,
+      0.00077,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.992093660530055,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.01940424023363218,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.6282263950633667
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9950159906986631
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.998973947696228
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 0.9997162296068636
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 0.9999593114594754
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 0.9999954754202204
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.6845831527235948,
+    "pair_visible_dir": 0.05041434970432051,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "degree",
+    "k": 32,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 30.584,
+    "unreach_frac": 0.8704035680361906,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.5165799739921977,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9261284150757078,
+    "oracle_inf_frac": 0.07140028390388413,
+    "gap_mean": 0.0088562970265772,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.733017586857881,
+        "inf_frac": 0.26204749445235653,
+        "gap_mean": 0.020959561958619453
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9904530435887661,
+        "inf_frac": 0.008609734400813317,
+        "gap_mean": 0.0029963146931581476
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.999727514724685,
+        "inf_frac": 0.0002724852753149301,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09924,
+      0.1236,
+      0.24621,
+      0.27109,
+      0.16811,
+      0.06812,
+      0.0189,
+      0.00353,
+      0.00119,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.9943381712235688,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.013697380701481656,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.7325658549532215
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9978985033479015
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.9997323728393108
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 0.9999382112853654
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.5135818523334779,
+    "pair_visible_dir": 0.051380928530367624,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "degree",
+    "k": 64,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 48.9,
+    "unreach_frac": 0.901963703530212,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.328745845976015,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9471871914088216,
+    "oracle_inf_frac": 0.05138300279789335,
+    "gap_mean": 0.005099177788079147,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.8355247905143577,
+        "inf_frac": 0.16361408273440864,
+        "gap_mean": 0.003167940442719677
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9982526369297242,
+        "inf_frac": 0.001731477951455077,
+        "gap_mean": 6.365068504049775e-05
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.9999790395942065,
+        "inf_frac": 2.0960405793456162e-05,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09032,
+      0.10521,
+      0.21153,
+      0.25996,
+      0.20725,
+      0.08043,
+      0.03537,
+      0.0086,
+      0.00132,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.9962364900562339,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.008787020587373146,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.8352464999004711
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9993204355653751
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.9999964434928812
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.3277705533882387,
+    "pair_visible_dir": 0.052488517163070514,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 8,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 8.0,
+    "unreach_frac": 0.7255206075711602,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.8744039878630255,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8840802954246214,
+    "oracle_inf_frac": 0.10826407175773535,
+    "gap_mean": 0.027701837560992492,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.48709965886132545,
+        "inf_frac": 0.4783559103103368,
+        "gap_mean": 0.2083809523809524
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9458794001779133,
+        "inf_frac": 0.040999491676197736,
+        "gap_mean": 0.04459094598399894
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.9948018193632229,
+        "inf_frac": 0.004181600955794504,
+        "gap_mean": 0.004030772792809859
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 0.999969503517261,
+        "inf_frac": 3.049648273899077e-05,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 0.9999790558371382,
+        "inf_frac": 2.0944162861810414e-05,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.11647,
+      0.16311,
+      0.29333,
+      0.2723,
+      0.10121,
+      0.04187,
+      0.01077,
+      0.0007,
+      0.00023,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.9854550659026544,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.03657931464910716,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.4862981885740827
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9796484944910191
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.994749706365881
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 0.9966107745787497
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 0.9980130429377126
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 0.9999954754202204
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.8658430862592111,
+    "pair_visible_dir": 0.04934119535336403,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 16,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 15.988,
+    "unreach_frac": 0.7763698885303939,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.7513003901170351,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8994661372613562,
+    "oracle_inf_frac": 0.09656075131665569,
+    "gap_mean": 0.013978907817770376,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.5643692246547213,
+        "inf_frac": 0.4191368860331865,
+        "gap_mean": 0.08798038544873987
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9672925403482018,
+        "inf_frac": 0.02679819545050197,
+        "gap_mean": 0.0194238145760222
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.997956360435138,
+        "inf_frac": 0.001676832463476493,
+        "gap_mean": 0.0014696928341976527
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.10785,
+      0.12979,
+      0.27955,
+      0.28179,
+      0.13435,
+      0.04962,
+      0.01589,
+      0.00062,
+      0.00054,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.9888485779172616,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.027025910754204924,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.56366531749718
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9841268563220427
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.9974295344798919
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 0.9988500433665238
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 0.9997038778439594
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.7434980494148244,
+    "pair_visible_dir": 0.04998875905678526,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 32,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 30.584,
+    "unreach_frac": 0.8258327278028469,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.584597601502673,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.919542565009875,
+    "oracle_inf_frac": 0.07889904953917051,
+    "gap_mean": 0.005262672991180486,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.6639618454608684,
+        "inf_frac": 0.3308051535124035,
+        "gap_mean": 0.023459539717891612
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9836224424958698,
+        "inf_frac": 0.014614309315033677,
+        "gap_mean": 0.005384317771472788
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.9992454253914356,
+        "inf_frac": 0.0007545746085644218,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.10143,
+      0.11215,
+      0.24842,
+      0.28462,
+      0.17325,
+      0.05885,
+      0.01921,
+      0.00115,
+      0.00093,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.9917648212852638,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.01957776639420669,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.6633932718465928
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9877308023047219
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.9993198180135308
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 0.9998157780915525
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 0.9999954790510528
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.5747724317295189,
+    "pair_visible_dir": 0.050966009664365354,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 64,
+    "graphs": 2000,
+    "nodes": 221472,
+    "anchors_mean": 48.9,
+    "unreach_frac": 0.8685192548493437,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.39253720560612626,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9415939763001975,
+    "oracle_inf_frac": 0.05797142445687953,
+    "gap_mean": 0.0014741169629914747,
+    "by_distance": {
+      "1": {
+        "pairs": 241544,
+        "exact_frac": 0.7704103600172225,
+        "inf_frac": 0.22899347530884642,
+        "gap_mean": 0.0023196872717900253
+      },
+      "2": {
+        "pairs": 503616,
+        "exact_frac": 0.9951709238785106,
+        "inf_frac": 0.004543143982716991,
+        "gap_mean": 0.0008617112948010085
+      },
+      "3": {
+        "pairs": 763344,
+        "exact_frac": 0.9998218365507556,
+        "inf_frac": 0.00017816344924437738,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 786976,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 381968,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 140712,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.0918,
+      0.09916,
+      0.21217,
+      0.27424,
+      0.21289,
+      0.07166,
+      0.032,
+      0.00503,
+      0.00105,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 3110912,
+    "pairs_total": 56223040,
+    "und_exact_frac": 0.9941166026962237,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.013531311863510346,
+    "und_by_distance": {
+      "1": {
+        "pairs": 482272,
+        "exact_frac": 0.7700218963572424
+      },
+      "2": {
+        "pairs": 9935776,
+        "exact_frac": 0.9906052632426496
+      },
+      "3": {
+        "pairs": 17995184,
+        "exact_frac": 0.9999848848447451
+      },
+      "4": {
+        "pairs": 13983136,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 7078160,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 3536240,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.3852405721716515,
+    "pair_visible_dir": 0.05212396910590392,
+    "pair_visible_und": 0.9921928092113127,
+    "comp_graphs": 2000,
+    "multi_component_frac": 1.0,
+    "components_mean": 2.0,
+    "largest_component_frac": 0.9797992975930854,
+    "dir_unreach_within_comp": 0.9442329942928537
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "degree",
+    "k": 8,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 7.78,
+    "unreach_frac": 0.16503743147387656,
+    "dead_node_frac": 0.010699333229958133,
+    "collision_frac": 0.07536052101100946,
+    "comps_no_anchor_frac": 0.046987285793255944,
+    "exact_frac": 0.8948124284355775,
+    "oracle_inf_frac": 0.006346187435713315,
+    "gap_mean": 0.13679036458333332,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.8653380689292292,
+        "inf_frac": 0.0008287292817679558,
+        "gap_mean": 0.14978211356425347
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 0.9831628638867034,
+        "inf_frac": 0.00023603461841070024,
+        "gap_mean": 0.01882820492641851
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 0.9954537019855261,
+        "inf_frac": 0.00018556318426424197,
+        "gap_mean": 0.005289532293986637
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08884,
+      0.55132,
+      0.29609,
+      0.04996,
+      0.01011,
+      0.00277,
+      0.00063,
+      0.00018,
+      0.0001,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.8969026548672566,
+    "und_inf_frac": 0.0005082516144463047,
+    "und_gap_mean": 0.14812599084681882,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 0.8629582158420918
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 0.9770083198122
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 0.9931444241316271
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 0.9971181556195965
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.006590169018452473,
+    "collision_frac_3k": 0.07194913940145758,
+    "pair_visible_dir": 0.8281573498964804,
+    "pair_visible_und": 0.901241157694962,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "degree",
+    "k": 16,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.235,
+    "unreach_frac": 0.1606833947570917,
+    "dead_node_frac": 0.0003876570010854396,
+    "collision_frac": 0.0021708792060784617,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9950058545358097,
+    "oracle_inf_frac": 0.001584929583842775,
+    "gap_mean": 0.006310906075057019,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.9985924756642989,
+        "inf_frac": 6.577216521967904e-05,
+        "gap_mean": 0.00163125698875222
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 0.9999606608969316,
+        "inf_frac": 0.0,
+        "gap_mean": 3.933910306845004e-05
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08335,
+      0.50002,
+      0.32648,
+      0.0668,
+      0.01613,
+      0.00488,
+      0.0016,
+      0.00052,
+      0.00017,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.9951745993781392,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.009172446783066251,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 0.9982055883106896
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 0.999930955915352
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0021708792060784617,
+    "pair_visible_dir": 0.8321256038647343,
+    "pair_visible_und": 0.9016994478951,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "degree",
+    "k": 32,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1665534420289855,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08344,
+      0.49178,
+      0.32889,
+      0.06972,
+      0.01799,
+      0.00557,
+      0.00181,
+      0.00056,
+      0.00017,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8334465579710145,
+    "pair_visible_und": 0.9016994478951,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "degree",
+    "k": 64,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1665534420289855,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08344,
+      0.49178,
+      0.32889,
+      0.06972,
+      0.01799,
+      0.00557,
+      0.00181,
+      0.00056,
+      0.00017,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8334465579710145,
+    "pair_visible_und": 0.9016994478951,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 8,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 7.78,
+    "unreach_frac": 0.16677637396105555,
+    "dead_node_frac": 0.011009458830826485,
+    "collision_frac": 0.08714529384400682,
+    "comps_no_anchor_frac": 0.046987285793255944,
+    "exact_frac": 0.8954528693694568,
+    "oracle_inf_frac": 0.006139176224762422,
+    "gap_mean": 0.13454228285773798,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.8608392528282031,
+        "inf_frac": 0.0009208103130755065,
+        "gap_mean": 0.15023041474654378
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 0.9915814319433517,
+        "inf_frac": 0.00033438237608182533,
+        "gap_mean": 0.009995474489896307
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 0.9968454258675079,
+        "inf_frac": 0.00046390796066060494,
+        "gap_mean": 0.003434512206442031
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 0.9992808342322905,
+        "inf_frac": 0.0003595828838547285,
+        "gap_mean": 0.00035971223021582735
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08922,
+      0.54479,
+      0.30283,
+      0.04996,
+      0.01018,
+      0.00247,
+      0.00049,
+      7e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.901279598182253,
+    "und_inf_frac": 0.0005082516144463047,
+    "und_gap_mean": 0.14046842750740332,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 0.8618559343758011
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 0.9906100044878655
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 0.9952772699573431
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 0.9976945244956772
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.006590169018452473,
+    "collision_frac_3k": 0.08257094123119864,
+    "pair_visible_dir": 0.8283298826777088,
+    "pair_visible_und": 0.901241157694962,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 16,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.235,
+    "unreach_frac": 0.1617334806732121,
+    "dead_node_frac": 0.0003101256008683517,
+    "collision_frac": 0.0022484106062955495,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9952063966464184,
+    "oracle_inf_frac": 0.0014232020752873898,
+    "gap_mean": 0.006283970692078957,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.998973954222573,
+        "inf_frac": 5.2617732175743226e-05,
+        "gap_mean": 0.0009997895179962113
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08354,
+      0.49981,
+      0.32662,
+      0.06645,
+      0.01624,
+      0.00499,
+      0.00164,
+      0.00051,
+      0.00016,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.9955333652236307,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.008550585984214303,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 0.9989233529864138
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0022484106062955495,
+    "pair_visible_dir": 0.832260395100069,
+    "pair_visible_und": 0.9016994478951,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 32,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1665534420289855,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08344,
+      0.49178,
+      0.32889,
+      0.06972,
+      0.01799,
+      0.00557,
+      0.00181,
+      0.00056,
+      0.00017,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8334465579710145,
+    "pair_visible_und": 0.9016994478951,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_shortest_path",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 64,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1665534420289855,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 50840,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 10778,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2781,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 861,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 280,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08344,
+      0.49178,
+      0.32889,
+      0.06972,
+      0.01799,
+      0.00557,
+      0.00181,
+      0.00056,
+      0.00017,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154581,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 78020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 57934,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 13128,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3470,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1140,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 400,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8334465579710145,
+    "pair_visible_und": 0.9016994478951,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.237,
+    "components_mean": 1.809,
+    "largest_component_frac": 0.916447865361333,
+    "dir_unreach_within_comp": 0.07569361396795025
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "degree",
+    "k": 8,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 7.78,
+    "unreach_frac": 0.16976794451103294,
+    "dead_node_frac": 0.009226236625833462,
+    "collision_frac": 0.07419755000775315,
+    "comps_no_anchor_frac": 0.06052899287894201,
+    "exact_frac": 0.8968832095482113,
+    "oracle_inf_frac": 0.00576006227094347,
+    "gap_mean": 0.1351996711835435,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 0.8677552652625966,
+        "inf_frac": 0.0,
+        "gap_mean": 0.14684084244201545
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 0.9840391272844377,
+        "inf_frac": 0.0,
+        "gap_mean": 0.018879317285242735
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 0.994950749110173,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0072013906133598215
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 0.998708427510494,
+        "inf_frac": 0.0,
+        "gap_mean": 0.002583144979011947
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08919,
+      0.54491,
+      0.28967,
+      0.05978,
+      0.01223,
+      0.00308,
+      0.00077,
+      0.00025,
+      0.00011,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.9000656024491581,
+    "und_inf_frac": 0.0007228418009087154,
+    "und_gap_mean": 0.14243597614720166,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.8671139173901605
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 0.9792905846510953
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 0.9944932476727416
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 0.9983853606027987
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.009226236625833462,
+    "collision_frac_3k": 0.07419755000775315,
+    "pair_visible_dir": 0.8264158471359558,
+    "pair_visible_und": 0.886974853347136,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "degree",
+    "k": 16,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.235,
+    "unreach_frac": 0.1622831124199418,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0022484106062955495,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9952258943339928,
+    "oracle_inf_frac": 0.001680018162358512,
+    "gap_mean": 0.005821735344950814,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 0.9990269261530259,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0011463609704078913
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08337,
+      0.49368,
+      0.31961,
+      0.07624,
+      0.0189,
+      0.00554,
+      0.00182,
+      0.00061,
+      0.00018,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.9954867944699565,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.008759141822776198,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.9989476453564852
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0022484106062955495,
+    "pair_visible_dir": 0.8298071946169773,
+    "pair_visible_und": 0.8876164596273292,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "degree",
+    "k": 32,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.16879636818495514,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08366,
+      0.48662,
+      0.32228,
+      0.07836,
+      0.02009,
+      0.00605,
+      0.00199,
+      0.00067,
+      0.00021,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8312036318150449,
+    "pair_visible_und": 0.8876164596273292,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "degree",
+    "k": 64,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.16879636818495514,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08366,
+      0.48662,
+      0.32228,
+      0.07836,
+      0.02009,
+      0.00605,
+      0.00199,
+      0.00067,
+      0.00021,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8312036318150449,
+    "pair_visible_und": 0.8876164596273292,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 8,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 7.78,
+    "unreach_frac": 0.17261705932053525,
+    "dead_node_frac": 0.009226236625833462,
+    "collision_frac": 0.08520700883857962,
+    "comps_no_anchor_frac": 0.06052899287894201,
+    "exact_frac": 0.8972788895015081,
+    "oracle_inf_frac": 0.005202218402361107,
+    "gap_mean": 0.1341914281801999,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 0.8629165555851773,
+        "inf_frac": 0.0,
+        "gap_mean": 0.14892028792322048
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 0.9921101360598985,
+        "inf_frac": 0.0,
+        "gap_mean": 0.010083729168343934
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 0.996523466600447,
+        "inf_frac": 0.0,
+        "gap_mean": 0.004552603261319428
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08987,
+      0.53986,
+      0.29594,
+      0.05924,
+      0.01162,
+      0.00266,
+      0.00067,
+      0.00013,
+      1e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.903612994144374,
+    "und_inf_frac": 0.0007228418009087154,
+    "und_gap_mean": 0.1341446364636585,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.8644567219152854
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 0.992746264326128
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 0.9969843975350727
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.009226236625833462,
+    "collision_frac_3k": 0.08520700883857962,
+    "pair_visible_dir": 0.8268795289855072,
+    "pair_visible_und": 0.886974853347136,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 16,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.235,
+    "unreach_frac": 0.16431385708417465,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0024810048069468134,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9953491389096099,
+    "oracle_inf_frac": 0.0013362306619531022,
+    "gap_mean": 0.006287388200754747,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 0.9992801919488137,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0007198080511863504
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.0838,
+      0.49463,
+      0.32019,
+      0.07511,
+      0.01836,
+      0.00537,
+      0.00177,
+      0.00056,
+      0.00017,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.9956447262920038,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.00838253517020191,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 0.9992896606156275
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0024810048069468134,
+    "pair_visible_dir": 0.8300929520358868,
+    "pair_visible_und": 0.8876164596273292,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 32,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.16879636818495514,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08366,
+      0.48662,
+      0.32228,
+      0.07836,
+      0.02009,
+      0.00605,
+      0.00199,
+      0.00067,
+      0.00021,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8312036318150449,
+    "pair_visible_und": 0.8876164596273292,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_connected_nodes",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 64,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.16879636818495514,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 75020,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 49684,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 12081,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 3097,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 933,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 307,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08366,
+      0.48662,
+      0.32228,
+      0.07836,
+      0.02009,
+      0.00605,
+      0.00199,
+      0.00067,
+      0.00021,
+      6e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 154165,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 76020,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 55144,
+        "exact_frac": 1.0
+      },
+      "3": {
+        "pairs": 15254,
+        "exact_frac": 1.0
+      },
+      "4": {
+        "pairs": 3716,
+        "exact_frac": 1.0
+      },
+      "5": {
+        "pairs": 1066,
+        "exact_frac": 1.0
+      },
+      "6": {
+        "pairs": 356,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8312036318150449,
+    "pair_visible_und": 0.8876164596273292,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.256,
+    "components_mean": 1.966,
+    "largest_component_frac": 0.893126909859147,
+    "dir_unreach_within_comp": 0.0635554097723352
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "degree",
+    "k": 8,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 7.78,
+    "unreach_frac": 0.15470202188906138,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.09784462707396496,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8844601542416453,
+    "oracle_inf_frac": 0.005919023136246786,
+    "gap_mean": 0.14482896837967663,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 0.8575153052910915,
+        "inf_frac": 0.000372448148234363,
+        "gap_mean": 0.1531099364273572
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 0.9867040520984081,
+        "inf_frac": 4.522431259044862e-05,
+        "gap_mean": 0.014743792682375289
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 0.9966322406825325,
+        "inf_frac": 0.0,
+        "gap_mean": 0.003592276605298608
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.09036,
+      0.6181,
+      0.23726,
+      0.03999,
+      0.01008,
+      0.00302,
+      0.00084,
+      0.00026,
+      0.0001,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.8947765700483091,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.13316295721187024,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 0.8533777705078923
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 0.9992509162898954
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.09784462707396496,
+    "pair_visible_dir": 0.8339749396135265,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "degree",
+    "k": 16,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.235,
+    "unreach_frac": 0.1567549741673079,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.006745231818886649,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9941516709511569,
+    "oracle_inf_frac": 0.0012082262210796916,
+    "gap_mean": 0.007805060098319306,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 0.997125165855816,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0030377802090365232
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08362,
+      0.56253,
+      0.27732,
+      0.0543,
+      0.01504,
+      0.00485,
+      0.00159,
+      0.00052,
+      0.00017,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.9942255434782609,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.009349120082815734,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 0.9958493497996238
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 0.9999732470103534
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.006745231818886649,
+    "pair_visible_dir": 0.8379270186335404,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "degree",
+    "k": 32,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1610593512767426,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08289,
+      0.55217,
+      0.28422,
+      0.05725,
+      0.01593,
+      0.00514,
+      0.00166,
+      0.00053,
+      0.00017,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8389406487232575,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "degree",
+    "k": 64,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1610593512767426,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08289,
+      0.55217,
+      0.28422,
+      0.05725,
+      0.01593,
+      0.00514,
+      0.00166,
+      0.00053,
+      0.00017,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8389406487232575,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 8,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 7.78,
+    "unreach_frac": 0.14551608276187294,
+    "dead_node_frac": 0.008218328423011319,
+    "collision_frac": 0.10164366568460226,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.8797429305912596,
+    "oracle_inf_frac": 0.008251928020565553,
+    "gap_mean": 0.14253220664091865,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 0.8444097860750949,
+        "inf_frac": 0.0030726972229334947,
+        "gap_mean": 0.15806617320848998
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 0.9950253256150506,
+        "inf_frac": 0.00013567293777134589,
+        "gap_mean": 0.005111040752634674
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 0.9993264481365065,
+        "inf_frac": 0.000224517287831163,
+        "gap_mean": 0.00044913541432741973
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.0874,
+      0.60335,
+      0.25169,
+      0.04332,
+      0.01033,
+      0.00282,
+      0.00076,
+      0.00024,
+      9e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.850424861973775,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.18311119737750173,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 0.8247117036067719
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 0.9267235613579817
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.10164366568460226,
+    "pair_visible_dir": 0.8320177708764666,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 16,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.235,
+    "unreach_frac": 0.15574828023119247,
+    "dead_node_frac": 7.753140021708792e-05,
+    "collision_frac": 0.004419289812374012,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 0.9933997429305913,
+    "oracle_inf_frac": 0.0013624678663239074,
+    "gap_mean": 0.008179524802430047,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 0.9957634023138341,
+        "inf_frac": 5.8195023161619216e-05,
+        "gap_mean": 0.0041786458393956675
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.083,
+      0.56078,
+      0.28107,
+      0.05409,
+      0.01438,
+      0.00457,
+      0.00148,
+      0.00045,
+      0.00014,
+      4e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 0.9923276828847482,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.011268547273982056,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 0.9931299582890325
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 0.9988228684555499
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.004419289812374012,
+    "pair_visible_dir": 0.8377976190476191,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 32,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1610593512767426,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08289,
+      0.55217,
+      0.28422,
+      0.05725,
+      0.01593,
+      0.00514,
+      0.00166,
+      0.00053,
+      0.00017,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8389406487232575,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  },
+  {
+    "dataset": "graphqa_edge_count",
+    "split": "train",
+    "rule": "betweenness",
+    "k": 64,
+    "graphs": 1000,
+    "nodes": 12898,
+    "anchors_mean": 12.898,
+    "unreach_frac": 0.1610593512767426,
+    "dead_node_frac": 0.0,
+    "collision_frac": 0.0,
+    "comps_no_anchor_frac": 0.0,
+    "exact_frac": 1.0,
+    "oracle_inf_frac": 0.0,
+    "gap_mean": 0.0,
+    "by_distance": {
+      "1": {
+        "pairs": 85918,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "2": {
+        "pairs": 44224,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "3": {
+        "pairs": 8908,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "4": {
+        "pairs": 2478,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "5": {
+        "pairs": 800,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      },
+      "6": {
+        "pairs": 258,
+        "exact_frac": 1.0,
+        "inf_frac": 0.0,
+        "gap_mean": 0.0
+      }
+    },
+    "alphabet": [
+      0.08289,
+      0.55217,
+      0.28422,
+      0.05725,
+      0.01593,
+      0.00514,
+      0.00166,
+      0.00053,
+      0.00017,
+      5e-05,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pairs_finite": 155600,
+    "pairs_total": 185472,
+    "und_exact_frac": 1.0,
+    "und_inf_frac": 0.0,
+    "und_gap_mean": 0.0,
+    "und_by_distance": {
+      "1": {
+        "pairs": 97816,
+        "exact_frac": 1.0
+      },
+      "2": {
+        "pairs": 74758,
+        "exact_frac": 1.0
+      }
+    },
+    "dead_node_frac_3k": 0.0,
+    "collision_frac_3k": 0.0,
+    "pair_visible_dir": 0.8389406487232575,
+    "pair_visible_und": 1.0,
+    "comp_graphs": 1000,
+    "multi_component_frac": 0.0,
+    "components_mean": 1.0,
+    "largest_component_frac": 1.0,
+    "dir_unreach_within_comp": 0.1610593512767426
+  }
+]

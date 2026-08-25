@@ -1,0 +1,137 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 043 — landmark at bias_lr BELOW the shared bracket. The bracket was
+  // mis-centred for this bias, and every landmark number so far was read off the
+  // wrong side of it.
+  //
+  // ── what 040 + 042 actually showed ───────────────────────────────────────
+  // The 042 normalization worked as specified: `diagnose_norm.py` (job 127000)
+  // reads the live tables and finds |b| <= 3*max|gamma| = 5-13, against 040's
+  // 64-240. The gate is open (max|gamma| 1.7-4.3, mean 0.22-0.51 over 16 layers),
+  // so this is not a silent no-op.
+  //
+  // But at matched eval step, mid-run, landmark is NOT uniformly below the floor:
+  //
+  //     eval #6      loss     EM     F1   hits1   hit*
+  //     floor        1.40   0.142  0.324  0.467  0.598
+  //     landmark     1.15   0.203  0.281  0.401  0.542
+  //     magnetic     0.93   0.264  0.554  0.679  0.764
+  //
+  // Landmark beats the floor decisively on LOSS (-0.25) and on EM (+6 pp) while
+  // losing on F1/hits1/hit*. EM up with hit* down is the signature of a SHARPENED
+  // predictive distribution: more all-or-nothing, converting some partial hits
+  // into exact hits and the rest into total misses. That is what an over-large
+  // additive logit bias does, and it is not a broken bias — it is too much of one.
+  //
+  // ── why the LR bracket is the suspect ────────────────────────────────────
+  // `gamma` is not converging to an interior optimum, it is RAMPING: mean|gamma|
+  // is 0.22 at bias_lr 5e-3 and 0.47 at 2e-2 — a 4.3x ratio against a 4x LR ratio,
+  // i.e. |gamma| ~ lr * steps, the AdamW signature of a persistently signed
+  // gradient. The magnitude at any moment is set by the LEARNING RATE, not by the
+  // loss surface, so the LR *is* the magnitude knob here.
+  //
+  // {5e-3, 2e-2} was inherited from `magnetic_linear`, where it is well centred
+  // because that bias is degree-1 in its learned parameters (one side is the raw
+  // orthonormal eigenvector) and self-limiting. Landmark learns BOTH sides plus a
+  // gain, so the same LR buys far more magnitude. Judging landmark on a bracket
+  // tuned for a different bias, when every point in that bracket is on the
+  // too-much side, is not a fair comparison.
+  //
+  // The bracket's own trend says the same: 4x LESS LR bought +14 pp F1
+  // (2e-2 -> 5e-3, final F1 0.23 -> 0.37 in 040). 043 continues that line another
+  // 5x and 17x down. This is the decisive test:
+  //
+  //   * F1 peaks above the floor at some interior LR  -> landmark is real, and
+  //     THIS is the curve step 6's 128-dim split must be read off.
+  //   * F1 rises monotonically toward the floor as lr -> 0 -> landmark's optimum
+  //     is "no bias": a clean null, reported as one. The EM/loss gain would then
+  //     be a genuine but narrow finding, not a headline.
+  //
+  // F1 stays the headline because every prior number in this line of work is F1
+  // (`linear_bias`, `magnetic_content`, `bias_sharing`). The EM divergence gets
+  // reported alongside it, never swapped in for it.
+  //
+  // ── grid ─────────────────────────────────────────────────────────────────
+  // All three dims are kept, not just the best: the k-scaling curve is the input
+  // to step 6's budget split, and a curve measured at the wrong LR is worthless,
+  // so it has to be re-measured here rather than reused from 042.
+  //
+  // 3 dims x 2 bias_lr x 2 seeds = 12 runs, ~2.8 GPU-h each = ~34 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_experiments/landmark/configs/043_webqsp_landmark_lowlr.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "043_webqsp_landmark_lowlr",
+  "results_dir": "src/experiments/bias_experiments/landmark/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1],
+  "bias_lr": [3e-4, 1e-3],
+  "landmark_k_collate": [8, 16, 32],
+
+  "landmark": true,
+  "landmark_norm": true,
+  "landmark_k": 32,
+  "landmark_d_max": 8,
+  "landmark_channels": 3,
+  "bias_self_node": true,
+  "magnetic_linear": false,
+  "magnetic_m_collate": 0,
+
+  // ── 040/042's recipe, verbatim below this line ───────────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": false,
+  "magnetic": false,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

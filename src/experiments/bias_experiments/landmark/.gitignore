@@ -1,0 +1,5 @@
+# Sweep output: slurm logs, per-job scripts, resolved configs and array maps are
+# regenerated on every submission. Only the run records are force-added — the
+# per-sweep config.jsonc/runs.jsonl and the Phase 0 diagnostic JSONs, which come
+# from a CPU job that is not part of a resubmission (see the commit).
+results/

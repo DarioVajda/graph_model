@@ -1,0 +1,44 @@
+[
+  {
+    "dataset": "webqsp",
+    "k": 32,
+    "graphs": 1984,
+    "gold_nodes_mean": 5.94758064516129,
+    "dir_all": 0.05176801438780541,
+    "dir_to_gold": 0.034271345059560074,
+    "dir_from_gold": 0.022722264708550984,
+    "dir_to_gold_u": 0.042447787212889256,
+    "und_all": 1.0,
+    "und_to_gold": 1.0,
+    "und_from_gold": 1.0,
+    "und_to_gold_u": 1.0
+  },
+  {
+    "dataset": "webqsp_test",
+    "k": 32,
+    "graphs": 1484,
+    "gold_nodes_mean": 5.92722371967655,
+    "dir_all": 0.04582478359787782,
+    "dir_to_gold": 0.03486577989901899,
+    "dir_from_gold": 0.026911125348505954,
+    "dir_to_gold_u": 0.03944742163321878,
+    "und_all": 1.0,
+    "und_to_gold": 1.0,
+    "und_from_gold": 1.0,
+    "und_to_gold_u": 1.0
+  },
+  {
+    "dataset": "webqsp_qniso",
+    "k": 32,
+    "graphs": 1984,
+    "gold_nodes_mean": 5.943548387096774,
+    "dir_all": 0.051352299857571754,
+    "dir_to_gold": 0.03416429846353917,
+    "dir_from_gold": 0.022667395477401254,
+    "dir_to_gold_u": 0.042268591012999186,
+    "und_all": 0.992204586622219,
+    "und_to_gold": 0.996181515321864,
+    "und_from_gold": 0.996181515321864,
+    "und_to_gold_u": 0.9949932575415332
+  }
+]

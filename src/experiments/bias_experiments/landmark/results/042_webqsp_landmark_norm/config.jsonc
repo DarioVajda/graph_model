@@ -1,0 +1,119 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 042 — the landmark arms of 040, re-run with the factors normalized.
+  //
+  // 040 put landmark at 0.357 F1 against a 0.462 no-bias floor: a 10 pp
+  // REGRESSION, consistent across dims, both LRs and both seeds. A zero-init bias
+  // that merely failed to help would sit AT the floor, so this was a defect, not
+  // a result. `diagnose_scale.py` (job 126943) read the trained tables and found
+  // it: |b|max = 9-15 at bias_lr 5e-3 and 64-240 at 2e-2, against attention
+  // logits of O(1-10). The bias was not nudging attention, it was replacing it,
+  // and F1 tracked |b| inversely.
+  //
+  // The cause was an error in LANDMARK_BIAS.md's own reasoning. It argued no
+  // normalization was needed because the form is "degree-1 in each side" — true,
+  // and irrelevant: b is the PRODUCT of two TRAINABLE tables, so it is degree-2
+  // in the learned parameters with no bound on |F||G|. `magnetic_linear` is not a
+  // counterexample; there one side is the raw orthonormal eigenvector (|V| <= 1)
+  // and only W is learned, i.e. degree-1 overall, which is exactly why it is
+  // stable at the same LR. This is MIXED_BIAS.md §5.7 in a different costume.
+  //
+  // The fix is that section's own remedy (§5.8): L2-normalize each side's
+  // per-(node, channel) factor and put the magnitude in a per-head gain, so
+  // Cauchy-Schwarz gives |b| <= 3*max|gamma| — a hard bound independent of the
+  // tables. Init F = G = exp(-d/tau) and gamma = 0: the bias is 0 at step 0 and
+  // d b/d gamma != 0, so gamma moves at step 1 and the tables at step 2. Zeroing
+  // G instead (040's init) would make k_hat = normalize(0) = 0 and kill
+  // d b/d gamma as well — a dead saddle.
+  //
+  // ── what is re-run, and what is not ──────────────────────────────────────
+  // ONLY the landmark arms. `magnetic_linear` never touched this code path, so
+  // 040's magnetic cells stand and are reused as the comparator curve; re-running
+  // them would burn 12 GPU-runs to reproduce numbers that cannot have moved. The
+  // floor (041) is likewise reused.
+  //
+  // The grid is 040's exactly — same dims {24,48,96}, same bias_lr bracket, same
+  // 2 seeds, same recipe — so 042-vs-040 isolates the normalization and nothing
+  // else. The bracket is kept even though the bound should remove 040's LR
+  // sensitivity, because "the bound removed the LR sensitivity" is itself the
+  // evidence the fix worked.
+  //
+  // 3 dims x 2 bias_lr x 2 seeds = 12 runs, ~2.8 GPU-h each = ~34 GPU-h.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/bias_experiments/landmark/configs/042_webqsp_landmark_norm.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "042_webqsp_landmark_norm",
+  "results_dir": "src/experiments/bias_experiments/landmark/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1],
+  "bias_lr": [5e-3, 2e-2],
+  "landmark_k_collate": [8, 16, 32],
+
+  "landmark": true,
+  "landmark_norm": true,
+  "landmark_k": 32,
+  "landmark_d_max": 8,
+  "landmark_channels": 3,
+  "bias_self_node": true,
+  "magnetic_linear": false,
+  "magnetic_m_collate": 0,
+
+  // ── 040's recipe, verbatim below this line ───────────────────────────────
+  "question_node": "isolated",
+  "mode": "train",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 2,
+  "accumulation_steps": 4,
+  "lr": 1e-4,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": false,
+  "magnetic": false,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

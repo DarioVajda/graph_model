@@ -1,0 +1,335 @@
+{
+  "cells": [
+    {
+      "task": "edge_count",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.24,
+      "acc_min": 0.216,
+      "acc_max": 0.25,
+      "val": 0.244
+    },
+    {
+      "task": "edge_count",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.232,
+      "acc_min": 0.226,
+      "acc_max": 0.248,
+      "val": 0.28
+    },
+    {
+      "task": "edge_count",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.35,
+      "acc_min": 0.346,
+      "acc_max": 0.38,
+      "val": 0.36
+    },
+    {
+      "task": "edge_count",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.424,
+      "acc_min": 0.384,
+      "acc_max": 0.436,
+      "val": 0.412
+    },
+    {
+      "task": "edge_count",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.458,
+      "acc_min": 0.424,
+      "acc_max": 0.482,
+      "val": 0.448
+    },
+    {
+      "task": "edge_count",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.584,
+      "acc_min": 0.562,
+      "acc_max": 0.588,
+      "val": 0.584
+    },
+    {
+      "task": "node_degree",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.518,
+      "acc_min": 0.516,
+      "acc_max": 0.558,
+      "val": 0.582
+    },
+    {
+      "task": "node_degree",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.552,
+      "acc_min": 0.518,
+      "acc_max": 0.554,
+      "val": 0.61
+    },
+    {
+      "task": "node_degree",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.63,
+      "acc_min": 0.622,
+      "acc_max": 0.634,
+      "val": 0.632
+    },
+    {
+      "task": "node_degree",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.644,
+      "acc_min": 0.636,
+      "acc_max": 0.736,
+      "val": 0.68
+    },
+    {
+      "task": "node_degree",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.886,
+      "acc_min": 0.884,
+      "acc_max": 0.886,
+      "val": 0.882
+    },
+    {
+      "task": "node_degree",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.87,
+      "acc_min": 0.858,
+      "acc_max": 0.87,
+      "val": 0.87
+    },
+    {
+      "task": "shortest_path",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.7,
+      "acc_min": 0.69,
+      "acc_max": 0.702,
+      "val": 0.762
+    },
+    {
+      "task": "shortest_path",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.796,
+      "acc_min": 0.758,
+      "acc_max": 0.8,
+      "val": 0.82
+    },
+    {
+      "task": "shortest_path",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.732,
+      "acc_min": 0.706,
+      "acc_max": 0.746,
+      "val": 0.764
+    },
+    {
+      "task": "shortest_path",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.886,
+      "acc_min": 0.846,
+      "acc_max": 0.912,
+      "val": 0.916
+    },
+    {
+      "task": "shortest_path",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.668,
+      "acc_min": 0.666,
+      "acc_max": 0.69,
+      "val": 0.726
+    },
+    {
+      "task": "shortest_path",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.972,
+      "acc_min": 0.972,
+      "acc_max": 0.976,
+      "val": 0.972
+    }
+  ],
+  "best": {
+    "node_degree@k4": {
+      "task": "node_degree",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.552,
+      "acc_min": 0.518,
+      "acc_max": 0.554,
+      "val": 0.61
+    },
+    "node_degree@k8": {
+      "task": "node_degree",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.644,
+      "acc_min": 0.636,
+      "acc_max": 0.736,
+      "val": 0.68
+    },
+    "node_degree@k16": {
+      "task": "node_degree",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.886,
+      "acc_min": 0.884,
+      "acc_max": 0.886,
+      "val": 0.882
+    },
+    "shortest_path@k4": {
+      "task": "shortest_path",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.796,
+      "acc_min": 0.758,
+      "acc_max": 0.8,
+      "val": 0.82
+    },
+    "shortest_path@k8": {
+      "task": "shortest_path",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.886,
+      "acc_min": 0.846,
+      "acc_max": 0.912,
+      "val": 0.916
+    },
+    "shortest_path@k16": {
+      "task": "shortest_path",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.972,
+      "acc_min": 0.972,
+      "acc_max": 0.976,
+      "val": 0.972
+    },
+    "edge_count@k4": {
+      "task": "edge_count",
+      "k": 4,
+      "dims": 12,
+      "bias_lr": 0.005,
+      "n": 3,
+      "acc": 0.24,
+      "acc_min": 0.216,
+      "acc_max": 0.25,
+      "val": 0.244
+    },
+    "edge_count@k8": {
+      "task": "edge_count",
+      "k": 8,
+      "dims": 24,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.424,
+      "acc_min": 0.384,
+      "acc_max": 0.436,
+      "val": 0.412
+    },
+    "edge_count@k16": {
+      "task": "edge_count",
+      "k": 16,
+      "dims": 48,
+      "bias_lr": 0.02,
+      "n": 3,
+      "acc": 0.584,
+      "acc_min": 0.562,
+      "acc_max": 0.588,
+      "val": 0.584
+    }
+  },
+  "controls": {
+    "floor (no bias)": {
+      "node_degree": 0.086,
+      "shortest_path": 0.47,
+      "edge_count": 0.026
+    },
+    "magnetic (MLP)": {
+      "node_degree": 0.984,
+      "shortest_path": 0.97,
+      "edge_count": 0.47
+    },
+    "magnetic +selfnode": {
+      "node_degree": 0.976,
+      "shortest_path": 0.942,
+      "edge_count": 0.412
+    },
+    "magnetic_linear": {
+      "node_degree": 0.974,
+      "shortest_path": 0.944,
+      "edge_count": 0.496
+    },
+    "mag_linear +selfnode": {
+      "node_degree": 0.968,
+      "shortest_path": 0.926,
+      "edge_count": 0.446
+    }
+  },
+  "best_incumbent": {
+    "node_degree": "magnetic (MLP)",
+    "shortest_path": "magnetic (MLP)",
+    "edge_count": "magnetic_linear"
+  }
+}
