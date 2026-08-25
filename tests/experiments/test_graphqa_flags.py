@@ -89,6 +89,8 @@ _UNPERTURBABLE = {
     "rwse": "unwired -> validate() rejects it (tested above)",
     "val_fraction": "must stay in (0, 1)",
     "max_steps": "-1 is the sentinel; +1 gives 0, a different sentinel",
+    "landmark_channels": "3 -> 4 is off the allowed set; only 2 and 3 exist "
+                         "(directed-only ablation vs. with the undirected block)",
 }
 
 # Overrides a field needs alongside it to stay valid.
@@ -104,6 +106,11 @@ _COMPANIONS = {
     # spd defaults ON here, and bias_self_node refuses to combine with it (SPDBias
     # has no self-distance row, so the flag would cover only some active biases).
     "bias_self_node": {"spd": False},
+    # Both refuse to be set with landmark off, deliberately: a slice width or a
+    # gain multiplier on a bias that is not enabled is a silent no-op, and a
+    # silent no-op on this bias reads as a clean negative.
+    "landmark_k_collate": {"landmark": True},
+    "landmark_gain_scale": {"landmark": True},
 }
 
 
