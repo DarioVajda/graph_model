@@ -29,8 +29,8 @@ graph_model/
       ├── models/                       # Implementation of the custom architecture.
       └── utils/                        # general-purpose utility functions and helper scripts.
   ├── .gitignore                        # specifies intentionally untracked files to ignore.
-  ├── hf_login.sh                       # Helper script for logging into the Hugging Face Hub. (private)
-  └── wandb_login.sh                    # Helper script for logging into Weights & Biases (WandB). (private)
+  ├── hf_login.example.sh               # Template for the Hugging Face Hub login script (copy to hf_login.sh, which is gitignored).
+  └── wandb_login.example.sh            # Template for the Weights & Biases (WandB) login script (copy to wandb_login.sh, which is gitignored).
   ├── login.sh                          # A script running hf_login and wandb_login.
   ├── README.md                         # Project documentation (this file).
   ├── requirements.in                   # High-level specification of project dependencies.
@@ -48,6 +48,9 @@ source .venv/bin/activate   # Activate the environment
 pip install pip-tools       # Download pip-tools
 pip-compile                 # Compile the full requirements.txt file
 pip-sync                    # Install all requirements
+
+cp hf_login.example.sh hf_login.sh        # Insert your tokens into the two copies,
+cp wandb_login.example.sh wandb_login.sh  # then run ./login.sh
 ```
 
 From now on, we will assume that each program is ran inside of the `.venv` environment.
