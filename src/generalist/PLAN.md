@@ -105,12 +105,12 @@ as decisions land.
 | | Decision / step | Status | What it gates |
 |---|---|---|---|
 | **D1** | Edge encoding — node-pair extrapolation vs Levi | ✅ Decision: **Levi** | schema, relbench, molecules |
-| **D2** | Magnetic sharing granularity | open — must be re-profiled on D4's backbone | trunk cost for its whole life |
+| **D2** | Magnetic sharing granularity | ✅ Decision: **`G=4`** at 1B (`bias_experiments/bias_sharing` §4.4); re-profile on D4's backbone still owed | trunk cost for its whole life |
 | **D3** | Remaining constants | **decided**, evidence in `CLAUDE_CONTEXT.md` | — |
 | **D4** | Backbone + trainable surface | leaning Llama-3.1-8B-Instruct, arm B; arms A/B/C settled in Phase 1 | D2, §6, everything at scale |
 | **D5** | Context budget + graph-size policy | not started | schema, mixture, §8 |
 | **D6** | Bias-path numerics under bf16 | not started | every invariant claim at trunk scale |
-| **D7** | Batch and loss accounting | not started | whether Phase 1 is interpretable at all |
+| **D7** | Batch and loss accounting | (a) ✅ **two-level, per-example default**; (b)(c) open | whether Phase 1 is interpretable at all |
 | §3.2 | Unified schema + `registry.py` + adapters | not started | Phase 1 |
 | §3.3 | Held-out task set declared | not started | every generality claim |
 | §3.4 | Measurement protocol frozen | not started | every longitudinal number |
@@ -366,11 +366,23 @@ asserting a threshold that was calibrated in a different precision.
 
 Three coupled choices that look like implementation detail and are not.
 
-**(a) Loss normalization: per-token or per-example.** CLRS-Text answers are long execution
-traces; GraphQA answers are one word. Under token-weighted loss a 5% *example* share can be
-a far larger *gradient* share. §5 specifies mixture weights in examples — so until this is
-fixed, mixture weight and gradient weight are different quantities and every mixture-tuning
-result is confounded. This is the single cheapest thing on this list to get wrong.
+**(a) Loss normalization — DECIDED: two-level, per-example default.** CLRS-Text answers are
+long execution traces; GraphQA answers are one word, and answer length is uncorrelated with
+how much the model should learn the task. Under token-weighted loss a 5% *example* share can
+be a far larger *gradient* share, and §5 specifies mixture weights in examples — so a global
+token rule makes mixture weight and gradient weight different quantities and confounds every
+mixture-tuning result.
+
+The rule is therefore **two-level**: each task contributes gradient exactly proportional to
+its mixture weight (non-negotiable, this is what makes the mixture interpretable), while how
+that share is spread over the task's own examples is a **per-task field in `registry.py`**,
+defaulting to per-example. The escape hatch matters for CLRS-Text, where the trace *is* the
+supervision — per-example normalization gives each execution step ~500× less signal than a
+one-word answer — and adding the field now is free where retrofitting it mid-trunk is a
+re-warm. Note the interaction with (c): per-example is trivial under homogeneous batches and
+needs cross-rank example counts under mixed ones, which is the same footgun class as the
+known gradient-accumulation normalization bug and needs a test pinning it across
+accumulation steps and ranks.
 
 **(b) Effective batch size in tokens.** LR is coupled to it, so changing it mid-trunk is an
 unlabelled LR change on a schedule chosen specifically to have no LR events. Fix it once,
@@ -417,8 +429,11 @@ costs nothing now and is impossible to make later.
 * GraphQA: **triangle counting** (the known-hard task) and **connected nodes**
 * Probes: **`direction`** (has a provable structural discriminator — symmetric features
   cannot solve it by construction, so transfer there is unambiguous)
-* **Family Tree**
-* One TAG dataset
+* **Family Tree** (`our_tests/family`)
+* TAG: **Pubmed**. Not `reddit`, though it is the structurally distinct one
+  (`tag_benchmarks/config.py` splits `CITATION_DATASETS` from `REDDIT_DATASETS`): a
+  held-out task is only informative where transfer is a fair expectation, and reddit is
+  different enough that failure there would say nothing.
 * Later: a scaffold-split molecule set, one held-out CLRS algorithm family
 
 **Two metrics on them, not one:**
@@ -457,8 +472,22 @@ after seeing results.
 
 ## 4. Phase 1 — multi-task feasibility (go/no-go)
 
-One model, one adapter, one bias set, on data that **already exists**: GraphQA(7) +
-probes(3) + KGQA + TAG + Family-Tree-minus-heldout. No new data pipelines.
+One model, one adapter, one bias set, on data that **already exists**. No new data
+pipelines. The mixture, held-outs of §3.3 removed:
+
+| source | in the mixture | kind |
+|---|---|---|
+| `graphqa` | the 7 reported tasks minus the 2 held out; `disconnected_nodes` + `node_classification` **train-only** (no official val split) | corpus |
+| `probes` | `substructure`, `local_hop`, `text_path` | generator |
+| `kgqa` | `webqsp`, `cwq` — **Levi, never triplet** (§3.2) | corpus |
+| `our_tests` | `kg_qa` (synthetic KG-QA via `kgqa_gen`, distinct from `kgqa`) | generator |
+| `tag_benchmarks` | `cora`, `ogbn-arxiv`, `reddit` | corpus |
+| `expressiveness` | HARD, large-N | generator |
+| `context` | **eval only** (length extrapolation); saturated, so no training weight | generator |
+
+`expressiveness` is in for one reason: at 1600–2400 nodes it is the *only* source of
+large-graph training data in the repo, and D5 locks the trunk into the structural
+statistics of whatever it trains on.
 
 Two questions:
 
@@ -514,10 +543,15 @@ existing `sbatch_chain_*.sh` launchers in `src/experiments/context/`. Two coroll
 
 **Mixture (`mixture.py`).** Temperature sampling (∝ size^0.5 as the default) so relbench
 and CWQ don't swamp the probes, plus explicit **per-dataset pass caps**. Exploit the fact
-that GraphQA, the probes, expressiveness, Family Tree, KG-QA and CLRS-Text are
+that the probes, expressiveness, Family Tree, `our_tests/kg_qa` and CLRS-Text are
 **generators, not corpora**: generate fresh and train single-pass, which starves the
-overfitting that produces early peaks. Finite data (relbench, TAG, WebQSP/CWQ, molecules)
-gets 2–3 passes maximum.
+overfitting that produces early peaks. Finite data gets 2–3 passes maximum — and that
+includes **GraphQA**, which is a corpus *here*: it was generated programmatically upstream
+but the generation code is not in this repo. Porting it is a real project, and worth
+scheduling for a reason beyond single-pass data: fresh generation would supply held-out
+eval sets for every GraphQA task without carving them out of train, which is the eval
+hygiene §9 asks for and the only way `disconnected_nodes` / `node_classification` become
+gate-eligible. Same for relbench, TAG, WebQSP/CWQ and molecules.
 
 **Why this fixes the "peaks at 20%" pathology.** That pattern is a high-capacity adapter
 overfitting a small fixed dataset under a global checkpoint-selection rule — not a law.
@@ -570,7 +604,12 @@ the usual replay ratios don't transfer directly.
 Each develops as an isolated experiment package, then enters through the admission gate.
 
 * **relbench** — `src/experiments/relbench/PLAN.md` is already in progress. Typed foreign
-  keys make it the natural first consumer of D1.
+  keys make it the natural first consumer of D1. **Admit it last, and score it on its own
+  terms:** it asks for uncertain predictive estimates rather than graph retrieval or
+  reasoning, which is not what GTLM is for. On rel-trial the graph arm is −7.7 pp (11.8σ)
+  under flat with the bias channel inert; write into the admission criterion that this
+  bounds relbench, not the architecture, or a later reader will take it as a general
+  failure.
 * **Molecules** — needs bond types (D1) and a representation decision (SMILES vs.
   atom-node text) that will matter more than most modelling choices. The `substructure`
   probe (`magnetic` 97.9 vs `none` 51.2 on ring membership) is the encouraging prior.
@@ -669,6 +708,11 @@ Definition of *done* per row; current status lives in the table at the top, not 
 - [ ] Eval suites frozen; held-out task set declared and committed
 - [ ] Measurement protocol frozen (§3.4): seeds per gate, flat-twin matching rule, replay
       corpus version, lineage fields
+- [ ] Plumbing smoke run (1B, ~1 day, 3 maximally different-shaped tasks) asserting
+      per-task gradient share == configured mixture weight, every adapter round-tripping
+      the schema validator, and no task silently contributing zero — *before* Phase 1
+      spends 300–500 GPU-h on a result the `--magnetic-groups` class of silent wiring bug
+      would make uninterpretable
 - [ ] **Phase 1** at 1B: multi-task feasibility **+ D4 arms A/B/C** → go/no-go
 - [ ] Trunk chain harness (resumable ≤7-day jobs, optimizer state persisted) proven on a
       throwaway run *before* the real trunk starts
