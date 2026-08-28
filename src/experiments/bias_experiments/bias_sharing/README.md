@@ -325,6 +325,19 @@ faster than `G=2`. On a trunk run that lasts months and cannot be revisited
 mid-flight, spending 4% of step time rather than 0.8 F1 is the right side of that
 trade.
 
+**Locked 2026-08-25.** Three things the verdict does *not* rest on, recorded so
+the frozen architecture config is not read as more resolved than it is:
+
+* **`G=4` is not measurably better than `G=2`.** 72.85 ± 1.03 vs 72.55 ± 0.23 is a
+  0.30 F1 gap deep inside noise, and `G=4`'s failure to separate from `G=16` owes
+  as much to its 4.5× larger seed spread as to its mean. `G=4` is the conservative
+  point above the `G=1` cliff, not a resolved optimum against `G=2`.
+* **The premium against `G=2` is N-dependent** (§6.4): ~4% at WebQSP's ≤512 nodes,
+  8.4% at N=4096. Every accuracy number in §4.3 is at ≤512 nodes.
+* **At 32 layers, `G=4` is 8 layers per group, not 4.** Whether the trunk inherits
+  "4 groups" or "4 layers per group" is undetermined — depth never varied here —
+  and is part of the D4-backbone re-profile `PLAN.md` §10 still requires.
+
 ---
 
 ## 5. Notes and caveats
