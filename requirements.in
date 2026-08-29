@@ -18,6 +18,11 @@ protobuf
 torch-geometric
 networkx
 scipy
+
+# Chemistry (src/experiments/molecules) — self-contained wheel, depends only on
+# numpy + Pillow, both already pinned above. Installed with --no-deps so it cannot
+# move torch.
+rdkit
 --find-links https://data.pyg.org/whl/torch-2.10.0+cu128.html
 torch-sparse
 torch-scatter

@@ -1,0 +1,10 @@
+__pycache__/
+# Built .gtds caches and their sidecars. Rebuilt deterministically by --mode
+# data_prep; the cache key pins task, arm, encoding, pool, tokenizer and seed.
+datasets/
+*.gtds
+*.gtds.lock
+# Regenerable sweep artifacts. PLAN.md is the durable record of what was run and
+# what it measured — see feedback-dont-commit-results.
+results/
+logs/

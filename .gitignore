@@ -22,6 +22,10 @@ wandb
 rclone*
 CLAUDE_CONTEXT.md
 
+# downloaded benchmark corpora (MoleculeNet CSVs, ~7 MB) — re-fetchable, see
+# src/experiments/molecules/PLAN.md M0
+src/experiments/molecules/raw_data/
+
 # packaging
 *.egg-info/
 build/
