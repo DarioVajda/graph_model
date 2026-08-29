@@ -1,0 +1,69 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 002 — M3: the first real Tier-B measurement. BACE, both arms, 3 seeds.
+  //
+  // HOLD until 001 has reported. This config assumes 001 settled `impl` and
+  // confirmed the plumbing; submitting it first would spend ~18 queue slots to
+  // rediscover a shape bug that 001 finds in six short ones.
+  //
+  // Why BACE first, of the six classification sets:
+  //   - it is a direct InstructMol anchor (84.3 / 82.1 graph / graph+SMILES at
+  //     7B; Uni-Mol 85.7 is the ceiling, not the target — PLAN.md §2);
+  //   - 1513 molecules, so a full run is minutes, not hours;
+  //   - 45.7% positive, so AUROC is well-conditioned and the HIV tie-collapse
+  //     risk is not confounding the first look at the readout.
+  //
+  // The gate this feeds is B1: does the graph arm beat OUR OWN flat twin? The
+  // external rows are anchors, not matched controls. Three seeds is the minimum
+  // that makes "±1 sd" mean anything, and scaffold splits on 1.5k molecules are
+  // noisy enough that a single seed would be uninterpretable.
+  //
+  // `impl` is left unset on purpose — fill it from 001's measured s/it before
+  // submitting, rather than defaulting to flex on the assumption that it wins at
+  // N ~ 73 (BACE is the largest Tier-B set at 34.1 atoms mean).
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/002_bace.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "002_bace",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "03:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },  // the real arm
+    { "arm": "graph", "bias": "none" },          // structure off: isolates the bias channel
+    { "arm": "flat",  "bias": "none" }           // the matched control (gate B1)
+  ],
+
+  "task": "bace",
+  "encoding": "rich_levi",
+  "seed": [0, 1, 2],
+
+  // Tier B sizes come from the scaffold split (1210/151/152), not from
+  // train_size/val_size/test_size — those are Tier-A knobs and are ignored here.
+  "num_epochs": 20,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 1e-5,
+  "bias_lr": 1e-3,
+  "lora": true,
+  "lora_r": 8,
+  "num_workers": 4,
+  "flex_compile_mode": "max-autotune-no-cudagraphs"
+}

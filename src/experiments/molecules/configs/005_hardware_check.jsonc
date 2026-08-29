@@ -1,0 +1,93 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 005 — can this experiment run on H100 / A100 as well as B200 / B300?
+  //
+  // WHY. Every molecules sweep so far asked for `["B200", "B300"]`, which is the
+  // most contended hardware on the partition, while `ixh` (8x H100) and `ana`
+  // (8x A100 80GB) sit MIXED with capacity. Molecules are small — 001 measured a
+  // 20.8 GB peak for the flex graph arm (§3.1.2) — so there is no memory reason
+  // for the restriction. It was inherited, not chosen.
+  //
+  // WHAT COULD ACTUALLY BREAK, and why this is a run rather than an assumption:
+  // arithmetic is not the risk (bf16 on Ampere/Hopper/Blackwell is fine, and
+  // cross-arch reduction-order differences are far below the 0.03 admission
+  // threshold in §3.2.4). The risk is the *compile* path — FlexAttention under
+  // `max-autotune-no-cudagraphs` generates and autotunes Triton kernels per
+  // architecture, and sm80 (A100) is a different backend target from sm100
+  // (B200). A kernel that fails to compile there fails at step 0. So this config
+  // uses the PRODUCTION compile mode, not the cheap one; testing with
+  // `flex_compile_mode: "default"` would exercise the wrong code path and prove
+  // nothing about the sweeps that matter.
+  //
+  // THE NAMING TRAP, recorded because it cost a read of `sweep/execute.py` to
+  // find. A list of GPUs becomes `--constraint GPU_BRD:X|GPU_BRD:Y`, and the
+  // feature values are NOT the gres names:
+  //
+  //     node   gres name          GPU_BRD feature   memory
+  //     ana    gpu:A100_80GB:8    A100              80 GB
+  //     axa    gpu:A100:8         A100              40 GB
+  //     ixh    gpu:H100:8         H100              80 GB
+  //
+  // So `"A100_80GB"` here would render `GPU_BRD:A100_80GB`, match no node on the
+  // partition, and the job would sit PENDING forever with no error. The correct
+  // token is `"A100"` — which also admits axa's 40 GB cards, and 21 GB fits.
+  //
+  // B200/B300 are deliberately EXCLUDED so the check cannot pass by quietly
+  // landing on the hardware it is supposed to be testing an alternative to.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/005_hardware_check.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "005_hardware_check",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,          // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "32G",
+      "time": "01:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // Both arms x both backends: the flex path is the one with an architecture
+  // dependency, and eager is the fallback if it turns out to have one.
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },
+    { "arm": "flat",  "bias": "none" }
+  ],
+  "impl": ["v2-flex", "v2-eager"],
+
+  "task": "ring_membership",
+  "encoding": "rich_levi",
+  "pool": "bace",
+  "seed": 0,
+
+  "train_size": 400,
+  "val_size": 100,
+  "test_size": 100,
+  "data_seed": 0,
+
+  // 30 steps. NO ACCURACY FROM THIS SWEEP MAY BE QUOTED — it answers "does it
+  // run, and how fast", nothing else.
+  "max_steps": 30,
+  "num_epochs": 1,
+  "eval_steps": 15,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 1e-5,
+  "bias_lr": 1e-3,
+  "lora": true,
+  "lora_r": 8,
+  "num_workers": 4,
+
+  // Production compile mode, on purpose — see the header.
+  "flex_compile_mode": "max-autotune-no-cudagraphs"
+}

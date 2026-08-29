@@ -1,0 +1,87 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 001 — M2 smoke (PLAN.md §8). The first GPU contact for this domain.
+  //
+  // What it is FOR, in order:
+  //   1. Does the pipeline survive Arrow -> __getitem__ -> collator -> kernel on
+  //      a real ~59-node Levi molecule graph? The round-trip test proves the
+  //      encoding; it says nothing about shapes, dtypes or bucketing.
+  //   2. Settle flex-vs-eager at N ~ 52. PLAN.md §3.4 records this as genuinely
+  //      open: flex wins by skipping BlockMask blocks, and there is little to
+  //      skip in a graph this small, while molecules bucket into so few (L, N)
+  //      shapes that compile cost is low either way. Measure, do not assume.
+  //   3. Replace the ESTIMATED ~0.2-0.4 s/it with a measured one, and record
+  //      peak GB. Speed is a first-class result here (PLAN.md §0 item 2).
+  //   4. Stand up the Null-gate controls: the `bias: none` graph arm and the
+  //      flat arm both run, so a later null has its controls already in place
+  //      rather than being reconstructed after the fact.
+  //
+  // What it is NOT: a quality measurement. 30 optimizer steps on 400 examples
+  // is ~3 passes of a 4x8 effective batch. NO ACCURACY FROM THIS SWEEP MAY BE
+  // QUOTED AS A RESULT — including, and especially, a graph-vs-flat difference.
+  //
+  // Pool is `bace` alone (1513 molecules, the largest mean atom count at 34.1,
+  // so the biggest tensors in Tier B) rather than the 5-corpus default: the
+  // 57k-molecule pool costs ~90s of RDKit parsing per job for no smoke value.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/001_smoke.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "001_smoke",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "01:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The flat arm REQUIRES bias "none" (a single-node graph has no structure for
+  // a bias to read — Property 2), so arm and bias vary together as a bundle
+  // rather than as two independent axes. `config.validate()` rejects the
+  // combination the cartesian product would otherwise produce.
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },  // the real arm
+    { "arm": "graph", "bias": "none" },          // Null-gate control: structure off, text on
+    { "arm": "flat",  "bias": "none" }           // the matched control (= base Llama)
+  ],
+
+  // The open question this smoke exists to close.
+  "impl": ["v2-flex", "v2-eager"],
+
+  "task": "ring_membership",
+  "encoding": "rich_levi",
+  // A comma string, not a JSON list: the runner reads a list as a sweep AXIS.
+  // Harmless here (one element = one value), a silent 2x expansion in 003.
+  "pool": "bace",
+  "seed": 0,
+
+  "train_size": 400,
+  "val_size": 100,
+  "test_size": 100,
+  "data_seed": 0,
+
+  "max_steps": 30,
+  "num_epochs": 1,
+  "eval_steps": 15,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 1e-5,
+  "bias_lr": 1e-3,
+  "lora": true,
+  "lora_r": 8,
+  "num_workers": 4,
+
+  // Quick iteration: the ~320s/shape autotune is not worth paying for 30 steps.
+  "flex_compile_mode": "default"
+}

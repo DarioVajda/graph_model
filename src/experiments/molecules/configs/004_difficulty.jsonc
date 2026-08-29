@@ -1,0 +1,120 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 004 — Tier-A difficulty screen. Which task families are usable instruments?
+  //
+  // WHY THIS EXISTS. 003 answered its own question (the graph arm is fine) and
+  // produced a blocker for everything downstream:
+  //
+  //     ring_membership    graph 1.000   flat 0.877
+  //
+  // The graph arm is AT CEILING. A saturated task cannot rank encodings, cannot
+  // rank bias arms, and cannot show a scaling trend — every variant scores 1.000
+  // and the sweep returns a table of ties. Running M4's encoding sweep on
+  // `ring_membership` would have burned ~12 jobs to learn nothing.
+  //
+  // So: measure all nine runnable Tier-A families under one fixed recipe, both
+  // arms, and keep the ones that are actually instruments. This is a SCREEN, not
+  // a result — its output is a task shortlist, not a claim about GTLM.
+  //
+  // ADMISSION CRITERIA for a family to enter the M4 encoding sweep:
+  //   1. Headroom:     graph accuracy <= 0.95. At ceiling nothing can be ranked.
+  //   2. Signal:       graph - flat >= 0.03. Below that the family is measuring
+  //                    the LLM's text handling, not the graph channel, and an
+  //                    encoding difference has nothing to move.
+  //   3. Learnability: graph accuracy well above the majority-class rate. A
+  //                    family stuck at the base rate is unlearnable at this
+  //                    budget and tells us nothing about encodings either.
+  // Families that fail (1) are still reportable as wins; they are just useless
+  // as instruments. Families that fail (3) get a longer budget before any verdict
+  // (`feedback-dont-call-floors-early`) rather than being dropped.
+  //
+  // `bond_path` is absent because it is held out (PLAN.md §4.1) — the config
+  // could not run it even if it were listed; `load_data` refuses.
+  //
+  // Recipe is 003's, unchanged, so the ring_membership cell here reproduces the
+  // canary's 1.000 / 0.877 and acts as a within-sweep control. One seed: a screen
+  // ranks families, it does not measure any of them.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/004_difficulty.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "004_difficulty",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      // = the run count, which is how you ask for a job ARRAY with no effective
+      // throttle: setting the field at all is what selects the array path (one
+      // job id, one array_map.tsv), and omitting it would submit 18 independent
+      // jobs instead. A *lower* cap is for an idle cluster, where an 18-task
+      // array would take every GPU on the partition; on a busy one it just makes
+      // this sweep finish later without freeing anything for anyone else.
+      // (Submitted with 6, lifted mid-flight via `scontrol update jobid=134202
+      // ArrayTaskThrottle=0`; the frozen record in results/ shows the 6.)
+      "max_concurrent": 18,
+      "partition": "frida",
+      "account": "povejmo",
+      // Not just B200/B300 — molecules peak at ~21 GB, so H100 and A100 are
+      // ample, and 005 verified the flex compile path on A100. These are node
+      // GPU_BRD FEATURE values, not gres names: "A100_80GB" would match no node
+      // and pend forever. See sweep/README.md.
+      "gpus": ["B200", "B300", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      // 003 peaked at ~21 GB device and far less host; 64G was over-requested and
+      // frida's scheduler scored it down. 32G covers the largest Tier-A graph.
+      "mem": "32G",
+      "time": "03:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // Nine families x two arms = 18 runs. The full Tier-A list minus `bond_path`.
+  "task": [
+    "ring_membership",     // control: must reproduce 1.000 / 0.877
+    "aromatic_ring",
+    "ring_count",
+    "ring_size",
+    "fg_presence",
+    "fg_count",
+    "longest_chain",
+    "stereo_potential",
+    "stereo_assigned"      // the designed-in loss: chirality is in SMILES, and in
+                           // the graph only as a parity tag. Flat SHOULD win or
+                           // tie here, and that is the point of including it.
+  ],
+
+  // arm and bias move together: a single-node graph has no structure for a bias
+  // to read (Property 2), and `config.validate()` rejects the product form.
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },
+    { "arm": "flat",  "bias": "none" }
+  ],
+
+  "encoding": "rich_levi",
+  // A COMMA STRING, not a JSON list — the runner reads a list as a sweep AXIS.
+  "pool": "bace,bbbp",
+  "seed": 0,
+
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // 4000 / (4 x 8) = 125 steps/epoch; 10 epochs = 1250 steps. Same as 003, so the
+  // control cell is comparable to the canary rather than merely similar.
+  "num_epochs": 10,
+  "eval_steps": 100,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 1e-5,
+  "bias_lr": 1e-3,
+  "lora": true,
+  "lora_r": 8,
+  "num_workers": 4,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs"
+}
