@@ -434,7 +434,10 @@ costs nothing now and is impossible to make later.
   (`tag_benchmarks/config.py` splits `CITATION_DATASETS` from `REDDIT_DATASETS`): a
   held-out task is only informative where transfer is a fair expectation, and reddit is
   different enough that failure there would say nothing.
-* Later: a scaffold-split molecule set, one held-out CLRS algorithm family
+* Molecules: **ClinTox** (a whole Tier-B dataset) and **`bond_path`** (a whole Tier-A structural
+  family, with a provable structural discriminator the way `direction` has one) — declared
+  2026-08-28 in `src/experiments/molecules/PLAN.md` §4.1, before any molecule run existed
+* Later: one held-out CLRS algorithm family
 
 **Two metrics on them, not one:**
 
@@ -610,9 +613,20 @@ Each develops as an isolated experiment package, then enters through the admissi
   under flat with the bias channel inert; write into the admission criterion that this
   bounds relbench, not the architecture, or a later reader will take it as a general
   failure.
-* **Molecules** — needs bond types (D1) and a representation decision (SMILES vs.
-  atom-node text) that will matter more than most modelling choices. The `substructure`
-  probe (`magnetic` 97.9 vs `none` 51.2 on ring membership) is the encouraging prior.
+* **Molecules** — `src/experiments/molecules/PLAN.md` (M0–M2c done 2026-08-29) settles the
+  representation decision this bullet left open: atom nodes with rich per-atom text, bonds
+  via Levi (D1), with a `terse` control that decides whether the featurization earns
+  itself. The `substructure` probe (`magnetic` 97.9 vs `none` 51.2 on ring membership) is
+  the encouraging prior. **Score it on its own terms**, as with relbench: the matched
+  control is our own SMILES flat twin, not Uni-Mol, which has 3D conformers we have no
+  channel for. Note also that molecules are undirected, so `magnetic` degenerates to
+  plain-Laplacian spectral information here — the `direction` probe's conclusion does not
+  transfer to this domain. **First result (molecules §3.2.7): `longest_chain` graph 0.989 vs
+  flat 0.947** — but only after the training recipe was retuned. Molecules had silently
+  inherited `lr=1e-5, bias_lr=1e-3, r=8` from `expressiveness`, the lowest-capacity recipe in
+  the repo, and under it the same task read −0.079 *against* the graph arm. **Any domain
+  entering the trunk states its recipe and justifies it against the campaigns above**; an
+  inherited hyperparameter block is a confound that looks exactly like an architectural limit.
 * **CLRS-Text** — the best OOD instrument we have, more than just another task: it
   generates at arbitrary problem size, so train at `n ≤ 16` and test at `n = 32/64`.
   Size generalisation is a far stronger claim than in-distribution accuracy and is the

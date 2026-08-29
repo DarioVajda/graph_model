@@ -46,8 +46,9 @@ written automatically; aggregate any sweep (e.g. after sbatch jobs finish) with
 
 Set `execution.mode: "sbatch"` in the config; `python3 -m sweep …` then builds
 and submits the jobs. `granularity: "per_config"` submits one job per run;
-`"single"` one job running every config in sequence; `max_concurrent` caps
-per-config jobs via a throttled job array (`--array=0-(K-1)%N`). The exact
+`"single"` one job running every config in sequence; `max_concurrent` submits the
+per-config jobs as one job array (`--array=0-(K-1)%N`) instead of K separate jobs,
+capped at N running at a time — set it to K unless you mean to throttle. The exact
 commands are always written to `<sweep_dir>/sbatch_commands.sh` and the per-job
 scripts to `<sweep_dir>/jobs/` (submitted unless `dry_run: true` or `sbatch` is
 absent).
@@ -57,7 +58,7 @@ absent).
   "mode": "sbatch",
   "sbatch": {
     "granularity": "per_config",
-    "max_concurrent": 4,          // omit for no cap
+    "max_concurrent": 4,          // = number of runs; selects the ARRAY path
     "partition": "frida", "account": "povejmo",
     "gpus": "B200", "cpus": 16, "mem": "64G", "time": "24:00:00",
     // or a list to accept any of several types (rendered as --gres gpu:N
@@ -78,6 +79,68 @@ so jobs run in the py3.10 container; the launcher puts `.venv/bin` first on
 creds + model cache), runs `login.sh`, and sets `TORCHINDUCTOR_CACHE_DIR`.
 
 ### GPUs per config, and DDP
+
+### `max_concurrent`: set it to the number of runs, don't omit it
+
+**This field does two things, and only one of them is a throttle.** Setting it at
+all is what selects the **job array** path (`--array=0-(K-1)%N`, one job id, one
+`array_map.tsv`); omitting it falls through to submitting **K independent sbatch
+jobs** (`execute.py:441`). The array is almost always what you want, so the house
+default is
+
+```jsonc
+"max_concurrent": <total number of runs>   // array, no effective throttle
+```
+
+which is `%K` on K tasks — every task eligible at once, with all the array
+machinery. Set it *lower* than K only for the one situation the throttle is for:
+an **idle** cluster, where a large array would claim every GPU on the partition
+just because nothing else wants them. On a busy partition a lower cap does nothing
+useful — Slurm's fair-share scheduler is already arbitrating between users, and
+capping your own array only makes your sweep finish later without releasing
+anything to anyone else.
+
+What the array buys you, concretely: one job id, so a mistake is fixable in place
+on every queued task at once, without resubmitting —
+
+```bash
+scontrol update jobid=<id> ArrayTaskThrottle=0                  # lift the cap
+scontrol update jobid=<id> Features="GPU_BRD:H100|GPU_BRD:A100" # widen hardware
+```
+
+Running tasks are unaffected; queued ones become eligible immediately. Slurm
+refuses both for tasks that have already started and names them — that refusal is
+a report, not a failure. With K separate jobs you would be looping over K ids.
+
+The array also **shuffles** index→config (seeded on the sweep name) so a
+demand-sorted config list can't cluster the heavy runs into one wave — which is
+why array task *n* is not run *n*; read `array_map.tsv` for the mapping.
+
+### `gpus` names node *features*, not gres names
+
+A list renders to `--constraint GPU_BRD:X|GPU_BRD:Y`, so each entry must be a value
+of the node's `GPU_BRD` feature — which is **not** always the gres name:
+
+| node | gres name | `GPU_BRD` | memory |
+|---|---|---|---|
+| `ixb*` | `gpu:B200:8` / `gpu:B300:8` | `B200` / `B300` | 180 GB |
+| `ixh` | `gpu:H100:8` | `H100` | 80 GB |
+| `ana` | `gpu:A100_80GB:8` | **`A100`** | 80 GB |
+| `axa` | `gpu:A100:8` | `A100` | 40 GB |
+
+Writing `"A100_80GB"` produces `GPU_BRD:A100_80GB`, which matches no node: the job
+is accepted and then **pends forever with no error**. Check a candidate with
+`scontrol show node <n> | grep ActiveFeatures` before adding it. Note `A100` admits
+both 80 GB and 40 GB cards — constrain on memory separately if a run needs 80.
+
+Check what a config will actually request without submitting:
+
+```python
+from sweep.expand import load_config
+from sweep.execute import _gpu_args, _gpus_per_config
+sb = load_config("<config>.jsonc")["execution"]["sbatch"]
+print(_gpu_args(sb["gpus"], _gpus_per_config(sb)))
+```
 
 `gpus_per_config` (default 1) is the **single source of truth** for how many GPUs
 one run gets. It drives both the `--gres` count and the launcher: at 1 the job
