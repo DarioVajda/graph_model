@@ -11,6 +11,28 @@ invalidated §3.2.6's "the bias is inert" null. Those sections are kept because 
 them is still how the campaign should be run; their **numbers are lower bounds for the graph
 arm**, not measurements of it.
 
+**Configs.** Every sweep in this document is reproducible from `configs/`, one file per sweep,
+renumbered contiguously 000–006 on 2026-08-30:
+
+| config | runs | what it settled | §
+|---|---:|---|---|
+| `000_smoke` | 6 | plumbing, flex-vs-eager, s/it and peak GB | 3.1.2 |
+| `001_bace` | 9 | M3 Tier B — **not yet run**, and needs the tuned recipe first | 8 |
+| `002_difficulty` | 18 | Tier-A difficulty screen at 1250 steps | 3.2.4 |
+| `003_hardware_check` | 4 | H100/A100 run the flex compile path | — |
+| `004_extended` | 20 | the screen at 2500 steps, matched pairs | 3.2.5 |
+| `005_fgcount_ablation` | 3 | bias/question-node ablation — **result retracted** | 3.2.6 |
+| `006_recipe` | 8 | **the recipe fix; `longest_chain` flips** | 3.2.7 |
+
+Two things that are *not* here. The M2 canary's config was deleted (§3.2.3): it set
+`node_position_mode`, which no longer exists, so it could only crash. The width analysis
+(§3.2.5.1) has no config by design — it re-scores another sweep's checkpoints, and its per-run
+inputs are that sweep's outputs; the reproduction procedure is written out in that section.
+
+`results/` directories on disk still carry the **pre-renumbering** names (`001_smoke`,
+`004_difficulty`, `006_extended`, `007_width`, `008_fgcount_ablation`, `009_recipe`) because they
+were written before the renumber and are gitignored. Map them by name, not by number.
+
 **Provenance of every number below.** Repo-internal results are cited to their file.
 External anchors were read this session from the papers named inline. Anything marked
 *(estimate)* is arithmetic, not measurement, and M0/M2 replace it.
@@ -477,7 +499,11 @@ finding about **text-rich GTLM domains in general**, not a molecules workaround.
 
 ### 3.2.3 RESOLVED at M2-canary (job 134111, 2026-08-29): nothing was broken
 
-`003_canary.jsonc` ran the two candidate fixes against the unfixed baseline at 1250 steps.
+The canary config ran the two candidate fixes against the unfixed baseline at 1250 steps.
+(**That config has since been deleted.** It set `node_position_mode`, which no longer exists as
+a `RunConfig` field, so it could only crash — and a config that cannot run is worse than no
+config, because it invites someone to try. Its evidence is this section; nothing else depended
+on it. Every config that remains is verified to expand and construct.)
 Result, `ring_membership`, one seed:
 
 | arm | `node_position_mode` | `question_node` | test acc | bias norm init → final |
@@ -536,13 +562,13 @@ not aliased — a silently-accepted synonym would put two spellings of one arm i
 records. Two consequences worth knowing when reading results:
 
 * Every table above that says `isolated` means today's `on`. The canary predates the rename.
-* **004's `runs.jsonl` straddles it**: tasks that started before the rename record
+* **`002_difficulty`'s `runs.jsonl` straddles it**: tasks that started before the rename record
   `question_node: "isolated"`, later ones record `"on"`. Same layout, same graph, two spellings —
   group them together. The dataset cache is unaffected, because `dataset_path` tags the key only
   when the value differs from the default, so a rename of the default changes no path (pinned by
   `test_default_question_node_leaves_the_cache_path_untagged`).
 
-**The 004 screen is unaffected and did not need re-running.** Its job scripts never passed
+**The `002_difficulty` screen is unaffected and did not need re-running.** Its job scripts never passed
 either flag, so all 18 runs use the question node on and reset positions. The collator swap
 is a verified no-op, not an assumed one: `_node_offsets` returns `{j: 0}` at
 `text_graph_collator_v2.py:330` under `reset`, before `max_spd` — the only argument that
@@ -562,7 +588,7 @@ a family where the graph arm is off the ceiling. Recording it as a near-miss wou
 truncated measurement as a substantive one.
 
 Consequence for the build order: **M4's encoding sweep must not run on `ring_membership`**, and
-task selection stops being an assumption and becomes a measurement — hence `004_difficulty`
+task selection stops being an assumption and becomes a measurement — hence `002_difficulty`
 (§3.2.4), a screen over all nine runnable Tier-A families before any encoding is compared.
 
 ### 3.2.4 M2b — the Tier-A difficulty screen (job 134202, submitted 2026-08-29)
@@ -570,8 +596,8 @@ task selection stops being an assumption and becomes a measurement — hence `00
 `ring_membership` saturating is not a fact about that one family; it is a warning that Tier A
 was designed by intuition and never measured. Nine of the ten families are runnable (`bond_path`
 is held out and `load_data` refuses it), and any of them could be at ceiling, at chance, or
-measuring nothing but the LLM's text handling. `004_difficulty.jsonc` runs all nine × both arms
-= **18 runs** under 003's exact recipe, so its `ring_membership` cell reproduces 1.000 / 0.877
+measuring nothing but the LLM's text handling. `002_difficulty.jsonc` runs all nine × both arms
+= **18 runs** under the canary's exact recipe, so its `ring_membership` cell reproduces 1.000 / 0.877
 as a within-sweep control.
 
 Admission criteria for entering the M4 encoding sweep, fixed before the results land:
@@ -650,13 +676,13 @@ That is the kind of thing a reader cannot detect and an author forgets. So:
 carries this note beneath it:**
 
 > `*` re-run at double the budget (2500 steps vs 1250). A cell was re-run when its arm was
-> **still improving** at the end of the 004 run — validation metric gaining more than 1pp
+> **still improving** at the end of the `002_difficulty` run — validation metric gaining more than 1pp
 > over the last three evals (`still_improving` in the run record). Both arms of an affected
 > pair were re-run, including an already-converged one, so that every graph-vs-flat
 > comparison is between two runs at the same budget. Cells without a `*` converged at 1250
 > steps and were not re-run.
 
-**Superseded in practice by §3.2.7.** Once 006 re-ran *every* cell, the budget stopped being
+**Superseded in practice by §3.2.7.** Once `004_extended` re-ran *every* cell, the budget stopped being
 mixed and the `*` had nothing to mark: §3.2.5's table is uniformly 2500 steps and §3.2.7's is
 uniformly 5000. Keep the convention for any future table that does mix budgets, and keep the
 reasoning behind it — re-run the pair, and trigger on the curve rather than the score — which is
@@ -704,9 +730,9 @@ exactly the way the WebQSP triplet arm is (`src/generalist/PLAN.md` §3.2: *"mus
 reintroduce that encoding under another name"*). A SMILES string in the prompt is a flat
 serialization sitting inside a graph arm.
 
-### 3.2.5 M2c — the screen at double budget (006, 2026-08-29), and what it admitted
+### 3.2.5 M2c — the screen at double budget (`004_extended`, 2026-08-29), and what it admitted
 
-All 18 cells of 004 re-run at 2500 steps under §3.2.4.2's pair rule, plus `fg_atom_membership`
+All 18 cells of `002_difficulty` re-run at 2500 steps under §3.2.4.2's pair rule, plus `fg_atom_membership`
 (added as the atom-level twin of `fg_presence`, §3.2.6). Twenty runs. Test accuracy, one seed:
 
 | family | base rate | graph | flat | graph − flat |
@@ -743,13 +769,24 @@ whether a carbon *could* be a stereocentre, which is pure connectivity and the g
 parity tag and is the family where flat winning confirms the suite measures what it claims. Both
 tie or narrowly favour flat here; neither is decidable at the stale recipe (§3.2.7).
 
-### 3.2.5.1 `max_spd` is not the limitation — measured, not assumed (007, 2026-08-29)
+### 3.2.5.1 `max_spd` is not the limitation — measured, not assumed (the width analysis, 2026-08-29)
 
 Levi doubles every distance, so "the graph arm fails on molecules too wide for the clamp" is the
 obvious hypothesis. It is also exactly the shape of hypothesis that produced `spd_depth`
 (§3.2.3), so it was measured before anything was changed. `evaluate_checkpoint.py` re-scores the
-18 existing 004 checkpoints and writes per-example geometry (`analysis.py`); no retraining, and
-it asks the question about *those* models rather than different ones.
+18 existing `002_difficulty` checkpoints and writes per-example geometry (`analysis.py`); no
+retraining, and it asks the question about *those* models rather than different ones.
+
+**This one has no config, deliberately.** It is `--mode eval` over another sweep's checkpoints,
+and both of its per-run inputs — the checkpoint directory and the `--expect-accuracy` the reload
+is verified against — are *outputs* of that sweep, not values anyone can write down in advance.
+A config would encode paths under gitignored `checkpoints/` and accuracies from one particular
+execution of `002_difficulty`, and would fire spurious reload mismatches against any re-run of
+it. To reproduce: run `002_difficulty`, then for each of its 18 checkpoints call
+`python -m src.experiments.molecules --mode eval --checkpoint <dir> --expect-accuracy <the
+test_accuracy that run recorded>` with `002_difficulty`'s data flags unchanged — they must match
+exactly or `load_data` builds a different test split and the per-example rows describe examples
+the model never saw.
 
 * **Reach.** Levi diameter p50 = 26, p90 = 37, max = 76. About 26–30% of examples have at least
   one pair at or beyond `max_spd = 32` — but the **mean share of pairs clamped is 0.66–0.84%**.
@@ -781,7 +818,7 @@ Recorded because the first diagnostic run at this question called `to_undirected
 measuring and therefore answered a question about a different graph. The measurement above
 replaces it.
 
-### 3.2.6 008 — the `fg_count` ablation, and why it is now INVALID
+### 3.2.6 `005_fgcount_ablation` — and why its result is now INVALID
 
 `fg_count` is the molecules analogue of GraphQA's `edge_count`: count occurrences across the
 whole graph, no atom named. GraphQA `003_ablation` says the structural bias is load-bearing for
@@ -791,7 +828,7 @@ split (§3.2.5), so this sweep asked which. Three arms at 2500 steps against the
 
 | arm | test acc |
 |---|---:|
-| `spd+magnetic`, question node on *(006 reference)* | 0.820 |
+| `spd+magnetic`, question node on *(`004_extended` reference)* | 0.820 |
 | `spd` (no magnetic) | 0.822 |
 | `none` (no structural channel at all) | 0.823 |
 | `spd+magnetic`, question node **off** | 0.798 |
@@ -801,17 +838,17 @@ encoding competing with a pretrained-native SMILES string rather than about the 
 
 **That reading is retracted. This sweep ran at `bias_lr = 1e-3`, the lowest in the repo**
 (§3.2.7). `project-landmark-campaign` records `bias_lr` as *the magnitude knob*, so "the bias
-does nothing" and "the bias never reached useful magnitude" are indistinguishable here, and 009
+does nothing" and "the bias never reached useful magnitude" are indistinguishable here, and `006_recipe`
 showed the second is live. **Do not cite the 0.820 / 0.822 / 0.823 null.** Retiring it properly
 needs one run: `fg_count`, graph, `bias=none`, at the tuned recipe and 5000 steps. If it lands
-near 0.897 the bias really is inert and the 009 gain was adapter capacity; if it lands near 0.841
+near 0.897 the bias really is inert and `006_recipe`'s gain was adapter capacity; if it lands near 0.841
 the bias became load-bearing when it was allowed to.
 
 The question-node arm survives as a direction (`off` is worse, −0.022, consistent with §3.2.3's
 argument that the prefix question makes node representations question-conditioned), but its
 magnitude is measured at the same stale recipe and should not be quoted precisely.
 
-### 3.2.7 009 — the recipe was the blocker. `longest_chain` flips. (2026-08-29)
+### 3.2.7 `006_recipe` — the recipe was the blocker. `longest_chain` flips. (2026-08-29)
 
 Molecules inherited `lr=1e-5, bias_lr=1e-3, lora_r=8` from `expressiveness`, the oldest
 experiment in the repo, and never revisited it. Measured across every campaign's run records that
@@ -826,14 +863,14 @@ bias_experiments  lr 3e-5+  bias_lr 5e-3+  r 16-64
 molecules         lr 1e-5   bias_lr 1e-3   r 8      <-- 3-20x / 5-50x below
 ```
 
-Eight runs, 5000 steps (double 006, quadruple 004): two tasks × two arms × `current` (004/006's
-recipe) and `tuned` (graphqa's — the closest comparable, and the one with the most runs behind
+Eight runs, 5000 steps (double `004_extended`, quadruple `002_difficulty`): two tasks × two arms
+× `current` (the `002`/`004` recipe) and `tuned` (graphqa's — the closest comparable, and the one with the most runs behind
 it, rather than newly invented values). **Both arms get the identical change**; tuning only the
 graph arm would replace a comparison biased against GTLM with one biased in its favour. Running
 `current` at 5000 as well separates *more steps* from *more capacity*, which a tuned-only sweep
 would confound.
 
-| family | arm | 1250 (004) | 2500 (006) | 5000 `current` | 5000 `tuned` |
+| family | arm | 1250 (`002`) | 2500 (`004`) | 5000 `current` | 5000 `tuned` |
 |---|---|---:|---:|---:|---:|
 | `longest_chain` (base 0.253) | flat | 0.844 | 0.934 | 0.948 | 0.947 |
 | | **graph** | 0.778 | 0.855 | **0.959** | **0.989** |
@@ -869,7 +906,7 @@ would confound.
 * **The tuned recipe is the recipe.** M3, M4 and everything after run at `lr=3e-5, bias_lr=5e-3,
   lora_r=16`. Every number in §3.2.4–§3.2.6 is at the stale one and is a lower bound for the
   graph arm — cite them as such or re-measure.
-* **The 004/006 screen must be re-read, not re-used.** Admission (§3.2.4) ranked families under a
+* **The `002`/`004` screen must be re-read, not re-used.** Admission (§3.2.4) ranked families under a
   recipe that suppressed the graph arm by up to 13 points. A cheap re-screen at the tuned recipe
   on the six non-saturated families is the honest input to M4, and is ~12 GPU-h.
 * **Gate A2 becomes decidable.** `stereo_potential` (pure connectivity, graph should win) sat at
@@ -891,7 +928,7 @@ Three consequences:
   written down.
 * `magnetic` should still be load-bearing here — cycle detection is precisely where spectral
   features classically win, and the probe measured 97.9 vs 90.8 for SPD. **Still untested.**
-  008 (§3.2.6) appeared to refute it and has been retracted: it ran at the stale `bias_lr` where
+  `005_fgcount_ablation` (§3.2.6) appeared to refute it and has been retracted: it ran at the stale `bias_lr` where
   an inert bias and an under-driven one look identical. The claim is open, and the run that
   settles it is `fg_count` × `bias=none` at the tuned recipe.
 * D2's cost proviso (`project-probe-suite`: rule picks magnetic k4, cost proviso triggered)
@@ -1037,9 +1074,9 @@ Per `feedback-keep-core-gtlm-clean`, a 3D bias is a real `src/models/biases/` ad
 |---|---|---|---|
 | **M0** | ✅ **done 2026-08-28.** `rdkit` installed `--no-deps` (self-contained wheel; nothing else moved, and the venv's pre-existing `torch_sparse`/CUDA-13 mismatch is untouched). `ogb` **not** needed — the nine MoleculeNet CSVs come straight from the DeepChem S3 bucket and the scaffold split is ours (`scaffold_split`), which avoids a heavy dependency that would have pulled on torch. Sizes, tokens and splits measured. | §3.1.1 | login node |
 | **M1** | ✅ **done 2026-08-28.** `data.py`: RDKit `Mol` → networkx `DiGraph` with `text` + `prompt_node`, the three encoding cells, the flat SMILES serializer, the scaffold split, and `roundtrip_check`. 119 unit tests in `tests/experiments/molecules/`. | round-trip clean at each encoding's declared level, full corpus — §3.2.1 | CPU |
-| **M2** | ✅ **done (jobs 134071 + 134111, 2026-08-28/29).** Tier A generator (`tasks.py`, 10 families), `dataset.py`, the experiment package, `001_smoke.jsonc` (6 runs) and `003_canary.jsonc` (4 runs). Speed/memory settled (§3.1.2). The smoke's 0.000 graph accuracy was undertraining, not a defect — the unfixed baseline reaches 1.000 at 1250 steps (§3.2.3). Bias parameters verifiably leave their init (6.27 → 23.9). | s/it and peak GB ✅; flex-vs-eager ✅; Null-gate controls ✅; graph arm learns ✅. **New blocker for M4: `ring_membership` is saturated and cannot discriminate.** | ~2 GPU-h |
-| **M2b** | ✅ **done 2026-08-29 (job 134202, 18 runs).** Tier-A difficulty screen: all nine runnable families × both arms under 003's recipe. Added because M2 showed task choice was an untested assumption. Found the base-rate confound (§3.2.4.1) and forced `base_rate` / `eval_curve` / `still_improving` into every run record. | a shortlist meeting §3.2.4's criteria — **not delivered**: applied literally the criteria admit one family, because criterion 2 assumed the graph arm leads where there is headroom (§3.2.5) | ~9 GPU-h |
-| **M2c** | ✅ **done 2026-08-29 (006/007/008/009, 32 runs).** The screen at 2500 steps (§3.2.5); `max_spd` measured and kept at 32 (§3.2.5.1); prompt edges verified directed (§3.2.5.2); the `fg_count` bias ablation (§3.2.6, since retracted); **and the recipe fix (§3.2.7)** — `longest_chain` flips to graph 0.989 vs flat 0.947. | the local-vs-global split explained, and the training recipe no longer a confound ✅ | ~30 GPU-h |
+| **M2** | ✅ **done (jobs 134071 + 134111, 2026-08-28/29).** Tier A generator (`tasks.py`, 10 families), `dataset.py`, the experiment package, `000_smoke.jsonc` (6 runs) and the canary (4 runs; config since deleted — §3.2.3). Speed/memory settled (§3.1.2). The smoke's 0.000 graph accuracy was undertraining, not a defect — the unfixed baseline reaches 1.000 at 1250 steps (§3.2.3). Bias parameters verifiably leave their init (6.27 → 23.9). | s/it and peak GB ✅; flex-vs-eager ✅; Null-gate controls ✅; graph arm learns ✅. **New blocker for M4: `ring_membership` is saturated and cannot discriminate.** | ~2 GPU-h |
+| **M2b** | ✅ **done 2026-08-29 (job 134202, 18 runs).** Tier-A difficulty screen: all nine runnable families × both arms under the canary's recipe. Added because M2 showed task choice was an untested assumption. Found the base-rate confound (§3.2.4.1) and forced `base_rate` / `eval_curve` / `still_improving` into every run record. | a shortlist meeting §3.2.4's criteria — **not delivered**: applied literally the criteria admit one family, because criterion 2 assumed the graph arm leads where there is headroom (§3.2.5) | ~9 GPU-h |
+| **M2c** | ✅ **done 2026-08-29 (`004_extended`, the width analysis, `005_fgcount_ablation`, `006_recipe` — 32 runs).** The screen at 2500 steps (§3.2.5); `max_spd` measured and kept at 32 (§3.2.5.1); prompt edges verified directed (§3.2.5.2); the `fg_count` bias ablation (§3.2.6, since retracted); **and the recipe fix (§3.2.7)** — `longest_chain` flips to graph 0.989 vs flat 0.947. | the local-vs-global split explained, and the training recipe no longer a confound ✅ | ~30 GPU-h |
 | **M2d** | ⬜ **next.** (a) `fg_count` × `bias=none` at the tuned recipe — the one run that retires §3.2.6's retracted null. (b) Re-screen the six non-saturated families at the tuned recipe, both arms, 5000 steps: §3.2.4's admission ranking was computed under a recipe that suppressed the graph arm by up to 13 points and cannot be reused as-is. | a shortlist M4 can trust, and a verdict on whether the bias channel is load-bearing here | ~14 GPU-h |
 | **M3** | 🔄 **data path built 2026-08-28**, GPU runs pending M2. `tier_b.py` (scaffold split, one example per `(molecule, endpoint)`, endpoint named in the QUESTION node) + `evaluate.py` (the relbench margin readout ported: `logit(" Yes") − logit(" No")` in fp32, sigmoid before the threshold metrics, `n_distinct` / `tied_pair_fraction` in every record). Classification only — regression still needs `numeric_text`, and `validate()` refuses those sets rather than inventing a binary label. | BACE end-to-end, both arms, 3 seeds | ~10 GPU-h |
 | **M4** | Encoding sweep: §3.2's **3 encoding cells** (`rich×levi`, `terse×levi`, `rich×atom_only`) × `±smiles` × 4 bias arms × 3 seeds, **on M2d's shortlist** + BACE/BBBP — never on a saturated family, and never at the stale recipe (§3.2.7). Run `terse×levi` first — it is the cheapest run in the sweep and it decides whether the featurizer is needed at all. | §3.2's arms decided and written into a frozen config | ~100 GPU-h *(estimate)* |
