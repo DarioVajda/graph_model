@@ -12,7 +12,7 @@ them is still how the campaign should be run; their **numbers are lower bounds f
 arm**, not measurements of it.
 
 **Configs.** Every sweep in this document is reproducible from `configs/`, one file per sweep,
-renumbered contiguously 000–006 on 2026-08-30:
+renumbered contiguously from 000 on 2026-08-30:
 
 | config | runs | what it settled | §
 |---|---:|---|---|
@@ -23,6 +23,15 @@ renumbered contiguously 000–006 on 2026-08-30:
 | `004_extended` | 20 | the screen at 2500 steps, matched pairs | 3.2.5 |
 | `005_fgcount_ablation` | 3 | bias/question-node ablation — **result retracted** | 3.2.6 |
 | `006_recipe` | 8 | **the recipe fix; `longest_chain` flips** | 3.2.7 |
+| `007_tuned_ablation` | 4 | **the win is the bias, and the bias is SPD** | 3.2.8 |
+| `008_m2_screen_graph` | 7 | M2 closing screen, graph arm at `bias_lr 1e-2` | 3.2.9 |
+| `009_m2_screen_flat` | 5 | M2 closing screen, flat arm (its control twin) | 3.2.9 |
+
+`008` and `009` are **one experiment in two files** — split only so each arm gets hardware sized
+to it (graph peaks at 30.8 GB, flat at 11.7 GB). Neither is meaningful alone. `009` runs five
+families rather than seven because 006 already holds the `fg_count` and `longest_chain` flat cells
+at this exact recipe, and `bias_lr` provably cannot reach the flat arm (it instantiates no bias
+parameters — `009`'s header carries the run-record proof).
 
 Two things that are *not* here. The M2 canary's config was deleted (§3.2.3): it set
 `node_position_mode`, which no longer exists, so it could only crash. The width analysis
@@ -911,7 +920,137 @@ would confound.
   on the six non-saturated families is the honest input to M4, and is ~12 GPU-h.
 * **Gate A2 becomes decidable.** `stereo_potential` (pure connectivity, graph should win) sat at
   −0.030 under the stale recipe; that is not a verdict on the gate.
-* The `bias=none` control in §3.2.6 is the single highest-value next run.
+* The `bias=none` control in §3.2.6 is the single highest-value next run. **Done — §3.2.8.**
+
+### 3.2.8 M2d — `007_tuned_ablation`: the win is the bias, and the bias is SPD (job 134431, 2026-08-30)
+
+§3.2.7 moved three knobs at once (`lr`, `bias_lr`, `lora_r`) and `longest_chain` flipped. That
+admits two readings the sweep cannot separate: **(1)** `bias_lr` finally let the structural
+channel reach useful magnitude, or **(2)** `lora_r 8 → 16` plus 3× the lr gave the *adapter*
+enough capacity to read path structure straight out of the node text, with the bias still inert.
+Reading 2 is not a strawman — it is exactly what §3.2.6 measured, and retracting that null removed
+the evidence *for* it without producing any evidence *against* it.
+
+Four runs, everything at the tuned recipe and 5000 steps, identical to `006_recipe`'s tuned graph
+cells in every field except the bias channel. `spd+magnetic` is not re-run: 006's cells were
+produced at byte-identical settings and are the reference column.
+
+| family | `none` | `spd` | `spd+magnetic` *(006)* | flat *(006)* |
+|---|---:|---:|---:|---:|
+| `longest_chain` (base 0.253) | 0.938 | **0.983** | **0.989** | 0.947 |
+| `fg_count` (base 0.760) | 0.888 | 0.888 | 0.897 | 0.936 |
+
+Effect sizes as two-proportion differences at n = 1000:
+
+| contrast | `longest_chain` | `fg_count` |
+|---|---:|---:|
+| `spd` − `none` | **+0.045 (5.2σ)** | +0.000 (0.0σ) |
+| `spd+magnetic` − `spd` | +0.006 (1.1σ) | +0.009 (0.7σ) |
+| `spd+magnetic` − `none` | **+0.051 (6.1σ)** | +0.009 (0.7σ) |
+
+**1. On `longest_chain` the win is the bias, not the adapter — reading 2 is dead.** Strip the
+bias and the graph arm scores 0.938 at `lora_r=16, lr=3e-5`, which is statistically
+indistinguishable from the flat SMILES twin (0.947, 0.9σ). The graph arm's entire +0.042 advantage
+over flat is attributable to the structural channel. Adapter capacity buys parity with SMILES;
+the bias buys the win.
+
+**2. It is SPD, and magnetic adds nothing measurable.** `spd` alone reaches 0.983 of the 0.989 —
+a 1.1σ residual. **This contradicts §3.3's expectation** that magnetic should be load-bearing here
+because cycle detection is where spectral features classically win (the probe measured 97.9 vs
+90.8). On these two families it is not. §3.3's claim is now *tested and unsupported*, not untested.
+
+**3. `fg_count`'s null is real, and this time it is properly warranted.** `none` and `spd` are
+*identical* at 0.888, and `spd+magnetic` adds 0.7σ. Critically, `bias_norm_final = 40.40` against
+`bias_norm_init = 0.0` — **the bias module trained to substantial magnitude and still contributed
+nothing**, which is exactly the discipline `feedback-verify-nulls-are-real` demands and exactly
+what §3.2.6 could not show. §3.2.6's reading can be reinstated on this stronger footing: the
+`fg_count` deficit is about the encoding competing with a pretrained-native SMILES string, not
+about the wiring. `006_recipe`'s `fg_count` gain (0.841 → 0.897) was adapter capacity.
+
+**4. The bias is a large sample-efficiency win, not only an accuracy win.** On `longest_chain`,
+`spd` reaches 0.950 val at **step 800**; `none` needs the full 5000 steps to reach 0.944–0.950.
+Roughly 5.5× fewer steps to the same accuracy, and the `spd` eval loss plateaus at 0.137 against
+`none`'s 0.51.
+
+**5. The caveat that keeps this honest.** Both families are molecule-level, so the split is *not*
+local-vs-global. The line is what the answer is a **function of**: `longest_chain` asks for a path
+length and SPD *is* a table of path lengths; `fg_count` asks for a count of local motifs, which no
+distance encoding supplies. This has the same shape as `project-khop-spd-shortcut`, where a
+functional chain graph made k-hop an O(1) SPD lookup. The supportable claim is **"the bias is
+load-bearing where the task reduces to graph distances"**, not "GTLM wins molecule-level tasks".
+State it the first way when this reaches the trunk justification.
+
+**Open, and cheap.** Every cell here is one seed. 6.1σ bounds *sampling* error only and says
+nothing about seed-to-seed training variance; a second seed on the four `longest_chain` cells is
+the last thing standing between this and a claim fit for `src/generalist/PLAN.md`.
+
+### 3.2.9 M2 CLOSING TABLE — `008_m2_screen_graph` + `009_m2_screen_flat` (jobs 134481/134482, 2026-08-30)
+
+Twelve runs, all COMPLETED: seven graph families at `lr 3e-5, bias_lr 1e-2, lora_r 16, 5000
+steps`, five flat twins at the same recipe, plus `fg_count` and `longest_chain` flat reused
+verbatim from `006_recipe` (exact — the flat arm instantiates no bias parameters, so `bias_lr`
+cannot reach it; `009`'s header carries the run-record proof).
+
+| family | base | **graph** | **flat** | Δ | σ | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| `ring_size` | 0.498 | **0.992** | 0.877 | **+0.115** | +10.7 | **graph** |
+| `longest_chain` | 0.253 | **0.991** | 0.947 | **+0.044** | +5.7 | **graph** |
+| `stereo_potential` | 0.285 | **0.962** | 0.937 | **+0.025** | +2.6 | **graph** |
+| `ring_membership` | 0.505 | **1.000** | 0.980 | **+0.020** | +4.5 | **graph** |
+| `fg_atom_membership` | 0.503 | 0.986 | 0.974 | +0.012 | +1.9 | tie |
+| `fg_presence` | 0.760 | 0.918 | 0.962 | −0.044 | −4.2 | flat |
+| `fg_count` | 0.760 | 0.888 | 0.936 | −0.048 | −3.8 | flat |
+
+**4 graph wins, 1 tie, 2 flat wins.** Mean Δ +0.018, median +0.020. Three further families are
+reported from `004_extended` and were not re-run because both arms sit at the ceiling and no
+recipe change can move one: `aromatic_ring` (1.000 / 0.997), `ring_count` (0.993 / 0.993),
+`stereo_assigned` (0.997 / 0.996 — the designed-in loss).
+
+**The split is clean, and it is not the one §3.2.5 proposed.** The graph arm wins **every
+topological question** — ring size, ring membership, path length, stereocentre potential — and
+loses **both functional-group questions**. It is not local-vs-global (§3.2.5): `longest_chain` and
+`ring_size` are whole-molecule properties and the graph arm wins them decisively. Nor is it
+distance-vs-aggregation (§3.2.8): `stereo_potential` is a subtree-comparison question with no
+distance reading and the graph arm wins it. **The line is topology versus chemical motif
+recognition.** Recognising a nitro group is pattern-matching over atom types and local bonds,
+which a SMILES string represents natively and compactly and which the Levi transform scatters
+across nodes and edges. `fg_atom_membership` sits exactly on the boundary and lands at a tie: it
+is the motif question re-asked about a *named atom*, and naming the atom recovers most of the gap.
+
+**§3.2.8's distance hypothesis is falsified as stated, and the failure was pre-registered.** The
+prediction table was written into this document before the runs. It called `ring_size`,
+`ring_membership` and `longest_chain` correctly as wins and `fg_count`/`fg_presence` correctly as
+losses, but predicted **no benefit** on `stereo_potential`, which was designated the sharpest test
+precisely because gate A2 predicted the opposite. Gate A2 was right. Do not rescue the distance
+framing by reclassifying `stereo_potential` after the fact — replace it with *topology*, which
+covers all four wins without special pleading.
+
+**`bias_lr` 5e-3 → 1e-2 is a verified null, and the axis is flat, not merely untested.**
+
+| control | @5e-3 (006) | @1e-2 (008) | Δ | `bias_norm` |
+|---|---:|---:|---:|---|
+| `longest_chain` | 0.989 | 0.991 | +0.002 (0.5σ) | 40 → 104 |
+| `fg_count` | 0.897 | 0.888 | −0.009 (0.7σ) | 40 → 96 |
+
+`bias_norm` rose ~2.4×, so the module trained to a very different magnitude and accuracy did not
+move (`feedback-verify-nulls-are-real` satisfied). **`bias_lr` saturates above 5e-3.** Keep 5e-3
+as the settled recipe — it has 006 and 007 behind it — and treat 1e-2 as measured-equivalent
+rather than preferred. The practical consequence is that the five families measured here at 1e-2
+are directly comparable to every 5e-3 number in §3.2.7–§3.2.8; nothing needs re-running.
+
+**Three disclosures that belong beside this table wherever it is quoted.**
+
+1. **One seed.** Every σ above is a two-proportion sampling bound at n = 1000 and says nothing
+   about seed-to-seed training variance. The two marginal cells (`fg_atom_membership` +1.9σ,
+   `stereo_potential` +2.6σ) are the ones a second seed could move.
+2. **The arms are not equally tuned.** `bias_lr` is graph-arm-only by construction, so this is a
+   tuned arm against an untuned one. The flat arm keeps `lr 3e-5` inherited from graphqa and 006
+   measured it responding to `lr` (+0.029 on `fg_count`). A flat `lr` sweep is what would earn the
+   claim "beats a fully-tuned baseline"; until then, do not make that claim.
+3. **The baseline got much stronger and the win survived it.** The tuned recipe moved the flat arm
+   up 3–6 points on every re-run family (`ring_membership` 0.941 → 0.980, `fg_presence` 0.902 →
+   0.962, `fg_atom_membership` 0.938 → 0.974, `stereo_potential` 0.907 → 0.937, `ring_size` 0.827
+   → 0.877). The graph wins are measured against that, not against §3.2.5's weaker control.
 
 ### 3.3 The bias channel behaves differently here — know this before reading the ablation
 
