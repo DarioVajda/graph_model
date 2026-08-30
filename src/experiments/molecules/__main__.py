@@ -9,7 +9,7 @@ flag, booleans use ``BooleanOptionalAction``, lists comma-split, and the runner'
 
     python3 -m src.experiments.molecules --task ring_membership --arm graph
     python3 -m src.experiments.molecules --arm flat --bias none --max-steps 4
-    python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/001_smoke.jsonc
+    python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/000_smoke.jsonc
 """
 
 import argparse

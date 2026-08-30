@@ -1,6 +1,6 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // 001 — M2 smoke (PLAN.md §8). The first GPU contact for this domain.
+  // 000 — M2 smoke (PLAN.md §8). The first GPU contact for this domain.
   //
   // What it is FOR, in order:
   //   1. Does the pipeline survive Arrow -> __getitem__ -> collator -> kernel on
@@ -24,17 +24,17 @@
   // so the biggest tensors in Tier B) rather than the 5-corpus default: the
   // 57k-molecule pool costs ~90s of RDKit parsing per job for no smoke value.
   //
-  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/001_smoke.jsonc
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/000_smoke.jsonc
   // ─────────────────────────────────────────────────────────────────────────
 
-  "name": "001_smoke",
+  "name": "000_smoke",
   "results_dir": "src/experiments/molecules/results",
 
   "execution": {
     "mode": "sbatch",
     "sbatch": {
       "granularity": "per_config",
-      "max_concurrent": 3,
+      "max_concurrent": 6,          // = the run count: array path, no throttle
       "partition": "frida",
       "account": "povejmo",
       "gpus": ["B200", "B300"],
@@ -62,7 +62,8 @@
   "task": "ring_membership",
   "encoding": "rich_levi",
   // A comma string, not a JSON list: the runner reads a list as a sweep AXIS.
-  // Harmless here (one element = one value), a silent 2x expansion in 003.
+  // Harmless here (one element = one value); it would have been a silent 2x
+  // expansion in any later config that took the two-corpus pool.
   "pool": "bace",
   "seed": 0,
 

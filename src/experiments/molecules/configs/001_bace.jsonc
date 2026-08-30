@@ -1,10 +1,14 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // 002 — M3: the first real Tier-B measurement. BACE, both arms, 3 seeds.
+  // 001 — M3: the first real Tier-B measurement. BACE, both arms, 3 seeds.
   //
-  // HOLD until 001 has reported. This config assumes 001 settled `impl` and
-  // confirmed the plumbing; submitting it first would spend ~18 queue slots to
-  // rediscover a shape bug that 001 finds in six short ones.
+  // NOT YET RUN. Held until 000 had reported; now held on M2d (PLAN.md §8), and
+  // it needs one edit before it goes: the recipe below is the STALE one.
+  // §3.2.7 measured that `lr 1e-5 / bias_lr 1e-3 / lora_r 8` is the
+  // lowest-capacity recipe in the repo and that retuning it to graphqa's
+  // `3e-5 / 5e-3 / 16` flipped `longest_chain` from -0.079 to +0.042 in the
+  // graph arm's favour. Submitting this config as written would measure gate B1
+  // under a recipe already known to suppress the graph arm.
   //
   // Why BACE first, of the six classification sets:
   //   - it is a direct InstructMol anchor (84.3 / 82.1 graph / graph+SMILES at
@@ -18,27 +22,25 @@
   // that makes "±1 sd" mean anything, and scaffold splits on 1.5k molecules are
   // noisy enough that a single seed would be uninterpretable.
   //
-  // `impl` is left unset on purpose — fill it from 001's measured s/it before
-  // submitting, rather than defaulting to flex on the assumption that it wins at
-  // N ~ 73 (BACE is the largest Tier-B set at 34.1 atoms mean).
-  //
-  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/002_bace.jsonc
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/001_bace.jsonc
   // ─────────────────────────────────────────────────────────────────────────
 
-  "name": "002_bace",
+  "name": "001_bace",
   "results_dir": "src/experiments/molecules/results",
 
   "execution": {
     "mode": "sbatch",
     "sbatch": {
       "granularity": "per_config",
-      "max_concurrent": 3,
+      "max_concurrent": 9,          // = the run count: array path, no throttle
       "partition": "frida",
       "account": "povejmo",
-      "gpus": ["B200", "B300"],
+      // 003 verified the flex compile path on H100 and A100; there is no memory
+      // reason to hold Tier B to the most contended cards.
+      "gpus": ["B200", "B300", "H100", "A100"],
       "gpus_per_config": 1,
       "cpus": 8,
-      "mem": "64G",
+      "mem": "32G",
       "time": "03:00:00",
       "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
     }
@@ -60,10 +62,14 @@
   "eval_steps": 50,
   "batch_size": 4,
   "accumulation_steps": 8,
+  // STALE — see the header. Retune to 3e-5 / 5e-3 / 16 before submitting.
   "lr": 1e-5,
   "bias_lr": 1e-3,
   "lora": true,
   "lora_r": 8,
   "num_workers": 4,
+
+  // Settled by 000: flex, production autotune.
+  "impl": "v2-flex",
   "flex_compile_mode": "max-autotune-no-cudagraphs"
 }

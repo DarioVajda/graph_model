@@ -1,9 +1,11 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // 004 — Tier-A difficulty screen. Which task families are usable instruments?
+  // 002 — Tier-A difficulty screen. Which task families are usable instruments?
   //
-  // WHY THIS EXISTS. 003 answered its own question (the graph arm is fine) and
-  // produced a blocker for everything downstream:
+  // WHY THIS EXISTS. The M2 canary (PLAN.md §3.2.3; its config has since been
+  // removed, because it set `node_position_mode`, which no longer exists)
+  // answered its own question — the graph arm is fine — and produced a blocker
+  // for everything downstream:
   //
   //     ring_membership    graph 1.000   flat 0.877
   //
@@ -28,17 +30,24 @@
   // as instruments. Families that fail (3) get a longer budget before any verdict
   // (`feedback-dont-call-floors-early`) rather than being dropped.
   //
+  // READ §3.2.5 BEFORE REUSING THIS SCREEN'S RANKING. Applied literally the
+  // criteria admit one family, because criterion 2 assumed the graph arm leads
+  // wherever there is headroom — and this recipe is the stale one §3.2.7 later
+  // showed suppresses the graph arm by up to 13 points. The screen is kept
+  // as-run so 004 and 006 remain comparable to it; the ranking it produced is
+  // not the input M4 should use.
+  //
   // `bond_path` is absent because it is held out (PLAN.md §4.1) — the config
   // could not run it even if it were listed; `load_data` refuses.
   //
-  // Recipe is 003's, unchanged, so the ring_membership cell here reproduces the
-  // canary's 1.000 / 0.877 and acts as a within-sweep control. One seed: a screen
-  // ranks families, it does not measure any of them.
+  // Recipe is the canary's, unchanged, so the ring_membership cell here
+  // reproduces 1.000 / 0.877 and acts as a within-sweep control. One seed: a
+  // screen ranks families, it does not measure any of them.
   //
-  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/004_difficulty.jsonc
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/002_difficulty.jsonc
   // ─────────────────────────────────────────────────────────────────────────
 
-  "name": "004_difficulty",
+  "name": "002_difficulty",
   "results_dir": "src/experiments/molecules/results",
 
   "execution": {
@@ -57,15 +66,17 @@
       "partition": "frida",
       "account": "povejmo",
       // Not just B200/B300 — molecules peak at ~21 GB, so H100 and A100 are
-      // ample, and 005 verified the flex compile path on A100. These are node
+      // ample, and 003 verified the flex compile path on A100. These are node
       // GPU_BRD FEATURE values, not gres names: "A100_80GB" would match no node
       // and pend forever. See sweep/README.md.
       "gpus": ["B200", "B300", "H100", "A100"],
       "gpus_per_config": 1,
       "cpus": 8,
-      // 003 peaked at ~21 GB device and far less host; 64G was over-requested and
-      // frida's scheduler scored it down. 32G covers the largest Tier-A graph.
+      // The canary peaked at ~21 GB device and far less host; 64G was
+      // over-requested and frida's scheduler scored it down. 32G covers the
+      // largest Tier-A graph.
       "mem": "32G",
+      // Measured: max 1.41h over the 18 runs.
       "time": "03:00:00",
       "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
     }
@@ -103,8 +114,8 @@
   "test_size": 1000,
   "data_seed": 0,
 
-  // 4000 / (4 x 8) = 125 steps/epoch; 10 epochs = 1250 steps. Same as 003, so the
-  // control cell is comparable to the canary rather than merely similar.
+  // 4000 / (4 x 8) = 125 steps/epoch; 10 epochs = 1250 steps. Same as the canary,
+  // so the control cell is comparable to it rather than merely similar.
   "num_epochs": 10,
   "eval_steps": 100,
   "batch_size": 4,

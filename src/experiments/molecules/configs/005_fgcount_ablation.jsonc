@@ -1,0 +1,108 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 005 — why does the graph arm lose `fg_count`? The GraphQA cross-check.
+  //
+  // ⚠ ITS RESULT IS RETRACTED. Run it only to reproduce the retracted numbers,
+  // or re-run it at the TUNED recipe (see the bottom of this header), which is
+  // the version that would actually settle the question. PLAN.md §3.2.6.
+  //
+  // WHY IT EXISTS. GraphQA's `003_ablation` says the structural bias is
+  // load-bearing for exactly the GRAPH-LEVEL tasks: removing magnetic costs 54
+  // points on `edge_count` and 11 on `triangle_counting`, while every named-node
+  // task is unaffected (<=1 point). Molecules showed the OPPOSITE split against
+  // the flat twin — the graph arm loses every molecule-level family (§3.2.5).
+  // Both can be true, and this sweep asks which.
+  //
+  // `fg_count` is the molecules analogue of `edge_count`: count occurrences of a
+  // thing across the whole graph, no atom named. All arms are 2500 steps,
+  // matching the 004 `fg_count` graph run that scored 0.820.
+  //
+  //   REFERENCE   spd+magnetic, question node on  = 0.820   (004_extended)
+  //
+  //   bias "spd"        "no-magnetic" — the DIRECT GraphQA analogue. If magnetic
+  //                     is doing global aggregation here as it does there, this
+  //                     should fall sharply.
+  //   bias "none"       the floor: no structural channel at all.
+  //   question_node     "off" puts the question inside the prompt node instead
+  //                     of the prefix. GraphQA's question-node ablation regressed
+  //                     on graph-level tasks (edge_count -0.066) while helping all
+  //                     five named-node tasks, so the prefix question node is a
+  //                     suspect here too.
+  //
+  // WHAT IT RETURNED, and why that reading is retracted:
+  //
+  //   spd+magnetic, qnode on   0.820      spd  0.822      none  0.823
+  //   spd+magnetic, qnode off  0.798
+  //
+  // Read at the time as "the bias contributes nothing on this task". But this
+  // sweep runs at `bias_lr = 1e-3`, the LOWEST IN THE REPO, and
+  // `project-landmark-campaign` records bias_lr as the magnitude knob. "The bias
+  // does nothing" and "the bias never reached useful magnitude" are
+  // indistinguishable at this setting, and 006 showed the second is live.
+  // DO NOT CITE THE 0.820 / 0.822 / 0.823 NULL.
+  //
+  // TO ACTUALLY SETTLE IT: set lr 3e-5, bias_lr 5e-3, lora_r 16, num_epochs 40,
+  // and compare against 006's `fg_count` graph tuned cell (0.897). Landing near
+  // 0.897 means the bias really is inert and 006's gain was adapter capacity;
+  // landing near 0.841 means the bias became load-bearing once it was allowed to.
+  // That is the single highest-value next run in this campaign (M2d).
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/005_fgcount_ablation.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "005_fgcount_ablation",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,          // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "32G",
+      // Measured: max 0.98h over the 3 runs.
+      "time": "03:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // Three explicit arms, not a product: the question-node cell keeps the full
+  // bias so it isolates ONE change from the reference, and the two bias cells
+  // keep the question node on for the same reason. A 2x2 would add a
+  // (bias none x qnode off) cell that answers nothing.
+  "ablation": [
+    { "arm": "graph", "bias": "spd",          "question_node": "on"  },
+    { "arm": "graph", "bias": "none",         "question_node": "on"  },
+    { "arm": "graph", "bias": "spd+magnetic", "question_node": "off" }
+  ],
+
+  "task": "fg_count",
+  "encoding": "rich_levi",
+  "pool": "bace,bbbp",
+  "seed": 0,
+
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // 2500 steps — matched to 004's fg_count cells, which are the reference.
+  "num_epochs": 20,
+  "eval_steps": 100,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  // STALE, and that is precisely what invalidates the result. See the header.
+  "lr": 1e-5,
+  "bias_lr": 1e-3,
+  "lora": true,
+  "lora_r": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

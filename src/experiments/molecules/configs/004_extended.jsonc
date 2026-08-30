@@ -1,0 +1,112 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 004 — the Tier-A screen at DOUBLE the budget. 2500 steps, both arms.
+  //
+  // WHY. 002 flagged cells as `still_improving` — validation metric gaining more
+  // than 1pp over the last three evals — and a comparison between a converged
+  // arm and an interrupted one is not a comparison (PLAN.md §3.2.4.1). This
+  // re-runs the screen at 2500 steps so every graph-vs-flat pair is matched.
+  //
+  // EVERY CELL IS RE-RUN, not only the flagged ones. Two reasons, both in
+  // §3.2.4.2:
+  //   1. Re-run the PAIR, not the cell. Extending only the climbing arm would
+  //      pit a 2500-step run against a 1250-step one — replacing a bias against
+  //      the graph arm with a bias in its favour.
+  //   2. A converged arm given double the budget should return the same number.
+  //      Re-running it TESTS the convergence claim instead of trusting it. That
+  //      test is worth its cost: §3.2.7 later found the detector under-calls,
+  //      marking `longest_chain` graph converged at 0.855 before it gained 10.4
+  //      points at the same settings.
+  //
+  // `fg_atom_membership` joins the family list here. It is `fg_presence`'s
+  // question ("is a nitro group present?") re-asked about ONE NAMED ATOM ("is
+  // atom 14 part of a nitro group?"), and it exists to test the boundary the
+  // screen exposed: the graph arm wins local, named-atom questions and loses
+  // whole-molecule aggregates. In skill above base rate the twin cuts the
+  // deficit from -0.221 to -0.050 (§3.2.5), which is what makes "global
+  // aggregation" rather than "functional groups" the thing to chase.
+  //
+  // Ten families x two arms = 20 runs. Recipe is 002's VERBATIM except:
+  //   num_epochs   20  (was 10)  -> 2500 steps, exactly double. 4000/(4x8)=125
+  //                                steps per epoch.
+  //   num_workers   3  (was 4)   -> paired with cpus 4, so a job fits on ixh,
+  //                                which had 5 idle H100s but only 4 free CPUs.
+  // Changing anything else would make these runs non-comparable to 002, which is
+  // the entire point of the exercise.
+  //
+  // NOTE ON THE RECIPE. Like 002, this runs the stale `lr 1e-5 / bias_lr 1e-3 /
+  // lora_r 8`. §3.2.7 measured that as the lowest-capacity recipe in the repo.
+  // Its numbers are LOWER BOUNDS for the graph arm; read §3.2.7 before quoting
+  // any gap from this sweep.
+  //
+  // Originally submitted by hand, one sbatch per cell, so a re-run could start
+  // the moment 002 flagged its cell rather than waiting for all 18 to land. This
+  // config expands to exactly those 20 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/004_extended.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "004_extended",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 20,         // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100", "A100"],
+      "gpus_per_config": 1,
+      // 4, not 8 — see num_workers below.
+      "cpus": 4,
+      "mem": "32G",
+      // Measured: max 2.31h over the 20 runs.
+      "time": "05:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // 002's nine, plus the named-atom twin.
+  "task": [
+    "ring_membership",
+    "aromatic_ring",
+    "ring_count",
+    "ring_size",
+    "fg_presence",
+    "fg_count",
+    "fg_atom_membership",  // the atom-level twin of fg_presence — see the header
+    "longest_chain",
+    "stereo_potential",
+    "stereo_assigned"
+  ],
+
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },
+    { "arm": "flat",  "bias": "none" }
+  ],
+
+  "encoding": "rich_levi",
+  "pool": "bace,bbbp",
+  "seed": 0,
+
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // 20 epochs x 125 steps/epoch = 2500 steps. Double 002.
+  "num_epochs": 20,
+  "eval_steps": 100,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 1e-5,
+  "bias_lr": 1e-3,
+  "lora": true,
+  "lora_r": 8,
+  // 3, paired with cpus 4 above: one worker per free CPU minus the main process.
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs"
+}

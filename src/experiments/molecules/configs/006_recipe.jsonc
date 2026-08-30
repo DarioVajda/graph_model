@@ -1,0 +1,119 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 006 — is the graph arm's plateau a property of GTLM, or of a stale recipe?
+  //
+  // THE HEADLINE SWEEP OF THIS CAMPAIGN SO FAR. PLAN.md §3.2.7.
+  //
+  // WHY. Molecules inherited `lr 1e-5 / bias_lr 1e-3 / lora_r 8` from
+  // `expressiveness`, the oldest experiment in the repo, and never revisited it.
+  // Measured across every campaign's run records, that is the LOWEST-CAPACITY
+  // recipe anywhere:
+  //
+  //     relbench          lr 2e-4   bias_lr 5e-2   r 32
+  //     kgqa / context    lr 1e-4   bias_lr 5e-3   r 64
+  //     probes            lr 5e-5   bias_lr 5e-3   r 16
+  //     graphqa           lr 3e-5   bias_lr 5e-3   r 16     (329 runs)
+  //     bias_experiments  lr 3e-5+  bias_lr 5e-3+  r 16-64
+  //     molecules         lr 1e-5   bias_lr 1e-3   r 8      <-- 3-20x / 5-50x below
+  //
+  // This matters twice over. The obvious way: 002/004 measured a plateau at ~0.82
+  // for the graph arm and ~0.90 for flat, and a plateau is only ever a property
+  // of a recipe. The subtle way: `project-landmark-campaign` records that
+  // BIAS_LR IS THE MAGNITUDE KNOB, so 005's "the bias is inert" null was measured
+  // at the lowest bias_lr in the repo — which is exactly what a bias that never
+  // reaches useful magnitude looks like.
+  //
+  // TUNED takes graphqa's values rather than inventing new ones: it is the
+  // closest comparable (structural QA over text-light nodes) and has the most
+  // runs behind it.
+  //
+  //     current   lr 1e-5  bias_lr 1e-3  lora_r 8     (002/004's recipe)
+  //     tuned     lr 3e-5  bias_lr 5e-3  lora_r 16    (graphqa's)
+  //
+  // BOTH ARMS GET THE IDENTICAL CHANGE. The flat arm is on the same stale recipe,
+  // so tuning only the graph arm would replace a comparison biased against GTLM
+  // with one biased in its favour. Flat may well improve too; that is a real
+  // result either way — and it did, by +0.029 on fg_count.
+  //
+  // RUNNING `current` AT 5000 STEPS TOO is what separates "more steps" from "more
+  // capacity". A tuned-only sweep would confound them, and the control is what
+  // makes the finding readable: on longest_chain the recipe change moved flat by
+  // -0.001 and graph by +0.030, which is how we know it is graph-specific.
+  //
+  // WHAT IT RETURNED (test accuracy, one seed):
+  //
+  //                              1250    2500    5000 current   5000 tuned
+  //   longest_chain  flat        0.844   0.934   0.948          0.947
+  //     (base .253)  graph       0.778   0.855   0.959          0.989   <-- FLIPS
+  //   fg_count       flat        0.848   0.907   0.912          0.936
+  //     (base .760)  graph       0.809   0.820   0.841          0.897
+  //
+  // `longest_chain` is the first molecule-level (not named-node) win in this
+  // domain. Both `fg_count` current cells were STILL IMPROVING at 5000 steps and
+  // are lower bounds, not plateaus.
+  //
+  // Two tasks x two arms x two recipes = 8 runs. 40 epochs = 5000 steps at
+  // 4000/(4x8) = 125 steps/epoch — double 004, quadruple 002.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/006_recipe.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "006_recipe",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 8,          // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "32G",
+      // Measured: max 1.83h over the 8 runs, on B200 and H100. Padded for A100.
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The two families with headroom that the graph arm was losing: one
+  // whole-molecule aggregate (fg_count) and one path-tracing question
+  // (longest_chain). They came apart completely — see the table above.
+  "task": ["fg_count", "longest_chain"],
+
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },
+    { "arm": "flat",  "bias": "none" }
+  ],
+
+  // The axis this sweep exists for. Bundled because the three knobs are one
+  // decision, not three independent ones — a partial move would be a fourth
+  // recipe nobody chose.
+  "recipe": [
+    { "lr": 1e-5, "bias_lr": 1e-3, "lora_r": 8  },   // "current" — 002/004's
+    { "lr": 3e-5, "bias_lr": 5e-3, "lora_r": 16 }    // "tuned"   — graphqa's
+  ],
+
+  "encoding": "rich_levi",
+  "pool": "bace,bbbp",
+  "seed": 0,
+
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // 40 epochs x 125 steps/epoch = 5000 steps.
+  "num_epochs": 40,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

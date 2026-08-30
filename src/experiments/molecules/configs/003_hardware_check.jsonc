@@ -1,12 +1,12 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // 005 — can this experiment run on H100 / A100 as well as B200 / B300?
+  // 003 — can this experiment run on H100 / A100 as well as B200 / B300?
   //
-  // WHY. Every molecules sweep so far asked for `["B200", "B300"]`, which is the
-  // most contended hardware on the partition, while `ixh` (8x H100) and `ana`
-  // (8x A100 80GB) sit MIXED with capacity. Molecules are small — 001 measured a
-  // 20.8 GB peak for the flex graph arm (§3.1.2) — so there is no memory reason
-  // for the restriction. It was inherited, not chosen.
+  // WHY. Every molecules sweep before this one asked for `["B200", "B300"]`,
+  // which is the most contended hardware on the partition, while `ixh` (8x H100)
+  // and `ana` (8x A100 80GB) sit MIXED with capacity. Molecules are small — 000
+  // measured a 20.8 GB peak for the flex graph arm (§3.1.2) — so there is no
+  // memory reason for the restriction. It was inherited, not chosen.
   //
   // WHAT COULD ACTUALLY BREAK, and why this is a run rather than an assumption:
   // arithmetic is not the risk (bf16 on Ampere/Hopper/Blackwell is fine, and
@@ -35,10 +35,12 @@
   // B200/B300 are deliberately EXCLUDED so the check cannot pass by quietly
   // landing on the hardware it is supposed to be testing an alternative to.
   //
-  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/005_hardware_check.jsonc
+  // RESULT: it runs. Every sweep from 002 onward requests all four families.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/003_hardware_check.jsonc
   // ─────────────────────────────────────────────────────────────────────────
 
-  "name": "005_hardware_check",
+  "name": "003_hardware_check",
   "results_dir": "src/experiments/molecules/results",
 
   "execution": {
