@@ -1,0 +1,142 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 007 — is the graph arm's win the BIAS, or just the bigger adapter?
+  //
+  // THE RUN THAT DECIDES WHETHER THIS CAMPAIGN HAS A GTLM RESULT AT ALL.
+  //
+  // WHY. 006 moved three knobs at once — lr 1e-5 -> 3e-5, bias_lr 1e-3 -> 5e-3,
+  // lora_r 8 -> 16 — and `longest_chain` flipped from graph 0.855 (losing) to
+  // graph 0.989 vs flat 0.947 (winning). That is the campaign's headline. But a
+  // three-knob move admits two readings that 006 cannot separate:
+  //
+  //   1. bias_lr finally let the SPD/magnetic channel reach useful magnitude,
+  //      and graph STRUCTURE is doing the work.        <- the GTLM claim
+  //   2. lora_r 8 -> 16 plus 3x the lr gave the ADAPTER enough capacity to read
+  //      path structure straight out of the node text, and the bias is still
+  //      inert.                                        <- fine-tuning, not GTLM
+  //
+  // Reading 2 is not a strawman. It is exactly what 005 measured — "bias none
+  // scores 0.823, the same as spd+magnetic" — and the ONLY reason that null was
+  // retracted (§3.2.6) is that it ran at bias_lr 1e-3, the lowest in the repo.
+  // Retracting it removed the evidence FOR the null without producing any
+  // evidence AGAINST it. This sweep produces that evidence.
+  //
+  // WHY `longest_chain` AND NOT ONLY `fg_count`. 005 ablated fg_count because
+  // that was where the graph arm was losing. It is not the live question any
+  // more. The claim that has to hold up is the one on `longest_chain`, because
+  // that is the claim going into the generalist trunk justification.
+  //
+  // THE CELLS. Four new runs, everything at 006's TUNED recipe:
+  //
+  //                    bias none      bias spd       spd+magnetic (from 006)
+  //   longest_chain    <- new         <- new         0.989
+  //   fg_count         <- new         <- new         0.897
+  //
+  // `spd+magnetic` is NOT re-run. 006's tuned graph cells were produced at
+  // byte-identical settings (lr 3e-5, bias_lr 5e-3, lora_r 16, 40 epochs, seed
+  // 0, data_seed 0) and are the reference column. Re-running them would buy a
+  // reproducibility check, not an answer, at +50% cost.
+  //
+  //   bias "none"   the floor: graph tokenisation, no structural channel at all.
+  //                 THIS IS THE DECIDING CELL. On longest_chain, landing near
+  //                 0.989 means the flip was adapter capacity and the headline
+  //                 needs rewriting before it reaches the trunk. Landing near
+  //                 flat's 0.947 or below means the bias is load-bearing on a
+  //                 molecule-level task — the strongest GTLM result in this
+  //                 domain, and worth more than the accuracy number itself.
+  //   bias "spd"    splits distance from magnetic, the GraphQA analogue. GraphQA
+  //                 003_ablation found magnetic load-bearing for graph-LEVEL
+  //                 tasks (-54 points on edge_count) and irrelevant for
+  //                 named-node ones. Both molecules families here are
+  //                 molecule-level, so that predicts a fall in both columns.
+  //
+  // question_node stays "on" throughout: 005 already measured "off" as -0.022
+  // and it is the settled default (§3.4). One variable at a time.
+  //
+  // 2 tasks x 2 bias arms = 4 runs. 40 epochs x 125 steps/epoch = 5000 steps,
+  // matched to 006 exactly. NOTE both fg_count cells in 006 were STILL IMPROVING
+  // at 5000 steps, so this sweep's fg_count column is a matched lower bound, not
+  // a plateau — the comparison is readable, the absolute numbers are not final.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/007_tuned_ablation.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "007_tuned_ablation",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,          // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      // B200/B300/H100. Measured on 009_recipe: a 5000-step graph run is 1.8h
+      // on B200 and ~2.4h scaled to H100 (the same-task flat pair split across
+      // nodes gave H100/B200 = 1.108/1.460 steps/s). The 40GB A100s are left
+      // out twice over: roughly half an H100, and peak GPU memory here is
+      // 30.8GB, which is more headroom than 40GB comfortably gives.
+      //
+      // WHAT ACTUALLY HAPPENED ON 2026-08-30, because it will happen again.
+      // Only array task 0 started. ixb1-ixb8 (every B200/B300) were fully
+      // allocated, and ixh — the only H100 node — had 4 of 8 H100s IDLE but
+      // 204 of its 208 CPUs held by three single-GPU jobs with 2-4 days left.
+      // GPUs free, CPUs gone, nothing schedulable. Tasks 1-3 were re-targeted
+      // by hand onto the 80GB A100s, which were wide open:
+      //
+      //   scontrol update JobId=<id> TimeLimit=10:00:00 \
+      //     Features='GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100|GPU_SKU:A100_80GB_PCIE'
+      //
+      // THE TIME LIMIT MUST GO UP WITH IT. 04:00:00 is sized for H100-class
+      // hardware; an A100_80GB run at ~0.4x an H100 would be killed mid-run at
+      // the 4h wall having produced nothing. `gpus` is left as the fast three
+      // so a plain re-run cannot silently land on hardware this budget does
+      // not fit — widen it deliberately, and raise `time` in the same breath.
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "32G",
+      // Measured 1.83h max on B200; ~2.4h expected on H100. Kept tight rather
+      // than padded so backfill can place it.
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The two families 006 ran. longest_chain carries the headline; fg_count is
+  // the one the graph arm still loses and the one 005's retracted null was about.
+  "task": ["fg_count", "longest_chain"],
+
+  // The ablation axis. `spd+magnetic` is the reference column and lives in 006.
+  "bias": ["none", "spd"],
+
+  "arm": "graph",
+  "question_node": "on",
+
+  "encoding": "rich_levi",
+  "pool": "bace,bbbp",
+  "seed": 0,
+
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // 006's TUNED recipe, verbatim. This is the whole point: hold the recipe fixed
+  // and vary only the structural channel.
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+
+  // 40 epochs x 125 steps/epoch = 5000 steps. Matched to 006.
+  "num_epochs": 40,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}
