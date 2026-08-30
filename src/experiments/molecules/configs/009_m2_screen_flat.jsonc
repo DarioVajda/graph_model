@@ -1,0 +1,112 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 009 — the M2 closing screen, FLAT arm. The control twin of 008.
+  //
+  // ONE EXPERIMENT, TWO CONFIGS. 008 and 009 are the two arms of the same
+  // screen, split only so each arm can be given hardware that fits it. The
+  // graph arm peaks at 30.8GB and needs the fast large-memory tier; this arm
+  // peaks at 11.7GB and runs happily on the 40GB A100s, which keeps it from
+  // competing with 008 for B300s. Read the two together.
+  //
+  // FIVE RUNS, NOT SEVEN — AND THE REUSE IS EXACT, NOT AN APPROXIMATION.
+  // 008 screens seven families; this config runs five. `fg_count` and
+  // `longest_chain` are missing because 006 already produced their flat cells at
+  // this exact recipe, and those runs are reused verbatim.
+  //
+  // That reuse is sound for a reason specific to GTLM. By Property 2 the flat
+  // arm is a SINGLE-NODE graph, so it instantiates NO bias parameters at all —
+  // `bias_lr` has nothing to act on. The run records prove it rather than assume
+  // it; 006's flat cells at two different bias_lr values:
+  //
+  //     fg_count       bias_lr 0.005   bias_norm 0.0 -> 0.0   acc 0.936
+  //     fg_count       bias_lr 0.001   bias_norm 0.0 -> 0.0   acc 0.912
+  //     longest_chain  bias_lr 0.005   bias_norm 0.0 -> 0.0   acc 0.947
+  //     longest_chain  bias_lr 0.001   bias_norm 0.0 -> 0.0   acc 0.948
+  //
+  // Norms identically zero at every bias_lr. (The accuracy differences there are
+  // `lr`/`lora_r` moving in 006, not bias_lr.) So 008's bias_lr change CANNOT
+  // reach this arm, and re-running these two would burn 2 GPU-h to reproduce
+  // numbers we already hold.
+  //
+  // WHY bias_lr IS 5e-3 HERE AND 1e-2 IN 008. It is a no-op either way. It is
+  // set to 5e-3 so that ALL SEVEN flat cells in the final M2 table — the five
+  // run here and the two reused from 006 — carry byte-identical settings. A
+  // reader diffing the run records should find nothing to explain.
+  //
+  // THE ASYMMETRY THIS CONFIG MAKES VISIBLE. Because bias_lr cannot touch this
+  // arm, 008's tuning is graph-arm-only. The flat arm keeps `lr 3e-5` inherited
+  // from graphqa and has never been tuned for molecules — and 006 measured it
+  // responding to `lr` (+0.029 on fg_count). The M2 table therefore compares a
+  // tuned arm against an untuned one. That does not invalidate a graph win, but
+  // it must be DISCLOSED rather than discovered by a reader. A flat `lr` sweep
+  // is the run that would let us claim "beats a fully-tuned baseline".
+  //
+  // HARDWARE. `gpus: ["A100"]` matches BOTH aga (SXM4 40GB) and ana (PCIe
+  // 80GB); either is fine at an 11.7GB peak, and Slurm's ascending-weight order
+  // (see 008's header) fills aga first, which is the faster of the two. Left
+  // deliberately off B300/B200 so this arm never displaces 008.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/009_m2_screen_flat.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "009_m2_screen_flat",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 5,          // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      // A100 only — 40GB or 80GB both fit an 11.7GB peak. Kept off the fast
+      // tier so 008 gets it.
+      "gpus": ["A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "24G",
+      // Measured: a 5000-step flat run is 0.93-0.95h on B200. Padded for A100.
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // 008's seven minus `fg_count` and `longest_chain`, whose flat cells are
+  // reused from 006 — see the header.
+  "task": [
+    "ring_membership",
+    "ring_size",
+    "stereo_potential",
+    "fg_atom_membership",
+    "fg_presence"
+  ],
+
+  "arm": "flat",
+  "bias": "none",
+  "question_node": "on",
+
+  "encoding": "rich_levi",
+  "pool": "bace,bbbp",
+  "seed": 0,
+
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // Matched to 006's tuned flat cells EXACTLY, bias_lr included — see header.
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+
+  "num_epochs": 40,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

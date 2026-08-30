@@ -1,0 +1,143 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 008 — the M2 closing screen, GRAPH arm. Paired with 009 (the flat arm).
+  //
+  // WHAT THIS IS. The final Tier-A table for M2: every family with headroom,
+  // both arms, at one recipe, at the longest budget tested. 008 and 009 are ONE
+  // experiment split into two configs purely so the two arms can be given
+  // different hardware (the graph arm peaks at 30.8GB, the flat arm at 11.7GB —
+  // see 009's header). Read them together; neither is meaningful alone.
+  //
+  // THE RECIPE, AND THE ONE KNOB THAT MOVED. 006 settled `lr 3e-5, lora_r 16`
+  // and 007 showed the structural bias — not adapter capacity — carries the
+  // `longest_chain` win. `bias_lr` goes 5e-3 -> 1e-2 here. DV's call, and it is
+  // better founded than "a gamble": `relbench` runs `bias_lr 5e-2`, ten times
+  // higher than 5e-3, so 1e-2 is mid-range for this repo rather than reckless.
+  // 2x rather than 1.4x (7e-3 was the alternative) because a 1.4x step risks
+  // landing inside noise and wasting the test.
+  //
+  //   lr 3e-5   bias_lr 1e-2   lora_r 16   40 epochs = 5000 steps   seed 0
+  //
+  // THIS IS A ONE-POINT BET AND THE PLAN ACCEPTS IT. Only 1e-2 is run. Two of
+  // the seven families (`fg_count`, `longest_chain`) already have 5e-3 numbers
+  // from 006, so they are the built-in control: if 1e-2 beats 5e-3 on both, the
+  // other five are trustworthy at 1e-2; if it loses on both, they get re-run at
+  // 5e-3; if the two SPLIT, the axis is unresolved and both values are needed
+  // everywhere. The risk of the third outcome is the price of not running both
+  // values now, and it was taken deliberately.
+  //
+  //   `bias_lr` is a MAGNITUDE knob (`project-landmark-campaign`) and magnitude
+  //   knobs have optima. 007 measured bias_norm reaching 40-43 at 5e-3, already
+  //   large. Do not read 1e-2 > 5e-3 as "higher is always better".
+  //
+  // SEVEN FAMILIES, AND WHY NOT TEN. §3.2.5's screen at 2500 steps left four
+  // families at the ceiling in BOTH arms. A recipe change cannot move a ceiling,
+  // so three of them are reported in the M2 table from `004_extended` and not
+  // re-run:
+  //
+  //     aromatic_ring    graph 1.000  flat 0.997   -> no headroom either arm
+  //     ring_count       graph 0.993  flat 0.993   -> no headroom either arm
+  //     stereo_assigned  graph 0.997  flat 0.996   -> no headroom, and it is the
+  //                                                   DESIGNED-IN loss (§3.2.5)
+  //
+  // `ring_membership` IS re-run despite its graph arm sitting at 1.000, because
+  // its FLAT arm is at 0.941 — six points of headroom on the side that decides
+  // the comparison. Excluding it would drop the family with the largest measured
+  // graph-over-flat margin (+0.059) from the final table.
+  //
+  // WHAT THE TABLE IS FOR. It closes M2 and feeds the trunk justification in
+  // `src/generalist/PLAN.md`. Two disclosures belong beside it:
+  //   1. `bias_lr` is a GRAPH-ARM-ONLY knob (the flat arm instantiates no bias
+  //      parameters at all — 009's header proves it). Tuning it while the flat
+  //      arm keeps its inherited `lr 3e-5` compares a tuned arm against an
+  //      untuned one. 006 measured flat responding to `lr` (+0.029 on fg_count),
+  //      so this is a real asymmetry. Say so; do not claim "beats a fully-tuned
+  //      baseline". A flat `lr` sweep is the follow-up that would earn that.
+  //   2. One seed. §3.2.8's 6.1σ bounds SAMPLING error only.
+  //
+  // HARDWARE — READ THIS BEFORE RE-RUNNING. Slurm on frida orders nodes by
+  // Weight ASCENDING, and the weights here are INVERTED relative to speed:
+  //
+  //     apl (L4)  1112822  <  aga (A100 40GB)  1121402  <  ana (A100 80GB) 1141822
+  //             <  ixh (H100) 1143833  <  ixb1 (B200) 1165836  <  ixb8 (B300) 1176837
+  //
+  // So a broad `gpus` list sends jobs to the SLOWEST hardware and leaves the
+  // B300s idle. `gpus` is pinned to B300/B200 to force the fast tier; on
+  // 2026-08-30 only 5 B300 were free, so the 2 overflow tasks were hand-widened
+  // once placed, exactly as 007 documents:
+  //
+  //   scontrol update JobId=<id> TimeLimit=08:00:00 \
+  //     Features='GPU_BRD:B300|GPU_BRD:B200|GPU_SKU:A100_80GB_PCIE'
+  //
+  // A100_80GB is named by SKU, not `GPU_BRD:A100`, because the latter also
+  // matches aga's 40GB cards and this arm peaks at 30.8GB.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/008_m2_screen_graph.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "008_m2_screen_graph",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 7,          // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      // Pinned to the fast tier ON PURPOSE — see the weight ordering above.
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "32G",
+      // Measured for a 5000-step graph run: 1.8h on B200, 2.95h on A100_80GB.
+      // Sized so a hand-widened task on A100 still fits without a second edit.
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The seven families with headroom in at least one arm. `fg_count` and
+  // `longest_chain` are re-runs and double as the 5e-3-vs-1e-2 control.
+  "task": [
+    "ring_membership",
+    "ring_size",
+    "stereo_potential",
+    "fg_atom_membership",
+    "fg_presence",
+    "fg_count",
+    "longest_chain"
+  ],
+
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "question_node": "on",
+
+  "encoding": "rich_levi",
+  "pool": "bace,bbbp",
+  "seed": 0,
+
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // 006's tuned recipe with bias_lr raised 5e-3 -> 1e-2. Everything else is
+  // byte-identical to 006/007 so the columns stay comparable.
+  "lr": 3e-5,
+  "bias_lr": 1e-2,
+  "lora": true,
+  "lora_r": 16,
+
+  // 40 epochs x 125 steps/epoch = 5000 steps — the longest budget tested, and
+  // §3.2.7 measured that the gain from 2500 to 5000 was +0.104 on the graph arm.
+  "num_epochs": 40,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}
