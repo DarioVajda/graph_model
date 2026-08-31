@@ -1,0 +1,106 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 013 — M3b: HIV, both arms, 3 seeds. 9 runs. The third and last set of the
+  // scoped Tier B (PLAN.md §1).
+  //
+  // NOT YET SUBMITTED — GATED, deliberately. Two things must happen first:
+  //
+  //   1. `012_m3b_hiv_prep` must have built both artifacts. Without it, nine
+  //      jobs contend on one flock while holding GPUs idle.
+  //   2. **M3a (001) must have reported, and its `test_tied_pair_fraction` must
+  //      have been read.** PLAN.md §8 puts HIV after BACE/BBBP precisely because
+  //      HIV is the tie-collapse stress case: ~3.5% positives, ~145 of them in
+  //      the test split, so a handful of distinct margins decides the AUROC
+  //      outright. If BACE — a 45.7%-positive, well-conditioned set — already
+  //      shows a low `n_distinct`, the readout has a problem that HIV will make
+  //      catastrophic rather than visible, and the fix belongs before this runs.
+  //
+  //      READ `n_distinct` AND `tied_pair_fraction` BEFORE THE AUROC, in that
+  //      order, in every run this produces. An AUROC computed over a handful of
+  //      distinct scores is a coin flip wearing a metric's name.
+  //
+  // THE BUDGET IS IN STEPS, NOT EPOCHS, AND THAT IS THE WHOLE DESIGN QUESTION.
+  // HIV has 32895 training examples against BACE's 1210, so at batch 4 x accum 8
+  // one epoch is 1028 optimizer steps where BACE's is 38. Reusing 001's 40 epochs
+  // would be 41119 steps — ~11h per run, 9 runs — and reusing BACE's 1512 STEPS
+  // would be 1.5 epochs. Neither is "the same budget".
+  //
+  //   5 epochs = ~5140 steps, chosen to match the 5000-step budget every Tier-A
+  //   sweep from 006 onward settled on. Each example is seen 5 times; BACE's run
+  //   sees each of its 1210 examples 40 times. In steps — the quantity that
+  //   actually governs how much the adapter and bias can move — the two runs are
+  //   within 3.4x rather than 27x.
+  //
+  //   THIS IS THE JUDGEMENT CALL IN THIS CONFIG. `feedback-dont-call-floors-early`
+  //   has fired three times in this campaign, and a short budget biases AGAINST
+  //   the graph arm specifically (§3.2.4.1: the graph arm pays a start-up cost on
+  //   a modality Llama has never seen, while flat SMILES is pretrained-native).
+  //   So: if `still_improving` is True on the graph arm at 5 epochs, this is a
+  //   LOWER BOUND and the honest response is to re-run BOTH arms at 10 epochs,
+  //   not to report the number. Re-run the pair, never the cell (§3.2.4.2).
+  //
+  // EVAL CADENCE. Val is 4112 examples, so an eval is not free the way BACE's
+  // 151 were. `eval_steps` 400 gives ~13 evals — enough for `still_improving`
+  // (which reads the last three) and for a readable curve, without spending a
+  // fifth of the run on evaluation.
+  //
+  // NO CAP. `max_eval_examples` would cap val AND test alike
+  // (`prepare_tier_b_graphs`), and a test AUROC over a subsample is not
+  // comparable to the §2.2 anchors, which are computed on the full scaffold-split
+  // test set. The eval cost is accepted for that reason.
+  //
+  // MEMORY / TIME. 64G for the ~2.6GB artifact. 08:00:00 because the slowest
+  // allowed card (A100-40, ~0.4x an H100) at ~2s/step needs ~2.9h for 5140 steps,
+  // and the limit must be sized for the slowest card the constraint allows —
+  // 007's header documents a run killed mid-flight for exactly that oversight.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/013_m3b_hiv.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "013_m3b_hiv",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 9,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "64G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "hiv",
+
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },  // the real arm
+    { "arm": "graph", "bias": "none" },          // isolates the bias channel
+    { "arm": "flat",  "bias": "none" }           // the matched control (gate B1)
+  ],
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "seed": [0, 1, 2],
+  "data_seed": 0,
+
+  // 5 epochs x ~1028 steps/epoch = ~5140 steps. See the budget note above.
+  "num_epochs": 5,
+  "eval_steps": 400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

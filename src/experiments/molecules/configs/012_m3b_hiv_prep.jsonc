@@ -1,0 +1,67 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 012 — M3b step 1 of 2: BUILD the HIV datasets. No training.
+  //
+  // NOT YET SUBMITTED. Gated on M3a (001) reporting — see 013's header for why
+  // the gate exists. This config is separated from 013 for a reason that is
+  // about cost, not tidiness.
+  //
+  // WHY A SEPARATE BUILD. HIV is 41119 molecules, 27x BACE. Extrapolating from
+  // the measured BACE artifact (96MB / 1513 examples for the graph arm) the HIV
+  // graph `.gtds` lands near **2.6GB**, and building it means featurising 41k
+  // molecules — Levi expansion, shortest paths and a magnetic Laplacian each.
+  // `load_or_create_dataset` serialises that behind an flock, so if 013's nine
+  // runs start together, ONE of them builds while the other eight sit on
+  // allocated GPUs waiting on the lock. Building first turns that into two jobs
+  // and leaves 013 hitting a warm cache.
+  //
+  // `mode: data_prep` runs `run_data_prep_mode`, which builds and writes the
+  // `.gtds` plus its meta sidecar and exits. It still requests a GPU because the
+  // sweep runner always does; the work itself is CPU and RAM.
+  //
+  // MEMORY. 64G, not 001's 32G: a ~2.6GB artifact is held in memory while it is
+  // tokenised and featurised, and the fp32 cast doubles the float features
+  // before they are written.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/012_m3b_hiv_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "012_m3b_hiv_prep",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      // Any card: this is a build, so GPU speed is irrelevant. L4 included
+      // deliberately — it is the one job in the campaign that should take the
+      // slowest free card and leave the fast tier for training.
+      "gpus": ["L4", "A100", "H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "64G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+  "task": "hiv",
+
+  // Both arms. `bias` does not affect the artifact (both features are always
+  // computed, so one `.gtds` serves every bias arm — dataset.py:223), but `arm`
+  // does: the graph and flat arms are different artifacts entirely.
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },
+    { "arm": "flat",  "bias": "none" }
+  ],
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+  "max_spd": 32
+}
