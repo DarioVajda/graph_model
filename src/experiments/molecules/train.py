@@ -120,20 +120,34 @@ def _convergence(curve, metric):
 
 
 def _answer_stats(stats):
-    """Majority-class rate of the generated answers — the floor any score beats.
+    """Majority-class rate of the answers — the floor any score beats.
 
     Admission criterion 3 in PLAN.md §3.2.4 ("well above the majority-class rate")
     was unverifiable from the run record until this was added: `fg_count` has a
     0.760 base rate, so an arm reporting 0.74 has learned *nothing* and looks like
     a respectable score next to a task whose base rate is 0.285.
+
+    **Which split's floor.** The headline is a TEST number, so the floor it has to
+    beat is the TEST split's majority rate. On Tier A the two coincide (every
+    example is drawn from one generator). On Tier B they do not: the scaffold split
+    moves BBBP from 0.822 positive in train to 0.524 in test, and quoting the
+    corpus-wide 0.765 against a test accuracy would be comparing a score to a floor
+    from a different distribution. So `answers_by_split["test"]` wins when present
+    (Tier B only — Tier A records are unchanged), and `base_rate_source` says which
+    was used rather than leaving a reader to guess.
     """
-    answers = (stats or {}).get("answers") or {}
+    stats = stats or {}
+    by_split = stats.get("answers_by_split") or {}
+    answers = by_split.get("test") or stats.get("answers") or {}
+    source = "test_split" if by_split.get("test") else "all_examples"
     total = sum(answers.values())
     if not total:
-        return {"base_rate": None, "answer_distribution": None, "n_classes": 0}
+        return {"base_rate": None, "answer_distribution": None, "n_classes": 0,
+                "base_rate_source": None}
     return {"base_rate": max(answers.values()) / total,
             "answer_distribution": dict(sorted(answers.items(), key=lambda kv: -kv[1])),
-            "n_classes": len(answers)}
+            "n_classes": len(answers),
+            "base_rate_source": source}
 
 
 def _per_example(trainer, test_dataset, cfg, run_name, runs_jsonl):

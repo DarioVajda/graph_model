@@ -19,6 +19,7 @@ import fcntl
 import json
 import os
 import random
+from collections import Counter
 
 from rdkit import Chem
 from tqdm import tqdm
@@ -161,7 +162,7 @@ def prepare_tier_b_graphs(cfg):
     splits, stats = build_tier_b_examples(cfg.task)
     rng = random.Random(cfg.data_seed)
 
-    ordered, sizes = [], {}
+    ordered, sizes, by_split = [], {}, {}
     for name in ("train", "val", "test"):
         items = splits[name]
         cap = cfg.max_train_examples if name == "train" else cfg.max_eval_examples
@@ -169,7 +170,16 @@ def prepare_tier_b_graphs(cfg):
             items = rng.sample(items, cap)
         ordered.extend(items)
         sizes[name] = len(items)
+        by_split[name] = dict(Counter(answer for _mol, _question, answer in items))
 
+    # The answer distribution of what actually ends up in the artifact — computed
+    # here rather than in `build_tier_b_examples` so a cap is reflected rather than
+    # described. `answers` is the aggregate `_answer_stats` reads by default;
+    # `answers_by_split` exists because Tier B's scaffold split moves the base rate
+    # a long way between train and test (BBBP: 0.822 -> 0.524), so the floor a TEST
+    # headline has to beat is not the corpus-wide one. PLAN.md §1 Tier B.
+    stats["answers_by_split"] = by_split
+    stats["answers"] = dict(sum((Counter(v) for v in by_split.values()), Counter()))
     stats["used_split_sizes"] = sizes
     return _build_split_graphs(ordered, cfg), stats, sizes
 
@@ -242,7 +252,10 @@ def load_or_create_dataset(cfg):
                 ds.save(path)
                 with open(path + ".meta.json", "w") as f:
                     json.dump(stats, f, indent=2)
-                print(f"[data] answer distribution: {stats['answers']}")
+                # `.get`, not `[...]`: this is a progress print, and it crashed
+                # every Tier-B run at 010 because the Tier-B stats dict had no
+                # `answers` key. A log line must never be what fails a job.
+                print(f"[data] answer distribution: {stats.get('answers')}")
     ds = TextGraphDataset.load(path)
     print(f"Loaded dataset from {path} with {len(ds)} examples.")
     return ds
