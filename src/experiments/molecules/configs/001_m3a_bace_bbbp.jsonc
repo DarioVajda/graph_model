@@ -1,0 +1,135 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 001 — M3a: the first real Tier-B measurement. BACE + BBBP, both arms,
+  // 3 seeds. 18 runs.
+  //
+  // Renamed from `001_bace.jsonc` on 2026-08-31 (DV green-light) when Tier B was
+  // scoped to BACE / BBBP / HIV (PLAN.md §1). BBBP joins BACE here because the
+  // two are the same size class and the same shape of run; HIV is deliberately
+  // NOT here — it is 27x BACE and the tie-collapse stress case, so it gets its
+  // own config after this one has reported (M3b).
+  //
+  // THREE EDITS FROM THE VERSION THAT SAT HERE UNRUN, all of them load-bearing.
+  //
+  // 1. THE RECIPE. The old file carried `lr 1e-5 / bias_lr 1e-3 / lora_r 8` —
+  //    inherited from `expressiveness` and measured by §3.2.7 to be the
+  //    lowest-capacity recipe in the repo. Retuning it flipped `longest_chain`
+  //    from -0.079 to +0.042 in the graph arm's favour. Submitting the old file
+  //    would have measured gate B1 under a recipe already known to suppress the
+  //    graph arm. Now `3e-5 / 5e-3 / 16`.
+  //
+  //    `bias_lr` is 5e-3, NOT 008's 1e-2. §3.2.9 measured 1e-2 as a verified
+  //    null (+0.002 / -0.009, both under 1 sigma, with bias_norm rising 2.4x),
+  //    and 5e-3 is the value with 006 and 007 behind it. Measured-equivalent is
+  //    not a reason to switch.
+  //
+  // 2. THE BUDGET. The old file ran 20 epochs. BACE is 1210 training examples at
+  //    batch 4 x accum 8 = 32 per optimizer step, so that is ~756 steps — where
+  //    Tier A needed 5000, and where §3.2.7 measured `longest_chain` gaining
+  //    +0.104 AFTER `still_improving` had called it converged. Calling gate B1
+  //    at 756 steps would be the third occurrence of
+  //    `feedback-dont-call-floors-early` in one campaign. 40 epochs now, matching
+  //    Tier A: BACE ~1512 steps, BBBP ~2040.
+  //
+  //    Overfitting is the opposite risk and it is the smaller one, because it is
+  //    handled: selection is `metric_for_best_model=eval_roc_auc` on the VAL
+  //    split with `load_best_model_at_end`, and test is scored once at the end
+  //    (train.py:234-256). More budget therefore costs GPU time, not integrity.
+  //    Read `still_improving` in the record before believing any B1 verdict.
+  //
+  // 3. THE HARDWARE. See the note below — it is not the obvious setting.
+  //
+  // HARDWARE. Slurm on frida orders nodes by Weight ASCENDING and the weights
+  // are INVERTED relative to speed (008's header has the table: L4 < A100-40 <
+  // A100-80 < H100 < B200 < B300). So listing every GPU sends jobs to the
+  // SLOWEST card first — the opposite of what "use whatever is free so it
+  // finishes sooner" means. The list is therefore a deliberate trade, not a
+  // wildcard: L4 stays out, A100 is now IN.
+  //
+  //   A100 is in because 010 MEASURED the Tier-B graph arm at **20.9GB peak**,
+  //   not the 30.8GB Tier A peaked at. 007 excluded the 40GB cards "twice over:
+  //   roughly half an H100, and peak GPU memory here is 30.8GB, which is more
+  //   headroom than 40GB comfortably gives". The memory half of that objection
+  //   is now retired by measurement — 20.9GB leaves 19GB of headroom on a 40GB
+  //   card. The speed half stands, and is accepted: `GPU_BRD:A100` adds aga(4) +
+  //   axa(8) + ana(8) = 20 GPUs against a fast tier that 011 had saturated, and
+  //   18 runs finish sooner on more slow slots than on five fast ones.
+  //
+  //   `GPU_BRD:A100` matches all three A100 nodes including ana's 80GB PCIe
+  //   cards (verified by `scontrol show node`); only the SKU form would separate
+  //   them, and at 20.9GB there is no reason to.
+  //
+  //   The 04:00:00 budget is sized for the SLOWEST allowed card: BBBP graph is
+  //   ~2040 steps, ~0.8s/step on H100 (011, measured), so ~2s/step on A100-40 =
+  //   ~68min + compile. Every allowed card fits with margin.
+  //
+  // THE GATE THIS FEEDS is B1: does the graph arm beat OUR OWN flat twin? The
+  // §2.2 rows are anchors, not matched controls. `bias: none` is the third arm
+  // because §3.2.8 showed on Tier A that adapter capacity alone buys parity with
+  // SMILES and the bias buys the win — the same decomposition has to be
+  // available here or a Tier-B win cannot be attributed to anything.
+  //
+  // Three seeds is the minimum that makes "+/- 1 sd" mean anything, and scaffold
+  // splits on 1.5k molecules are noisy enough (PLAN.md §9) that one seed would be
+  // uninterpretable.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/001_m3a_bace_bbbp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "001_m3a_bace_bbbp",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 18,         // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      // Fast tier + A100 (all three A100 nodes). L4 deliberately excluded.
+      // See the hardware note above — this is a measured trade, not a wildcard.
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "32G",
+      // 008 measured 1.8h for a 5000-step graph run on B200. The longest run
+      // here is BBBP graph at ~2040 steps, so ~0.8h plus the ~320s flex autotune
+      // and the dataset build. 04:00:00 leaves room on the slowest allowed card.
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },  // the real arm
+    { "arm": "graph", "bias": "none" },          // structure off: isolates the bias channel
+    { "arm": "flat",  "bias": "none" }           // the matched control (gate B1)
+  ],
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "seed": [0, 1, 2],
+
+  // Tier B sizes come from the scaffold split (bace 1210/151/152, bbbp
+  // 1631/204/204 — pinned by tests/experiments/molecules/test_tier_b_examples.py),
+  // not from train_size/val_size/test_size, which are Tier-A knobs and ignored here.
+  "data_seed": 0,
+
+  // 40 epochs — see edit 2 above.
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  // Settled by 000: flex for the graph arm, production autotune.
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

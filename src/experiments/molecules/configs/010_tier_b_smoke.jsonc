@@ -1,0 +1,87 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 010 — Tier-B smoke. The first GPU contact for the Tier-B path.
+  //
+  // WHY THIS EXISTS. `tier_b.py` and `evaluate.py` were built at M0/M1 and have
+  // never executed on a GPU. Everything Tier B reports flows through code that
+  // has only ever been exercised by unit tests: the scaffold-split example
+  // builder, the ordered [train|val|test] layout that `load_data` slices
+  // positionally, the logit-margin readout, and the AUROC/`n_distinct`/
+  // `tied_pair_fraction` record fields. 001 is 18 runs; discovering a collation
+  // or OOM problem inside it costs 18 jobs. This costs 2.
+  //
+  // Same precedent as `000_smoke`, which paid for itself by settling flex-vs-eager
+  // before the campaign committed to a backend.
+  //
+  // NO NUMBER FROM THIS SWEEP IS QUOTABLE. One epoch of BACE is ~38 optimizer
+  // steps against the 1512 that 001 runs; the AUROC it prints is an untrained
+  // model's. What is being read is:
+  //
+  //   1. does it run at all, both arms, on the fast tier;
+  //   2. does the run record carry `test_roc_auc`, `n_distinct` and
+  //      `tied_pair_fraction` (the tie-collapse instruments that HIV will need);
+  //   3. do the split sizes come out 1210 / 151 / 152, matching the scaffold
+  //      split pinned in tests/experiments/molecules/test_tier_b_examples.py;
+  //   4. s/it and peak GB for the Tier-B shape, to size 001's time limit and
+  //      confirm the graph arm still fits the >=80GB cards.
+  //
+  // DELIBERATELY UNCAPPED. `max_train_examples` would tag a different dataset
+  // cache path (dataset.py::dataset_path) and would therefore smoke a split that
+  // 001 never builds. Running the real split means this also warms the cache 001
+  // needs, for both arms.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/010_tier_b_smoke.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "010_tier_b_smoke",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      // The fast tier — frida's node weights are inverted relative to speed, so
+      // a broad list would land this on an L4. See 001's hardware note.
+      "gpus": ["B300", "B200", "H100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "32G",
+      // Dataset build + ~320s flex autotune + ~38 steps. Generous on purpose:
+      // a smoke that dies on a time limit tells us nothing.
+      "time": "01:30:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "bace",
+
+  // Both arms, because the flat arm exercises a different collation path and is
+  // half of gate B1. `bias: none` is left to 001 — the graph arm with the bias on
+  // is the configuration with the most machinery behind it.
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },
+    { "arm": "flat",  "bias": "none" }
+  ],
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+
+  "num_epochs": 1,
+  "eval_steps": 10,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}
