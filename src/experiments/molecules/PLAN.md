@@ -1,7 +1,7 @@
 # Molecules × GTLM — implementation plan
 
 **Status:** M0–M2 complete (2026-08-30). **M3 is next, and it is scoped to BACE / BBBP / HIV**
-(§1 Tier B, DV 2026-08-31). Written to run **before** the generalist trunk
+(§1 Tier B, 2026-08-31). Written to run **before** the generalist trunk
 (`src/generalist/PLAN.md` §7 names molecules as an admission-gate domain and leaves the
 representation decision open — this document is that decision).
 
@@ -23,7 +23,7 @@ Every sweep is reproducible from `configs/`, one file per sweep, numbered contig
 | config | runs | what it settled | § |
 |---|---:|---|---|
 | `000_smoke` | 6 | plumbing, flex-vs-eager, s/it and peak GB | 3.1.2 |
-| `001_bace` | 9 | M3 Tier B — **not yet run**; needs the tuned recipe (§3.2.7) | 8 |
+| `001_m3a_bace_bbbp` | 18 | **M3a — Tier B, BACE + BBBP, both arms, 3 seeds.** Renamed from `001_bace` and rewritten 2026-08-31: the recipe was stale, the budget was ~756 steps, and the scope is now two datasets | 8 |
 | `002_difficulty` | 18 | Tier-A difficulty screen at 1250 steps | 3.2.4 |
 | `003_hardware_check` | 4 | H100/A100 run the flex compile path | — |
 | `004_extended` | 20 | the screen at 2500 steps, matched pairs | 3.2.4 |
@@ -32,6 +32,10 @@ Every sweep is reproducible from `configs/`, one file per sweep, numbered contig
 | `007_tuned_ablation` | 4 | **the win is the bias, and the bias is SPD** | 3.2.8 |
 | `008_m2_screen_graph` | 7 | M2 closing screen, graph arm at `bias_lr 1e-2` | 3.2.5 |
 | `009_m2_screen_flat` | 5 | M2 closing screen, flat arm (its control twin) | 3.2.5 |
+| `010_tier_b_smoke` | 2 | **first GPU contact for the Tier-B path** — plumbing only, no quotable number | 8 |
+| `011_m2_loose_ends` | 7 | M2's two stated holes: a second seed on §3.2.8's `longest_chain` cells, and gate A2's never-run `stereo_tags: off` control — **running it is what exposed §3.2.10** | 8, 3.2.10 |
+| `012_m3b_hiv_prep` | 2 | builds the two HIV artifacts (~2.6 GB graph) so 013 hits a warm cache — **written, not submitted** | 8 |
+| `013_m3b_hiv` | 9 | M3b — HIV, both arms, 3 seeds, budget in *steps* not epochs. **Written, not submitted: gated on M3a's `tied_pair_fraction`** | 8 |
 
 `008` and `009` are **one experiment in two files** — split only so each arm gets hardware sized
 to it (graph peaks at 30.8 GB, flat at 11.7 GB). Neither is meaningful alone. `009` runs five
@@ -118,7 +122,7 @@ is the Tier-B and trunk default. The **CIP label** (`"chiral R"`) would be cheat
 *information about the molecule*, the CIP label is *the answer to the task*. Never put it in node
 text. Record `stereo_tags` in every run record.
 
-### Tier B — MoleculeNet ⚠️ SCOPED 2026-08-31 (DV)
+### Tier B — MoleculeNet ⚠️ SCOPED 2026-08-31
 
 Scaffold split (ours, `scaffold_split`), ROC-AUC. Built at M3 (`tier_b.py`); GPU runs pending.
 Molecule counts are post-drop; *examples* are `(molecule, endpoint)` pairs after skipping absent
@@ -132,7 +136,7 @@ labels.
 | **BBBP** | 2039 | 1 | 2039 | 76.5% | 1631/204/204 |
 | **HIV** | 41119 | 1 | 41119 | **3.5%** | 32895/4112/4112 |
 
-**The reason for the scope is the anchors, not the cost** (DV, 2026-08-31). These three are the
+**The reason for the scope is the anchors, not the cost** (2026-08-31). These three are the
 only Tier-B sets with a *complete anchor ladder* — 3D specialist, graph-LLM at 7B, tuned-LLM at
 7B, and a prompted-LLM floor (§2). That ladder is what converts one AUROC into a position in the
 space of solutions. Tox21 and SIDER have a single anchor row between them, so a number on them is
@@ -143,6 +147,21 @@ Tier-B measurement does not simultaneously test the multi-endpoint routing machi
 positives in its test split, so a handful of distinct margins decides the AUROC outright.
 `n_distinct` and `tied_pair_fraction` are in the run record from the first run for exactly this.
 BACE and BBBP settle whether the pipeline works; HIV is a stress test that follows.
+
+**The scaffold split moves the base rate between train and test, and it moves it a long way**
+(measured 2026-08-31, pinned in `tests/experiments/molecules/test_tier_b_examples.py`):
+
+| | train | val | test | overall |
+|---|---:|---:|---:|---:|
+| BACE | 0.426 | 0.556 | **0.605** | 0.457 |
+| BBBP | 0.822 | 0.549 | **0.524** | 0.765 |
+
+BBBP's positive rate falls from 82% in train to 52% in test. Two consequences for M3. **AUROC is
+rank-based and unaffected**, which is why it is the headline metric and the one every §2 anchor
+reports. **`accuracy` and `f1` are badly affected** — a model that learns the training prior scores
+near-chance accuracy on BBBP's test split while ranking perfectly well — so do not read those
+fields as a health check on a run, and do not compare them across datasets. This is the scaffold
+split doing exactly what it is for (a structurally novel test set), not a bug.
 
 **Deferred, not cancelled:**
 
@@ -201,32 +220,37 @@ comparison rather than a shortcut, and it means none of these numbers is a gener
 | Llama-2-7B-chat, Vicuna-v1.3-7B (★ rows) | **LoRA fine-tuned**, not zero-shot. The row we target is a tuned baseline. |
 | Vicuna-v1.5-13b-16k | 4-shot in-context, no tuning — hence the near-chance numbers |
 | Galactica-6.7B / 30B / 120B | Prompted, no downstream fine-tuning |
-| Mol-LLM | The genuine generalist: one model over a broad task suite (SELFIES + hybrid GINE/TokenGT encoder + Q-Former), trained with next-token prediction plus a structure-preference objective |
+| [Mol-LLM](https://arxiv.org/abs/2502.02810) | The genuine generalist: one model over a broad task suite (SELFIES + hybrid GINE/TokenGT encoder + Q-Former), trained with next-token prediction plus a structure-preference objective |
 
 ### 2.2 The primary three — MoleculeNet classification, scaffold split, ROC-AUC ↑
 
 InstructMol (arXiv:2311.16208, **current version**, Table 2; 3 random seeds, scaffold splits).
 Primary source, read 2026-08-31.
 
-| | BACE | BBBP | HIV | what it is |
-|---|---:|---:|---:|---|
-| DMP (TF+GNN) | 89.4 | 77.8 | 81.4 | strongest row in the table; not a like-for-like |
-| **Uni-Mol** | **85.7** | **72.9** | **80.8** | **the ceiling, not the target** — 3D conformers, 10M-molecule pretraining |
-| MolFM | 83.9 | 72.9 | 78.8 | |
-| GraphMVP-C | 81.2 | 72.4 | 77.0 | |
-| MolCA (1D+2D) | 79.8 | 70.0 | — | |
-| KV-PLM | 78.5 | 70.5 | 71.8 | |
-| MoMu | 76.7 | 70.5 | 75.9 | |
-| GraphCL | 75.3 | 69.7 | 78.5 | |
-| ChemBERTa-2 | 73.5 | 69.8 | 79.3 | |
-| **InstructMol-G** (7B + graph tokens) | **84.3 ±0.6** | **68.6 ±0.3** | **74.0 ±0.1** | **the graph-LLM band we should land in** |
-| InstructMol-GS (7B + graph + SMILES) | 82.1 ±0.1 | 72.4 ±0.3 | 68.9 ±0.3 | note it is *not* uniformly better than -G |
-| **Llama-2-7B-chat, LoRA** | **74.8** | **65.6** | **62.3** | **the row to beat, at 1/7 the parameters** |
-| Vicuna-v1.3-7B, LoRA | 68.3 | 60.1 | 58.1 | |
-| Galactica-6.7B | 58.4 | 53.5 | 72.2 | |
-| Galactica-30B | 72.7 | 59.6 | 75.9 | |
-| Galactica-120B | 61.7 | 66.1 | 74.5 | |
-| Vicuna-v1.5-13b-16k, 4-shot | 49.2 | 52.7 | 50.5 | the prompted-LLM floor — near chance |
+**Every number below is as compiled in InstructMol's Table 2**, not re-run by us and not read from
+each method's own paper — so a row's own paper may quote a different figure under a different
+split. The model links go to the method's own paper, for what it *is*; the numbers stay attributed
+to the table that put them side by side.
+
+| | BACE | BBBP | HIV | how it works | why it is in this table |
+|---|---:|---:|---:|---|---|
+| [DMP (TF+GNN)](https://arxiv.org/abs/2106.10234) | 89.4 | 77.8 | 81.4 | Dual-view pretraining: a Transformer over SMILES and a GNN over the graph, trained jointly with a consistency loss between the two views | Strongest row in the table, and the closest published thing to **our two arms fused**. Evidence that string-view and graph-view are complementary rather than redundant — which is the optimistic reading of §3.2.5's split |
+| [**Uni-Mol**](https://openreview.net/forum?id=6K2RM6wVqKu) | **85.7** | **72.9** | **80.8** | SE(3)-equivariant transformer over **3D conformers** with a pair-distance channel; pretrained on ~209M conformations / ~19M molecules | **The ceiling, not the target.** It has an information channel we structurally lack (§7 is the drop-in that would close it). The anchor most readers will quote at us, so §0's framing exists for this row |
+| [MolFM](https://arxiv.org/abs/2307.09484) | 83.9 | 72.9 | 78.8 | Multimodal foundation model over graph + text + knowledge-graph neighbours, contrastively aligned | Text *and* graph without an LLM decoder — the nearest non-LLM neighbour to GTLM's information set |
+| [GraphMVP-C](https://arxiv.org/abs/2110.07728) | 81.2 | 72.4 | 77.0 | 2D GNN pretrained by contrastive + generative agreement with 3D views; **3D is used only in pretraining, not at inference** | Measures how much of the 3D advantage survives as a 2D-only model — i.e. the part of Uni-Mol's lead that is not inference-time geometry |
+| [MolCA (1D+2D)](https://arxiv.org/abs/2310.12798) | 79.8 | 70.0 | — | Galactica LM + 2D GNN joined by a Q-Former cross-modal projector plus a uni-modal adapter | **The graph-tokenizer architecture our thesis argues against** (§0): the graph is compressed to a few query vectors before the LM sees it. The architectural foil for GTLM's prefix nodes |
+| [KV-PLM](https://doi.org/10.1038/s41467-022-28494-3) | 78.5 | 70.5 | 71.8 | BERT over SMILES tokens interleaved with biomedical text, masked-token pretraining | The pure flat-string baseline at BERT scale — our flat twin's modality, with domain pretraining and without an LLM |
+| [MoMu](https://arxiv.org/abs/2209.05481) | 76.7 | 70.5 | 75.9 | GNN + text encoder contrastively aligned on molecule–description pairs | Contrastive alignment as the alternative to prefix-token fusion: same two modalities, joined at the loss instead of in the sequence |
+| [GraphCL](https://arxiv.org/abs/2010.13902) | 75.3 | 69.7 | 78.5 | Graph-only contrastive SSL with augmentations; **no text channel at all** | The structure-only floor — what topology alone buys on these endpoints. The published analogue of our `bias`-only ablation (§3.2.8) |
+| [ChemBERTa-2](https://arxiv.org/abs/2209.01712) | 73.5 | 69.8 | 79.3 | RoBERTa over 77M SMILES, MLM + multi-task regression pretraining | A SMILES LM *specialised on chemistry* — roughly the ceiling our flat twin would approach if Llama had been pretrained on SMILES rather than merely exposed to it |
+| [**InstructMol-G**](https://arxiv.org/abs/2311.16208) (7B + graph tokens) | **84.3 ±0.6** | **68.6 ±0.3** | **74.0 ±0.1** | 7B LLM + frozen pretrained 2D graph encoder; projector aligned on 264K caption pairs, then LoRA instruction tuning | **The band we should land in**, and the closest architecture to ours — graph tokens vs our prefix nodes, at 7× the parameters. Gate B2 is written against this row |
+| [InstructMol-GS](https://arxiv.org/abs/2311.16208) (7B + graph + SMILES) | 82.1 ±0.1 | 72.4 ±0.3 | 68.9 ±0.3 | Same, plus the SMILES string in the prompt alongside the graph | **Our `+smiles` arm (§3.2), measured by someone else**: +3.8 BBBP but −5.1 HIV against -G. Task-dependent in both directions, which is exactly why it cannot be our headline |
+| [**Llama-2-7B-chat**](https://arxiv.org/abs/2307.09288), LoRA | **74.8** | **65.6** | **62.3** | General-purpose 7B chat LLM, LoRA fine-tuned on SMILES-in-prompt property QA. **No graph channel** | **The row to beat, at 1/7 the parameters** — and the nearest published analogue of *our own flat twin*. If our flat arm lands far from this, the comparison is broken before the graph arm is read (gate B3) |
+| [Vicuna-v1.3-7B](https://lmsys.org/blog/2023-03-30-vicuna/), LoRA | 68.3 | 60.1 | 58.1 | Llama-1-7B tuned on ShareGPT conversations, then the same LoRA protocol as the row above | Isolates **the base model at fixed protocol**: same size, same adaptation, 6 points below Llama-2. A caution that backbone choice moves these numbers as much as method does |
+| [Galactica-6.7B](https://arxiv.org/abs/2211.09085) | 58.4 | 53.5 | 72.2 | Decoder LM pretrained on scientific text including SMILES; **prompted, no fine-tuning** | What domain pretraining alone gives with no adaptation — the gap to the LoRA rows is the value of fine-tuning at all |
+| Galactica-30B | 72.7 | 59.6 | 75.9 | as above, larger | Together with 120B: **scale without adaptation is not monotone** (120B is 11 points *below* 30B on BACE). Do not read parameter count as capability when arguing 1B-vs-7B |
+| Galactica-120B | 61.7 | 66.1 | 74.5 | as above, larger | |
+| [Vicuna-v1.5-13b-16k](https://lmsys.org/blog/2023-03-30-vicuna/), 4-shot | 49.2 | 52.7 | 50.5 | In-context learning only, **no weight updates** | **The floor, and it is at chance.** Establishes that these endpoints are not solvable by prompting, so every other row is measuring adaptation rather than latent knowledge |
 
 **Version drift, checked and resolved.** ar5iv still serves an earlier version of InstructMol with
 InstructMol-G at 85.9 / 64.0 / 74.0 — materially different on BBBP. The numbers above are the
@@ -234,11 +258,11 @@ current arXiv version. Do not "fix" this table against the stale mirror.
 
 ### 2.3 Anchors for the deferred sets
 
-Needed only if §1's deferred sets re-enter at M3c. Uni-Mol, ROC-AUC, scaffold split:
+Needed only if §1's deferred sets re-enter at M3c. ROC-AUC, scaffold split:
 
-| | Tox21 | SIDER | ClinTox |
-|---|---:|---:|---:|
-| Uni-Mol | 79.6 | 65.9 | 91.9 |
+| | Tox21 | SIDER | ClinTox | how it works | why it is here |
+|---|---:|---:|---:|---|---|
+| [Uni-Mol](https://openreview.net/forum?id=6K2RM6wVqKu) | 79.6 | 65.9 | 91.9 | see §2.2 — 3D conformers, ~19M-molecule pretraining | The only anchor these three sets have. One row is not a ladder, which is why they are deferred |
 
 **Provenance caveat — these three are secondary.** The Uni-Mol paper's own table could not be read
 directly (OpenReview serves a bot-check page to the fetch path); they come from a table that
@@ -249,7 +273,7 @@ they are deferred. The regression sets have no anchors of any kind yet.
 
 ### 2.4 Two anchors not to calibrate against
 
-* **Mol-LLM** (arXiv:2502.02810) reports BACE 80.5 and **BBBP 81.1**. The BBBP figure is far out of
+* **[Mol-LLM](https://arxiv.org/abs/2502.02810)** (arXiv:2502.02810) reports BACE 80.5 and **BBBP 81.1**. The BBBP figure is far out of
   line with every other row and its protocol differs (multi-task generalist, SELFIES, hybrid
   encoder). Do not calibrate against it without reading its split.
 * **The 2026 systematic survey** (arXiv:2604.16586) Table 4 quotes SIDER 0.847 and ClinTox 0.984
@@ -266,7 +290,7 @@ BLEU-4. All use 3D or large-scale molecular pretraining we do not have.
 | Gate | Criterion | Status |
 |---|---|---|
 | **A1** | Tier A: graph arm ≥ +15 points over the SMILES flat twin on `ring_membership`, `ring_size`, `bond_path`. | **Not met.** Best is `ring_size` +11.5. The graph arm sits at 0.99–1.00 on these families, so the gap is bounded by flat's headroom, not by the graph channel. §3.2.5. |
-| **A2** | Tier A: graph arm **wins** `stereo_potential`; on `stereo_assigned`, chance under `stereo_tags: off`, high under `on`. | **Half met.** `stereo_potential` +0.025 (2.6σ) ✅. The `stereo_assigned` off/on contrast was never run and both arms saturate at 0.997 — the negative control did not fire. §3.2.5. |
+| **A2** | Tier A: graph arm **wins** `stereo_potential`; on `stereo_assigned`, chance under `stereo_tags: off`, high under `on`. | **PASSES (2026-08-31, `011`).** `stereo_potential` +0.084 on novel molecules ✅. The off/on contrast ran for the first time: on novel molecules 0.9928 with the parity tag → **0.8152** without ✅. Running it is also what exposed §3.2.10. One caveat: the 0.8152 residual sits ~10pp above the 0.715 base rate and is not explained by the parity channel — see §3.2.10. |
 | **B1** | Tier B: graph arm beats **our own flat twin** by ≥ 1 sd on ≥ 2 of the primary 3 classification sets. **This is the real result.** | Pending M3. *(Threshold restated from "4 of 6" for the scoped Tier B.)* |
 | **B2** | Tier B: within 3 AUROC of InstructMol-G on BACE/BBBP/HIV at 1B vs 7B. Aspirational, not a gate. | Pending M3 |
 | **B3** | Tier B: beat the Llama-2-7B-chat LoRA row (74.8 / 65.6 / 62.3) at 1B. If we do not, the flat twin will not either, and the domain is telling us the molecules are being read badly — check M1's round-trip test before blaming the architecture. | Pending M3 |
@@ -332,6 +356,23 @@ Three corrections this forced on the plan:
    counted (`is_encodable`) rather than silently mis-encoded. Parse failures counted separately: 30
    across the corpus, mostly BBBP's known-bad SMILES.
 
+**Addendum 2026-08-31 — the flat arm is not as cheap as this table says on atom-named families.**
+The `flat SMILES` column above is the *unlabelled* string. `atom_labels=True` (`data.py:405`) sets
+an atom-map number on **every** atom, so the string the flat arm actually reads on an atom-named
+family is `[O:1]1[CH2:2][CH2:3]...`, measured over 300 molecules each:
+
+| | plain SMILES | with atom maps | vs the `rich_levi` prefix |
+|---|---:|---:|---|
+| `bace` | 47.5 | **181.8** | 368 → +13% plain, **+49% labelled** |
+| `bbbp` | 31.7 | **120.0** | 266 → +12% plain, **+45% labelled** |
+
+A 3.8× blowup. It changes no result — both arms were always measured as configured — but it does
+mean the flat twin's prompt on `ring_membership`/`ring_size`/`fg_atom_membership`/`stereo_assigned`
+is ~4× the length §3.1.1 implies, and any future cost argument that quotes "SMILES is 42 tokens"
+is quoting the wrong number for half the suite. The molecule-level families
+(`fg_count`, `fg_presence`, `ring_count`, `longest_chain`, `stereo_potential`) name no atom and do
+use the plain string.
+
 ### 3.1.2 Cost — measured at M2 (`000_smoke`, job 134071)
 
 Six runs, 30 steps, `ring_membership` on BACE, batch 4 × accum 8. **No accuracy from this sweep is
@@ -369,7 +410,7 @@ is a node at all*.
 §3.1's argument: if it matches `rich × levi`, the featurizer is unnecessary — a cheap result either
 way, and worth knowing before M4 spends anything.
 
-**Pre-registered prediction (DV, 2026-08-29, before M4 runs): `rich × levi` wins, and its margin
+**Pre-registered prediction (2026-08-29, before M4 runs): `rich × levi` wins, and its margin
 grows with task difficulty.** Two things falsify it: `terse × levi` matching `rich × levi` on the
 hard families (⇒ the featurizer is dead weight), or the `rich` margin *shrinking* as families get
 harder (⇒ rich text helps the easy lookups where the answer is nearly copied out of a node's own
@@ -436,7 +477,7 @@ The M2 canary ran two candidate fixes against the unfixed baseline at 1250 steps
 `ring_membership`: graph/`reset` **1.000**, graph/`spd_depth` 0.998, flat 0.877. **The unfixed
 baseline solves the task perfectly; neither fix was needed.**
 
-**DECISION 2026-08-29 (DV): `node_position_mode` is unwired from this experiment entirely.** No
+**DECISION 2026-08-29: `node_position_mode` is unwired from this experiment entirely.** No
 `RunConfig` field, no flag, no run-record entry; `train.py` is back on the shared
 `expressiveness/training/dispatch.build_collator`. A test asserts the field cannot be set. The
 reasoning is about evidence: `spd_depth` has **two measurements and no positive result** — kgqa E3
@@ -458,7 +499,7 @@ node, so every atom and bond node attends to it and node representations are que
 Edge-free is the point — the question is visible through attention but contributes nothing to the
 SPD / magnetic features, so the structural bias still describes the molecule alone.
 
-**Renamed 2026-08-29 (DV): the values are `"on"` / `"off"`, not `"isolated"` / `"off"`.** graphqa
+**Renamed 2026-08-29: the values are `"on"` / `"off"`, not `"isolated"` / `"off"`.** graphqa
 and kgqa keep `"isolated"` because there the placement is one of several conceivable ones; here
 only one is worth having. `"isolated"` is **rejected**, not aliased — a silently-accepted synonym
 would put two spellings of one arm into the run records. `002_difficulty`'s `runs.jsonl` straddles
@@ -528,6 +569,14 @@ five flat twins at the same recipe, plus `fg_count` and `longest_chain` flat reu
 | `fg_atom_membership` | 0.503 | 0.986 | 0.974 | +0.012 | +1.9 | tie |
 | `fg_presence` | 0.760 | 0.918 | 0.962 | −0.044 | −4.2 | flat |
 | `fg_count` | 0.760 | 0.888 | 0.936 | −0.048 | −3.8 | flat |
+
+> **Read §3.2.10 with this table.** Tier A draws molecules *with replacement* and slices the
+> result positionally, so up to **73.6% of a test split is memorisable** — and measured accuracy
+> on that subset is 1.0000. Every verdict below survives re-scoring on unseen molecules, but the
+> absolute numbers here are inflated, the margins move in **both** directions (the two
+> high-duplicate families grow sharply, `ring_size` and `ring_membership` shrink), and the
+> re-scoring costs most of the statistical power. §3.2.10 is a damage assessment, not a clean
+> re-measurement.
 
 **4 graph wins, 1 tie, 2 flat wins.** Mean Δ +0.018, median +0.020. Three further families are
 reported from `004_extended` and were not re-run because both arms sit at the ceiling and no recipe
@@ -672,9 +721,151 @@ identical to 006's tuned graph cells except the bias channel:
    survives is the ablation itself: on `longest_chain` the structural channel, not the adapter,
    carries the win.
 
-**Open, and cheap.** Every cell here is one seed. 5.2σ bounds *sampling* error only. A second seed
-on the four `longest_chain` cells is the last thing standing between this and a claim fit for
-`src/generalist/PLAN.md`.
+**CLOSED 2026-08-31 (`011`).** This section long read "every cell here is one seed; a second seed on
+the four `longest_chain` cells is the last thing standing between this and a claim fit for
+`src/generalist/PLAN.md`." That seed is now run. Every cell moves by ≤0.023 between seeds and the
+ordering is identical, so the ablation is **not** a one-seed artifact. See §3.2.10 for the two-seed
+table — and read it there rather than here, because these cells are memorisation-inflated and the
+honest version of this result is the novel-molecule one.
+
+### 3.2.10 Tier A's test split is not molecule-disjoint (found 2026-08-31)
+
+**How it was found.** Gate A2's negative control ran for the first time (`011`) and *fired*:
+`stereo_assigned` with `stereo_tags: off` scored **0.936** against a 0.715 base rate, where §1
+predicts chance, because chirality reaches the graph only through the parity tag. §2.5 gate A2
+says to find the leak before reading any other row. There is no leak in the encoder —
+`stereo_tags` gates the atom parity word (`data.py:153`) *and* bond E/Z (`data.py:207`), so with
+it off the graph carries no stereochemical text. The cause is the data.
+
+**The mechanism.** `generate_examples` draws `pool[rng.randrange(len(pool))]` — **with
+replacement** — from 3552 molecules until it has 5500 examples, and `prepare_dataset` then slices
+that list positionally into 4000/500/1000. Nothing makes one slice's molecules disjoint from
+another's. For a **molecule-level** family the example is a deterministic function of the molecule,
+so a molecule recurring across the boundary is an *exact* duplicate — same graph, same question,
+same answer — and memorising it answers the test item.
+
+Measured by replaying the generation at `data_seed 0` (the replay reproduces each cached dataset's
+recorded answer distribution exactly, so it describes the real training data):
+
+| family | level | test molecules seen in train | **exact duplicates** |
+|---|---|---:|---:|
+| `longest_chain` | molecule | 73.6% | **73.6%** |
+| `ring_count` | molecule | 72.6% | **72.6%** |
+| `stereo_potential` | molecule | 72.5% | **72.5%** |
+| `stereo_assigned` | molecule | 72.4% | **72.4%** |
+| `fg_presence` / `fg_count` | molecule | ~69% | ~11% *(the asked group varies)* |
+| `ring_size`, `ring_membership`, `aromatic_ring`, `fg_atom_membership` | atom | ~70% | ~6% *(the named atom varies)* |
+
+**Re-scored on unseen molecules — no GPU required.** `per_example/*.jsonl` already records `i` and
+`correct` for every test item, and the generation is deterministic, so each row maps back to its
+molecule. Every run's recomputed overall accuracy reproduces its recorded `test_accuracy` (asserted,
+not assumed — a mismatch would mean the mapping is wrong and the numbers meaningless).
+
+**Accuracy on the duplicate subset is 1.0000 in almost every run**, which is the mechanism
+confirmed rather than inferred. The M2 closing table on **novel molecules only**:
+
+| family | dup % | graph novel | flat novel | Δ table | **Δ novel** | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| `longest_chain` | 73.6 | 0.9659 | 0.8030 | +0.044 | **+0.163** | graph |
+| `ring_size` | 5.7 | 0.9915 | 0.8696 | +0.115 | **+0.122** | graph |
+| `stereo_potential` | 72.5 | 0.8618 | 0.7782 | +0.025 | **+0.084** | graph |
+| `ring_membership` | 5.5 | 1.0000 | 0.9788 | +0.020 | +0.021 | graph |
+| `fg_atom_membership` | 6.9 | 0.9850 | 0.9721 | +0.012 | +0.013 | tie |
+| `fg_presence` | 11.3 | 0.9087 | 0.9572 | −0.044 | −0.049 | flat |
+| `fg_count` | 11.2 | 0.8739 | 0.9279 | −0.048 | −0.054 | flat |
+
+**⚠ The table above uses the WEAK definition of novelty and is superseded by the one below.**
+Excluding only exact `(molecule, question)` duplicates is not enough: on an atom-level family the
+named atom varies, so it still leaves molecules the model trained on under a *different* question.
+The strict measure excludes every molecule seen in train under **any** question.
+`duplicate_analysis` reports both (`novel` and `UNSEEN`); **quote `UNSEEN`.**
+
+The M2 closing table on **molecules never seen in training**, with two-proportion σ:
+
+| family | dup % | graph unseen | flat unseen | Δ table (σ) | **Δ unseen (σ)** | n | verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `longest_chain` | 73.6 | 0.9659 | 0.8030 | +0.044 (5.7) | **+0.163 (5.9)** | 264 | graph |
+| `ring_size` | 5.7 | 0.9839 | 0.8810 | +0.115 (10.4) | **+0.103 (5.1)** | 311 | graph |
+| `stereo_potential` | 72.5 | 0.8618 | 0.7782 | +0.025 (2.6) | **+0.084 (2.6)** | 275 | graph |
+| `fg_atom_membership` | 6.9 | 0.9963 | 0.9593 | +0.012 (1.9) | **+0.037 (2.9)** | 270 | graph? |
+| `ring_membership` | 5.5 | 1.0000 | 0.9873 | +0.020 (4.5) | **+0.013 (2.0)** | 316 | graph |
+| `fg_presence` | 11.3 | 0.9132 | 0.9550 | −0.044 (−4.1) | **−0.042 (−2.1)** | 311 | flat |
+| `fg_count` | 11.2 | 0.8850 | 0.9265 | −0.048 (−3.8) | **−0.041 (−1.8)** | 313 | flat |
+
+Pairing note: `longest_chain` and `fg_count` take their flat cell from `006_recipe`'s tuned run, as
+§3.2.5 does. (Using `011`'s seed-1 flat gives `longest_chain` +0.144 rather than +0.163.)
+
+**Every direction survives; the magnitudes move both ways.** They grow sharply only where
+duplication was massive — `longest_chain` +0.044 → +0.163, `stereo_potential` +0.025 → +0.084 —
+because memorisation pushed *both* arms toward the ceiling and compressed the gap between them.
+`ring_size` and `ring_membership` **shrink**, and the `fg_*` families barely move, which is what a
+5–11% duplicate rate predicts. *An earlier draft of this section claimed every margin widens; that
+was computed on the weak definition and is withdrawn.* The topology-versus-motif split of §3.2.5 is
+unchanged.
+
+**Significance falls across the board** as n drops from 1000 to ~270–316: `fg_count` (−1.8σ) and
+`ring_membership` (+2.0σ) are no longer strong results, and `fg_atom_membership` moves from tie to a
+marginal graph win. The subset is at least representative — total-variation distance between the
+unseen and full answer distributions is 0.017–0.051, so filtering does not skew the task.
+
+**This is a damage assessment, not a clean measurement, and two things it cannot fix.** (1) Power:
+~300 examples where the design intended 1000. (2) **Selection is still contaminated** —
+`load_best_model_at_end` chose the checkpoint by val AUROC, and the *val* split overlaps train
+exactly as the test split did, so checkpoint choice may have favoured whichever checkpoint memorised
+best. No post-hoc subsetting can undo that; it is baked into which weights were kept. Only a
+re-measurement on molecule-disjoint splits gives full n and uncontaminated selection (~20 GPU-h for
+7 families × 2 arms at 5000 steps).
+
+**§3.2.8's ablation, re-scored and now at two seeds** (`011` supplied seed 1). Note this table is
+the *ablation*, not the headline: `none` is the graph arm with its structural channel deliberately
+removed, and it is a control, not the arm the campaign reports.
+
+| `longest_chain`, novel molecules | seed 0 | seed 1 |
+|---|---:|---:|
+| graph, `none` — **bias switched off, the control** | 0.7689 | 0.7576 |
+| **flat twin** | 0.8030 | 0.8220 |
+| graph, `spd` | 0.9356 | 0.9583 |
+| **graph, `spd+magnetic` — the reported arm** | **0.9659** | **0.9697** |
+
+The ordering `none < flat < spd < spd+magnetic` replicates at both seeds, and every cell moves by
+≤0.023 between them — which also closes §3.2.8's stated hole ("every cell here is one seed"). The
+`spd` − `none` gap is **+0.167 / +0.201** on novel molecules against the +0.045 originally reported.
+
+This **strengthens** §3.2.8's finding 1 rather than qualifying it. On the memorisation-inflated
+numbers, stripping the bias left the graph arm at *parity* with SMILES (0.938 vs 0.947, 0.9σ) —
+"adapter capacity buys parity, the bias buys the win". On novel molecules it does not reach parity:
+without the structural channel the graph arm is **behind** the flat twin by 3-6 points, and the
+entire advantage over SMILES is attributable to the bias.
+
+**What is compromised is the absolute number, not the comparison.** "0.991 on `longest_chain`" is
+not a claim that the model computes longest chains; 73.6% of that split was memorisable. The
+defensible figure is 0.966 on molecules it had never seen. **Quote novel-molecule accuracy for any
+molecule-level family**, and say which is being quoted.
+
+**Gate A2 is now decidable, and it passes.** On novel molecules `stereo_assigned` goes 0.9928 with
+the parity tag to **0.8152** without it — the off/on gap §1 asked for, and it is large. The control
+does its job: the R/S information is genuinely not in a plain atom-bond graph. One caveat to carry:
+0.8152 still sits ~10 points above the 0.715 base rate, and the parity channel cannot explain that.
+A connectivity-only predictor is *not* the explanation — answering `n_potential` scores 0.500, and
+assigned ≠ potential for 50% of the corpus. The most plausible remaining account is a **provenance
+correlation**: whether a chemist specified stereochemistry at all correlates with molecular class,
+which *is* in the graph. That is learnable from topology and is not a code defect, but it is
+unverified and should be treated as an open question, not a settled one.
+
+**Consequences.**
+
+* **M4 must not run on the current generator.** An encoding sweep scored on a 74%-memorisable test
+  split measures memorisation capacity as much as encoding quality, and the three cells differ in
+  exactly how much text there is to memorise.
+* **The fix is the one Tier B already uses**: split by *molecule* first, then generate examples
+  within each split — `tier_b.py` does this deliberately ("split membership follows the molecule,
+  not the example") and `test_no_scaffold_spans_two_splits` pins it. Tier A predates that
+  discipline and never inherited it.
+* **Tier B is unaffected.** Its scaffold split is molecule-disjoint by construction and now by test,
+  so **M3a/M3b need no changes** and the campaign's Tier-B numbers are clean.
+* Changing the Tier-A generator invalidates every cached `.gtds` and makes new numbers
+  non-comparable with §3.2.4–§3.2.9. That is a campaign-level call and is **left for later**, not taken
+  autonomously.
 
 ### 3.3 The bias channel behaves differently here
 
@@ -823,18 +1014,43 @@ parse time. Both are free today and expensive to retrofit. Per `feedback-keep-co
 | **M0** | ✅ **2026-08-28.** `rdkit` installed `--no-deps`; nine MoleculeNet CSVs from the DeepChem S3 bucket; scaffold split is ours (`scaffold_split`), avoiding a heavy `ogb` dependency that would have pulled on torch. Sizes, tokens, splits measured. | §3.1.1 | login node |
 | **M1** | ✅ **2026-08-28.** `data.py`: RDKit `Mol` → networkx `DiGraph`, three encoding cells, flat SMILES serializer, scaffold split, `roundtrip_check`. 119 unit tests. | round-trip clean at each encoding's declared level, full corpus — §3.2.1 | CPU |
 | **M2** | ✅ **2026-08-28 → 08-30.** Tier-A generator (`tasks.py`, 10 families), `dataset.py`, the experiment package, and ten sweeps (~90 runs). Speed/memory settled (§3.1.2); recipe fixed (§3.2.7); bias ablated (§3.2.8); closing table delivered (§3.2.5). | **4 graph wins / 1 tie / 2 flat losses on Tier A**, split along topology vs chemical motif; the bias is load-bearing and it is SPD | ~50 GPU-h |
-| **M3a** | ⬜ **NEXT. BACE + BBBP**, both arms, 3 seeds, tuned recipe, `graph_only`. `tier_b.py` + `evaluate.py` are built (scaffold split, one example per `(molecule, endpoint)`, endpoint in the QUESTION node; the relbench margin readout ported — `logit(" Yes") − logit(" No")` in fp32, sigmoid before threshold metrics, `n_distinct` / `tied_pair_fraction` in every record). `001_bace.jsonc` needs its recipe updated to §3.2.7's before it runs. | gate **B1** decided on two sets; B2/B3 read against §2.2 | ~10 GPU-h |
-| **M3b** | ⬜ **HIV**, both arms, 3 seeds. Separated because it is 27× BACE and the tie-collapse stress case (~145 test positives). Read `n_distinct` and `tied_pair_fraction` **before** reading the AUROC. | the third anchor ladder filled in | ~25 GPU-h |
-| — | **DECISION GATE (DV).** Proceed only if the primary three are satisfying: B1 met on ≥2 of 3, and no unexplained collapse against §2.2's LLM rows. If they are not, the work is diagnosis, not more datasets. | pass/fail recorded here | — |
+| **M3-prep** | ✅ **2026-08-31.** The Tier-B scoring readout and example builder had **no tests** — `evaluate.py` is a port of relbench's and the tests were left behind in the port. Added `test_score_readout.py` (20) and `test_tier_b_examples.py` (25): known-AUROC synthetic logits, the sigmoid trap, tie-collapse instruments, label alignment against the BACE CSV, scaffold disjointness, and the ordering contract `load_data` slices on. Suite 216 → 221. | a silent scoring bug can no longer reach a headline | CPU |
+| **M3-smoke** | ✅ **`010_tier_b_smoke`, 2026-08-31.** First GPU contact for the Tier-B path — **and it failed, exactly as intended** (§8.1). | the Tier-B path runs end to end | ~0.2 GPU-h |
+| **M3a** | 🔄 **BACE + BBBP**, both arms + `bias=none`, 3 seeds = 18 runs (`001_m3a_bace_bbbp.jsonc`). Recipe corrected to §3.2.7's tuned values and the budget raised from ~756 steps (20 epochs) to 40 epochs — 756 would have been the **third** occurrence of `feedback-dont-call-floors-early` in this campaign. | gate **B1** decided on two sets; B2/B3 read against §2.2 | ~10 GPU-h |
+| **M3b** | ⬜ **HIV**, both arms, 3 seeds (`012` prep + `013` train, both written and verified, **neither submitted**). Separated because it is 27× BACE and the tie-collapse stress case (~145 test positives). Read `n_distinct` and `tied_pair_fraction` **before** the AUROC. Budget is set in *steps* (5 epochs ≈ 5140, matching Tier A's settled 5000) because 40 epochs here would be 41k steps and BACE's 1512 steps would be 1.5 epochs — neither is "the same budget". If the graph arm is `still_improving` at 5 epochs, re-run **both** arms at 10, and treat 5 as a lower bound. | the third anchor ladder filled in | ~25 GPU-h |
+| — | **DECISION GATE.** Proceed only if the primary three are satisfying: B1 met on ≥2 of 3, and no unexplained collapse against §2.2's LLM rows. If they are not, the work is diagnosis, not more datasets. | pass/fail recorded here | — |
 | **M3c** | ⬜ Tox21 + SIDER (the deferred sets, §1), which also restores §4 arm 2's large multi-task set. Verify §2.3's anchors against the Uni-Mol PDF first. | multi-endpoint routing exercised | ~20 GPU-h |
-| **M4** | ⬜ Encoding sweep: §3.2's **3 cells** (`rich×levi`, `terse×levi`, `rich×atom_only`) × `±smiles` × bias arms × 3 seeds, on the non-saturated Tier-A families + BACE/BBBP. Never on a saturated family, never at the stale recipe. Run `terse×levi` first — cheapest, and it decides whether the featurizer is needed at all. | §3.2's arms decided and written into a frozen config | ~100 GPU-h *(estimate)* |
+| **M4** | ⛔ **BLOCKED on §3.2.10** — the Tier-A generator must split by molecule first, or the sweep scores encodings on a 74%-memorisable test split and the three cells differ precisely in how much text there is to memorise. Then: encoding sweep, §3.2's **3 cells** (`rich×levi`, `terse×levi`, `rich×atom_only`) × `±smiles` × bias arms × 3 seeds, on the non-saturated Tier-A families + BACE/BBBP. Never on a saturated family, never at the stale recipe. Run `terse×levi` first — cheapest, and it decides whether the featurizer is needed at all. | §3.2's arms decided and written into a frozen config | ~100 GPU-h *(estimate)* |
 | **M5** | ⬜ Multi-task arms 1 / 2 / 3 (§4). | arm 2 − arm 1 measured on Tier B | ~100 GPU-h *(estimate)* |
 | **M6** | ⬜ §5 and §6 experiments. | size-generalization curve + permutation spread | ~20 GPU-h |
 | **M7** | ⬜ Admission fork into the trunk, against §5's four criteria in the trunk plan. | pass/fail recorded in `lineage.json` | per trunk plan |
 
-**Cheap and outstanding, worth folding into M3a's submission:** a second seed on the four
-`longest_chain` cells (§3.2.8) and the `stereo_assigned` × `stereo_tags: off` run that gate A2
-needs and that has never been executed (§2.5). Both are one job each and both close a stated hole.
+**Both outstanding cheap items are now running** as `011_m2_loose_ends` (submitted 2026-08-31):
+a second seed on the four `longest_chain` cells (§3.2.8's one stated hole) and gate A2's
+`stereo_assigned` × `stereo_tags: off` control, which had never been executed (§2.5).
+
+### 8.1 What the Tier-B smoke caught (2026-08-31)
+
+Both smoke runs died in 55 s with `KeyError: 'answers'` at `dataset.py:245`. The Tier-A generator
+puts an `answers` counter in its stats dict; `build_tier_b_examples` never did, and the key was
+read **unguarded in a progress `print`** — so a log line failed the job, *after* the `.gtds` and its
+meta sidecar had already been written to disk. Had 001 gone first, this would have taken out all 18
+runs, and the half-written artifacts would have been silently reused by the re-run.
+
+**The quieter half is the one worth remembering.** `train.py::_answer_stats` reads the same key
+with `.get`, so had the print not crashed, every Tier-B run would have recorded **`base_rate:
+null`** — the field §3.2.4.1 made mandatory precisely because a score without its floor is
+uninterpretable. A loud crash was hiding a silent integrity gap, and only the loud one would have
+been noticed.
+
+Fixed three ways, all pinned by regression tests: Tier-B stats now carry `answers` **and**
+`answers_by_split`; `_answer_stats` takes the floor from the **test** split when the breakdown
+exists, recording `base_rate_source` so a reader is not left guessing (Tier A is unchanged — its
+splits are drawn from one generator, so the two coincide); and the print is `.get`, because a log
+line must never be what fails a job.
+
+This is the second time in this campaign that a cheap first-contact run paid for itself
+(`000_smoke` settled flex-vs-eager). **Keep smoking a new path before committing a sweep to it.**
 
 **M1's round-trip test is the highest-value test in the plan.** An encoding bug — a dropped aromatic
 flag, a bond mapped to the wrong Levi node — is otherwise completely silent: the model trains, the
@@ -850,6 +1066,14 @@ nothing runs on the login node except M0's download and stats.
 
 * **Framing.** Reported as "GTLM on MoleculeNet", the honest outcome (lose to Uni-Mol, beat our flat
   twin) reads as failure. §0 and §2.5 exist to fix the frame in advance.
+* **Tier A's test split is not molecule-disjoint** (§3.2.10). Up to 73.6% of a molecule-level test
+  split is an exact duplicate of a training example, and measured accuracy on that subset is
+  1.0000. The graph-vs-flat verdicts all survive re-scoring, but **absolute Tier-A numbers are
+  inflated, several results lose significance once n drops to ~300, checkpoint selection remains
+  contaminated because the val split overlaps train too, and M4 must not run on the current
+  generator.** The fix is the molecule-first split `tier_b.py` already implements. It went unnoticed for the whole campaign
+  because every arm was affected equally, so nothing looked anomalous until a control that
+  *predicted* chance came back at 0.936.
 * **Tier A does not predict Tier B, and the one signal we have is negative.** §3.2.5's split puts
   binding/permeability/toxicity on the motif side, where the graph arm loses. Tier A labels are
   deterministic functions of the graph we hand the model; Tier B labels are noisy experimental
