@@ -1,0 +1,196 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 014 — M2 RE-RUN on molecule-disjoint splits. Replaces §3.2.5's closing
+  // table, which was measured on contaminated data (§3.2.10).
+  //
+  // This is not a new experiment. It is `008` + `009` re-measured after the
+  // split fix (§3.2.10.1), plus the three ceiling families `004_extended`
+  // reported at a DIFFERENT recipe. Design principle: change the DATA and
+  // nothing else, so "do the conclusions still hold" has a clean answer.
+  //
+  // WHAT IS IDENTICAL TO 008/009: `lr 3e-5`, `lora_r 16`, 40 epochs (~5000
+  // steps at 4000 train examples / batch 32), `eval_steps 200`, `seed 0`,
+  // `rich_levi`, `question_node on`, `max_spd 32`, and the split-brained
+  // `bias_lr` — 1e-2 on the graph arm as 008 ran it, 5e-3 on the flat arm where
+  // it is inert (the flat arm instantiates no bias parameters at all). Keeping
+  // 008's 1e-2 rather than "tidying" it to 5e-3 is deliberate: §3.2.5 verified
+  // the two as equivalent (0.5σ / 0.7σ with `bias_norm` moving 2.4×), so
+  // switching would buy nothing and would add a second changed variable to a
+  // re-measurement whose entire purpose is to isolate one.
+  //
+  // WHAT CHANGED, AND WHY IT HAD TO. Two things, both forced by the fix.
+  //
+  // 1. `pool`: `bace,bbbp` → all five corpora. NOT a preference — `bace,bbbp`
+  //    is now INFEASIBLE and the fix makes it fail loudly instead of silently
+  //    duplicating. Measured 2026-09-01:
+  //
+  //      pool                      train / val / test molecules available
+  //      bace,bbbp                  2584 /  322 /   646     <-- test pool 646
+  //      bace,bbbp,tox21,lipo      ~11.3k / ~1.4k / ~2.8k
+  //      all five (this config)    41232 / 5154 / 10308
+  //
+  //    The four `SINGLE_EXAMPLE_TASKS` families (`longest_chain`, `ring_count`,
+  //    `stereo_potential`, `stereo_assigned`) answer a question about the
+  //    molecule alone, so one molecule yields exactly one example and a 1000-
+  //    example test split needs 1000 test molecules. `bace,bbbp` has 646. That
+  //    is precisely the shortfall the old sampler covered up by drawing with
+  //    replacement.
+  //
+  //    Of the two feasible pools, four corpora leaves `fg_atom_membership` — the
+  //    lowest-yield family, 1648 usable test molecules — repeating 8 of its 1000
+  //    test examples and covering only 871 distinct molecules. Five corpora
+  //    gives every one of the ten families 1000 examples over 1000 distinct
+  //    molecules with zero repeats. It is also `DEFAULT_POOL`, i.e. what
+  //    `dataset.py` documents as the intended pool; `bace,bbbp` was the
+  //    narrowing.
+  //
+  //    THE COST, STATED PLAINLY: HIV is 41k of the 56k molecules, so Tier A's
+  //    chemistry is now HIV-screening-dominated rather than bace/bbbp-like.
+  //    Absolute accuracies here are therefore NOT comparable to §3.2.5's. The
+  //    graph−flat margin within this sweep is, because both arms draw the same
+  //    molecules, questions and answers in the same order — pinned by
+  //    `test_both_arms_see_the_same_molecules_questions_and_answers`.
+  //
+  //    The alternative was to keep `bace,bbbp` and shrink the splits, which
+  //    changes train size AND cuts test n from 1000 to ~500. §3.2.10 already
+  //    cost most of the statistical power once; spending the rest to preserve a
+  //    pool label is the worse trade.
+  //
+  // 2. `mem`: 32G → 64G. `_molecule_pool` now materialises all five corpora
+  //    (56k RDKit Mol objects) and scaffold-splits them before generating.
+  //    008 ran 32G against 3552 molecules. The M3a OOMs (§ config 001) were the
+  //    reminder that a limit which only sometimes holds loses a random cell.
+  //
+  // THE THREE ADDED FAMILIES. `aromatic_ring`, `ring_count` and
+  // `stereo_assigned` sat in §3.2.5 as prose ("reported from `004_extended`,
+  // not re-run because both arms are at the ceiling"), measured at the OLD
+  // untuned recipe. They are in the grid here, so the replacement table is ten
+  // families at ONE recipe on ONE dataset build instead of seven plus a
+  // footnote. If they are still at the ceiling that costs six runs and the
+  // table gets more honest; if the fix moved them off it, the footnote was
+  // load-bearing and we would never have known.
+  //
+  //   `bond_path` is absent and must stay absent: HELD_OUT_TIER_A_TASKS,
+  //   declared 2026-08-28 before any run (§4.1).
+  //
+  // SEEDS. One, as 008/009 had. §3.2.5 disclosure 1 (every σ is a sampling
+  // bound at n=1000, not a training-variance estimate) therefore carries over
+  // verbatim and must be re-stated with the new table. A second seed for the
+  // marginal cells is the obvious follow-up and is deliberately not bundled in
+  // here — 20 runs answers "do the conclusions hold", 40 answers a different
+  // question and takes twice the queue.
+  //
+  // HARDWARE — and a correction applied after submission, recorded here so a
+  // re-run does not repeat it.
+  //
+  // AS SUBMITTED this file asked for the fast tier plus A100 at 06:00:00 for
+  // every run, on the strength of "008 measured 1.8h for a 5000-step graph run
+  // on B200". That figure was wrong, and the real ones were sitting in 008's own
+  // run records the whole time:
+  //
+  //     arm     5000-step runtime            peak GPU memory
+  //     graph   2.06 - 3.40h (on B300/B200)  21.0 - 39.8 GB
+  //     flat    2.07 - 2.22h (on A100)       11.7 GB
+  //
+  // Two consequences, both acted on with `scontrol` while the array was queued:
+  //
+  //   * THE GRAPH ARM MUST NOT RUN ON A 40 GB A100. It peaks at 39.8 GB on
+  //     `ring_size`, `ring_membership` and `fg_atom_membership` — `GPU_BRD:A100`
+  //     matches aga/axa (40 GB) as well as ana (80 GB), so this was an OOM
+  //     waiting for the right family. Graph runs are pinned to the fast tier.
+  //
+  //     BUT NOT TO THE FAST TIER ALONE — that over-corrects, and it cost real
+  //     wall time here. `GPU_BRD` is too coarse a knob for this: dropping A100 to
+  //     dodge the 40 GB cards also locks the arm out of ana's eight **80 GB**
+  //     cards, which have 40 GB of headroom over the peak. The last two graph
+  //     runs sat PENDING behind priority while seven of those cards were idle.
+  //     The right constraint is the SKU form, which separates them:
+  //
+  //         GPU_BRD:B300|GPU_BRD:B200|GPU_BRD:H100|GPU_SKU:A100_80GB_PCIE
+  //
+  //     Both jobs started within seconds of it being applied. Encode that
+  //     directly next time; `gpus: [...]` renders GPU_BRD and cannot express it,
+  //     so this one needs the constraint written by hand.
+  //   * 3.40h + autotune + the dataset build does not fit a 4h limit with any
+  //     margin. Graph runs keep 06:00:00.
+  //
+  // The flat arm has neither problem — 2.1h and 11.7 GB, measured on an A100 —
+  // so it keeps A100 eligibility at 04:00:00, where the shorter limit makes it
+  // materially more backfillable. That split is the settings below plus the two
+  // `scontrol` calls; the numbers here are what a re-run should encode directly.
+  //
+  // Slurm orders by Weight ASCENDING and the weights are INVERTED vs speed, so
+  // any GPU list is a deliberate trade rather than a wildcard — L4 stays out of
+  // both arms. Backfill is the binding constraint at our fair-share (0.0085,
+  // job priority ~890 against 15k-100k for everything else in the queue), which
+  // is why the flat arm's limit is kept tight rather than padded.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/014_m2_rerun_molsplit.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "014_m2_rerun_molsplit",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 20,         // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "64G",                 // see change 2 above — the pool is 56k mols now
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // Ten families = every Tier-A generator except the held-out `bond_path`.
+  "task": [
+    "ring_membership",
+    "ring_size",
+    "stereo_potential",
+    "fg_atom_membership",
+    "fg_presence",
+    "fg_count",
+    "longest_chain",
+    "aromatic_ring",
+    "ring_count",
+    "stereo_assigned"
+  ],
+
+  // `bias_lr` travels with the arm — 008's value on the graph arm, and a value
+  // that cannot reach anything on the flat arm. See the note above.
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic", "bias_lr": 1e-2 },
+    { "arm": "flat",  "bias": "none",         "bias_lr": 5e-3 }
+  ],
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "stereo_tags": true,
+  "seed": 0,
+
+  // All five corpora — forced, not preferred. See change 1 above.
+  "pool": "hiv,bace,bbbp,tox21,lipo",
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  "lr": 3e-5,
+  "lora": true,
+  "lora_r": 16,
+
+  "num_epochs": 40,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

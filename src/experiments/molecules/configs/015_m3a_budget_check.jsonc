@@ -1,0 +1,128 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 015 — Does Tier B want a bigger budget? Direct test at 3x, 8 runs.
+  //
+  // WHY THIS EXISTS, AND WHY IT IS NOT THE SWEEP IT WAS GOING TO BE. The plan
+  // was to re-run all of M3a at a longer budget, because 14 of its 16 runs
+  // reported `still_improving: True`. That flag was WRONG — inverted, in fact
+  // (§8.2): the eval curve was read after `load_best_model_at_end` had restored
+  // the best checkpoint and the following `trainer.evaluate` had logged its val
+  // score, so every curve ended on its own maximum and `tail_gain` could not be
+  // negative. Recomputed from the stored curves with that point dropped, 2 of 16
+  // runs were still improving, and both sets peak WELL inside 40 epochs:
+  //
+  //     BACE   val peaks at 0.39 - 0.75 of the budget (29 evals)
+  //     BBBP   val peaks at 0.03 - 0.54, six of seven at <= 0.31 (40 evals)
+  //
+  // On that reading a longer budget cannot help, and re-running 18 cells at 3x
+  // to confirm a negative would cost ~30 GPU-h to learn nothing. But the reading
+  // is mine, off a curve, after an instrument in this exact area was just found
+  // broken — `feedback-verify-nulls-are-real` says measure it rather than argue
+  // it. So: the smallest sweep that can actually falsify "40 epochs is enough".
+  //
+  // THE DESIGN. 3x budget (40 -> 120 epochs), both sets, both headline arms,
+  // 2 seeds = 8 runs. Read against 001's matching cells:
+  //
+  //   - test ROC-AUC within seed noise (001's per-cell sd is 0.013 - 0.021, so
+  //     2 seeds here resolve a real shift of ~0.03+)  -> 40 epochs was enough,
+  //     the curve reading is confirmed, and M3a's numbers stand as measured.
+  //   - test ROC-AUC materially UP                    -> the curve reading is
+  //     wrong, and every M3a cell needs re-running at the longer budget.
+  //   - `peak_fraction` (new in §8.2) near 1.0        -> genuinely interrupted;
+  //     go further before believing anything.
+  //
+  // `bias: none` is deliberately NOT here. It is the arm that decomposes a win
+  // (§3.2.8); it has nothing to say about whether a budget was long enough, and
+  // adding it would cost 4 runs to widen a question that is not being asked.
+  //
+  // WHAT 3x IS NOT. This is not "the same run, continued". `lr_scheduler_type`
+  // is `cosine_with_min_lr`, so the schedule stretches with the budget: at 120
+  // epochs the LR is still near peak at step 1500, where the 40-epoch run had
+  // already annealed to `lr/10`. A difference here is therefore "budget AND
+  // schedule", not budget alone. That is the right comparison anyway — it is
+  // what anyone re-running these at a bigger budget would actually get — but it
+  // means a positive result localises to the pair, not to step count.
+  //
+  // SELECTION STILL PROTECTS THE HEADLINE. `metric_for_best_model=eval_roc_auc`
+  // on val with `load_best_model_at_end`, test scored once at the end, so extra
+  // budget cannot corrupt the reported number even where it overfits hard — and
+  // on BBBP it will: val peaks around epoch 2 and `eval_loss` triples afterwards.
+  //
+  // ONE THING TO READ HERE THAT IS NOT THE BUDGET. BBBP's val ROC-AUC is ~0.965
+  // while its test is ~0.70, at 55% / 52% positive respectively — so the gap is
+  // not a base-rate artifact, it is that `scaffold_split` is deterministic and
+  // hands train the largest scaffold groups, val the next, test the rarest. Val
+  // is systematically easier than test, and it saturates within two epochs, so
+  // checkpoint selection on BBBP is choosing among near-identical val scores
+  // (sd 0.002 - 0.009 over the second half). That is a SELECTION problem, not a
+  // budget problem, and this config does not address it. Flagged in §8.3 for a
+  // decision; do not let a null here be read as "BBBP is fine".
+  //
+  // HARDWARE. Fast tier PLUS A100, at 05:00:00 — sized from 001's own records
+  // rather than from an estimate, because an estimate is what mis-sized 014.
+  //
+  //   Tier B peak GPU memory: flat 11.7 GB, graph 20.7 - 21.0 GB. That is the
+  //   number that decides A100 eligibility, and unlike TIER A (where the graph
+  //   arm peaks at 39.8 GB and a 40 GB A100 is an OOM waiting to happen) 21 GB
+  //   leaves 19 GB of headroom on the smallest A100. A100 is in.
+  //
+  //   Speed: the slowest graph step observed is 2.21 s (bace, seed 0) on the
+  //   fast tier and 2.06 s on an A100. The longest cell here is BBBP graph at
+  //   6120 steps -> ~3.5h worst case, plus ~320s autotune against a warm dataset
+  //   cache. 05:00:00 covers it on the slowest allowed card.
+  //
+  // L4 stays out: Slurm orders nodes by Weight ASCENDING and the weights are
+  // INVERTED relative to speed, so listing every GPU sends jobs to the slowest
+  // card first.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/015_m3a_budget_check.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "015_m3a_budget_check",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 8,          // = the run count: array path, no throttle
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "64G",                 // 001 lost two cells to a host OOM at 32G
+      "time": "05:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  "arm_bias": [
+    { "arm": "graph", "bias": "spd+magnetic" },
+    { "arm": "flat",  "bias": "none" }
+  ],
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "seed": [0, 1],
+
+  "data_seed": 0,
+
+  // THE ONE CHANGED KNOB: 40 -> 120. BACE ~4440 steps, BBBP ~6120.
+  "num_epochs": 120,
+
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

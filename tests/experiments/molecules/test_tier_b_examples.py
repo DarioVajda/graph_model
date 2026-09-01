@@ -227,8 +227,9 @@ def test_base_rate_is_recorded_for_tier_b_and_taken_from_the_test_split():
     assert out["n_classes"] == 2
 
 
-def test_tier_a_base_rate_is_unchanged_by_the_tier_b_fix():
-    """Tier A has no per-split breakdown; its records must read exactly as before."""
+def test_records_without_a_per_split_breakdown_fall_back_to_the_corpus_rate():
+    """Covers artifacts built before either tier recorded `answers_by_split` -- they
+    must still yield a base_rate rather than a null, and must say which one it is."""
     from src.experiments.molecules.train import _answer_stats
 
     out = _answer_stats({"answers": {" 0": 760, " 1": 240}})

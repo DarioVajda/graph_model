@@ -35,6 +35,7 @@ from .data import (
     load_tier_b,
     mol_to_graph,
     relabel_for_dataset,
+    scaffold_split,
 )
 from .tasks import ANSWER_VOCAB, ATOM_LEVEL_TASKS, TASK_GENERATORS, TIER_A_TASKS
 from .tier_b import TIER_B_TASKS, build_tier_b_examples
@@ -99,6 +100,17 @@ def build_flat_example(mol, question, answer, cfg):
     return graph
 
 
+#: Tier-A families that yield exactly ONE example per molecule: the question is
+#: fixed for the family and the answer is a function of the molecule alone. A
+#: molecule can therefore contribute at most one example, so a split can never be
+#: larger than its share of the pool. Every other family varies something per draw
+#: (the named atom, or which functional group is asked about) and can emit several
+#: distinct examples from one molecule.
+SINGLE_EXAMPLE_TASKS = frozenset({
+    "longest_chain", "ring_count", "stereo_potential", "stereo_assigned",
+})
+
+
 def _molecule_pool(cfg):
     """The molecules Tier A draws from, deterministically ordered."""
     pool = []
@@ -110,32 +122,103 @@ def _molecule_pool(cfg):
     return pool
 
 
-def generate_examples(cfg, n, rng, pool):
-    """Draw ``n`` valid examples for ``cfg.task``. Generators may refuse a molecule."""
-    generator = TASK_GENERATORS[cfg.task]
-    graphs, stats = [], {"answers": {}, "attempts": 0, "molecules": 0}
+def split_molecule_pool(cfg):
+    """Partition the Tier-A pool into MOLECULE-DISJOINT train/val/test sets.
 
-    with tqdm(total=n, desc=f"Generating {cfg.task}/{cfg.arm}") as bar:
+    This is what keeps a test example from being a memorised training example. The
+    generator answers a question about a molecule, so a molecule appearing in two
+    splits puts the answer on both sides of the boundary — and for a
+    `SINGLE_EXAMPLE_TASKS` family that is an exact duplicate, same graph, same
+    question, same answer.
+
+    Bemis-Murcko scaffold, not a random partition, for the same reason Tier B uses
+    one: it makes the test set *structurally* novel rather than merely unseen, which
+    is the property a structural-reasoning claim actually needs. It also reuses the
+    split Tier B already has under test.
+
+    Pool fractions follow the requested example counts, so "a single-example family
+    needs a pool at least as large as the total number of examples requested" is the
+    whole sizing rule.
+    """
+    pool = _molecule_pool(cfg)
+    total = cfg.train_size + cfg.val_size + cfg.test_size
+    train_idx, val_idx, test_idx = scaffold_split(
+        [Chem.MolToSmiles(m, canonical=True) for m in pool],
+        frac_train=cfg.train_size / total,
+        frac_valid=cfg.val_size / total,
+        frac_test=cfg.test_size / total,
+    )
+    return {"train": [pool[i] for i in train_idx],
+            "val": [pool[i] for i in val_idx],
+            "test": [pool[i] for i in test_idx]}
+
+
+def generate_examples(cfg, n, rng, molecules, split=""):
+    """Draw ``n`` examples for ``cfg.task`` from ``molecules``. Generators may refuse.
+
+    Molecules are consumed **without replacement** within a pass: the list is
+    shuffled and walked, so no molecule is used twice until every usable one has
+    been used once. A family that can emit several distinct examples per molecule
+    (a different named atom, a different functional group) takes further passes; a
+    `SINGLE_EXAMPLE_TASKS` family cannot, and asking for more examples than the
+    split has molecules is an error rather than a silent duplicate.
+
+    A second pass can still land on a (molecule, question) pair the first pass
+    already emitted, because the generator picks the named atom at random. That is
+    a within-split repeat, not a train/test leak -- it costs effective sample size
+    and nothing else -- but it is exactly the class of thing that went unnoticed
+    last time, so it is COUNTED into ``stats["repeats"]`` and travels into the run
+    record rather than staying invisible.
+    """
+    generator = TASK_GENERATORS[cfg.task]
+    single = cfg.task in SINGLE_EXAMPLE_TASKS
+    graphs, stats = [], {"answers": {}, "attempts": 0, "molecules": 0, "repeats": 0}
+    used = set()
+    emitted = set()
+
+    with tqdm(total=n, desc=f"Generating {cfg.task}/{cfg.arm}{'/' + split if split else ''}") as bar:
         while len(graphs) < n:
-            stats["attempts"] += 1
-            if stats["attempts"] > 200 * n:
+            order = list(range(len(molecules)))
+            rng.shuffle(order)
+            produced_this_pass = 0
+
+            for i in order:
+                if len(graphs) >= n:
+                    break
+                stats["attempts"] += 1
+                made = generator(molecules[i], rng)
+                if made is None:
+                    continue
+                question, answer, named = made
+                if cfg.arm == "graph":
+                    graph = build_graph_example(molecules[i], question, answer, named, cfg)
+                else:
+                    graph = build_flat_example(molecules[i], question, answer, cfg)
+                graphs.append(graph)
+                used.add(i)
+                if (i, question, answer) in emitted:
+                    stats["repeats"] += 1
+                emitted.add((i, question, answer))
+                produced_this_pass += 1
+                stats["answers"][answer] = stats["answers"].get(answer, 0) + 1
+                bar.update(1)
+
+            if len(graphs) >= n:
+                break
+            if single:
+                raise ValueError(
+                    f"{cfg.task!r} yields one example per molecule, but the {split or 'this'} "
+                    f"split has only {produced_this_pass} usable molecules of "
+                    f"{len(molecules)} and {n} examples were requested. Repeating a "
+                    "molecule would put an identical example in the split twice. Either "
+                    "widen `pool` (RunConfig.pool defaults to five corpora; the §3.2 "
+                    f"sweeps set only bace,bbbp) or lower the split size.")
+            if produced_this_pass == 0:
                 raise RuntimeError(
-                    f"{cfg.task}: only {len(graphs)}/{n} examples after "
-                    f"{stats['attempts']} attempts — the generator is refusing "
-                    "nearly every molecule in this pool.")
-            mol = pool[rng.randrange(len(pool))]
-            made = generator(mol, rng)
-            if made is None:
-                continue
-            question, answer, named = made
-            if cfg.arm == "graph":
-                graph = build_graph_example(mol, question, answer, named, cfg)
-            else:
-                graph = build_flat_example(mol, question, answer, cfg)
-            graphs.append(graph)
-            stats["molecules"] += 1
-            stats["answers"][answer] = stats["answers"].get(answer, 0) + 1
-            bar.update(1)
+                    f"{cfg.task}: the generator refused every molecule in the "
+                    f"{split or 'this'} split ({len(molecules)} molecules).")
+
+    stats["molecules"] = len(used)
     return graphs, stats
 
 
@@ -192,7 +275,11 @@ def dataset_path(cfg):
             tags.append(f"cap{cfg.max_train_examples}-{cfg.max_eval_examples}")
     else:
         total = cfg.train_size + cfg.val_size + cfg.test_size
-        tags = [cfg.task, cfg.arm, f"{total}ex", "-".join(cfg.pool)]
+        # `molsplit` marks a dataset built from MOLECULE-DISJOINT scaffold splits.
+        # It is in the path so the artifacts built before that fix — where ~70% of a
+        # test split was also in train — can never be silently loaded by the fixed
+        # code. Their paths lack the tag, so they simply do not match.
+        tags = [cfg.task, cfg.arm, f"{total}ex", "molsplit", "-".join(cfg.pool)]
     if cfg.arm == "graph":
         tags.append(cfg.encoding)
         tags.append("st1" if cfg.stereo_tags else "st0")
@@ -212,11 +299,29 @@ def prepare_dataset(cfg):
     if tier_of(cfg.task) == "B":
         graphs, stats, sizes = prepare_tier_b_graphs(cfg)
     else:
+        # Generate PER SPLIT, from molecule-disjoint pools. Generating one stream and
+        # slicing it is what let a molecule land in train and test at once.
         rng = random.Random(cfg.data_seed)
-        pool = _molecule_pool(cfg)
-        total = cfg.train_size + cfg.val_size + cfg.test_size
-        graphs, stats = generate_examples(cfg, total, rng, pool)
-        sizes = {"train": cfg.train_size, "val": cfg.val_size, "test": cfg.test_size}
+        pools = split_molecule_pool(cfg)
+        wanted = {"train": cfg.train_size, "val": cfg.val_size, "test": cfg.test_size}
+
+        graphs, sizes, by_split = [], {}, {}
+        stats = {"answers": {}, "attempts": 0, "molecules": 0, "repeats_by_split": {},
+                 "pool_sizes": {k: len(v) for k, v in pools.items()}}
+        for name in ("train", "val", "test"):
+            part, part_stats = generate_examples(
+                cfg, wanted[name], rng, pools[name], split=name)
+            graphs.extend(part)
+            sizes[name] = len(part)
+            by_split[name] = part_stats["answers"]
+            stats["repeats_by_split"][name] = part_stats["repeats"]
+            stats["attempts"] += part_stats["attempts"]
+            stats["molecules"] += part_stats["molecules"]
+            for answer, count in part_stats["answers"].items():
+                stats["answers"][answer] = stats["answers"].get(answer, 0) + count
+        # Same shape Tier B records, so `_answer_stats` takes the floor from the
+        # TEST split for both tiers rather than from a mixed-distribution total.
+        stats["answers_by_split"] = by_split
     stats["split_sizes"] = sizes
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)

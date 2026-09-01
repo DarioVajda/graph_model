@@ -1,0 +1,96 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 018 — re-run of `015`'s SECOND lost cell, `bbbp` / graph / seed 0. Like
+  // `017`, not a new experiment: same recipe, same budget, same seed. Its result
+  // belongs in `015`'s table (§8.2).
+  //
+  // WHAT HAPPENED, AND WHY IT IS A DIFFERENT FAILURE FROM 017's. `015` task 0 did
+  // not die — it STALLED, which is the more dangerous shape because nothing in
+  // the job state says so. It ran normally for 1h53m and 3450 of 6120 steps,
+  // completing 102 periodic evaluations at ~5 s each. Evaluation 103 then took
+  // 53:54 to get through 15 of its 51 batches, degrading monotonically as it went:
+  //
+  //     batch 11   226 s/it
+  //     batch 12   255 s/it
+  //     batch 13   281 s/it
+  //     batch 14   305 s/it
+  //     batch 15   345 s/it
+  //
+  // ~4000x its own established rate, and getting worse. The job was still
+  // RUNNING and its log was still being written, so every cheap liveness check
+  // said it was fine.
+  //
+  // NOT the `017` cause. Host RSS was 67048604K — byte-identical to the two
+  // healthy graph runs alongside it — so the memory ceiling does not discriminate
+  // here and the page-cache story (§8) does not explain it. `ixh` was shared with
+  // three jobs from another user, one of them 5 days old, which makes node
+  // contention the leading explanation. Leading, not established: this was
+  // diagnosed from outside the node, and `nvidia-smi` on `ixh` was not consulted
+  // because the host key had changed and overriding that is not a thing to do to
+  // chase a stalled job. Recorded as unresolved rather than dressed up.
+  //
+  // WHY IT WAS CANCELLED RATHER THAN LEFT TO FINISH. It could not finish, and the
+  // arithmetic was not close. At cancellation: 1.98 h of wall clock left against
+  // a 5 h limit; finishing the CURRENT evaluation alone needed 2.26 h at the best
+  // rate seen during the stall and 3.45 h at the latest — and 2670 training steps
+  // (43%) would still have remained. Waiting would have bought a TIMEOUT two
+  // hours later and held an H100 while doing it.
+  //
+  // WHAT CHANGED HERE. `time` 05:00:00 -> 06:00:00 and `mem` 64G -> 128G. Neither
+  // is an experimental variable. The memory raise is `017`'s fix applied for
+  // consistency across the re-runs, NOT a claim that memory caused this stall —
+  // it did not, on the evidence above. The time raise is margin: a healthy run of
+  // this cell was on pace for ~3h15m, so 5 h was adequate and 6 h simply survives
+  // one bad patch. `num_workers` and every other knob stay at `015`'s values.
+  //
+  // SCIENTIFIC STATUS. Cancelled mid-training with no test number produced, so
+  // there was no result to be tempted by — same as `017`. Both re-runs exist
+  // because of infrastructure, and both are recorded here so that is checkable.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/018_budget_check_stall_rerun.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "018_budget_check_stall_rerun",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",               // matches 017; not a fix for this failure
+      "time": "06:00:00",          // margin over the ~3h15m a healthy run needs
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The lost cell. Everything below is `015` verbatim.
+  "task": "bbbp",
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "seed": 0,
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "stereo_tags": true,
+  "data_seed": 0,
+
+  "lr": 3e-5,
+  "lora": true,
+  "lora_r": 16,
+
+  "num_epochs": 120,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

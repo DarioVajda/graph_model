@@ -1,0 +1,118 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 019 — the graph cells `015` lost to infrastructure, re-run together.
+  // SUPERSEDES 017 and 018, both of which were cancelled before producing a
+  // number because they carried a recipe error (below). Results belong in
+  // `015`'s table (§8.2), not in a table of their own.
+  //
+  // WHY THIS FILE EXISTS AT ALL: `015` lost THREE of its four graph cells and
+  // none of its four flat cells. That asymmetry is the point — the graph arm
+  // carries the structural-bias tensors and simply needs more host memory, so a
+  // 64G cap that the flat arm clears comfortably is one the graph arm runs into.
+  //
+  //     cell                  what happened                        elapsed
+  //     bbbp/graph/seed 0     progressive eval stall -> cancelled  3:02:32
+  //     bbbp/graph/seed 1     host-RAM OOM                         2:13:23
+  //     bace/graph/seed 1     host-RAM OOM at 3871/4440 steps      2:47:45
+  //     bace/graph/seed 0     (still running at time of writing)
+  //
+  // All three died mid-training with no test number produced, so there was no
+  // result anyone could have been tempted by. See §8 for the memory accounting
+  // (the whole array sat at 99.91% of its cap) and for the stall write-up.
+  //
+  // ─── THE ERROR IN 017/018, RECORDED BECAUSE IT WOULD HAVE BIASED THE ANSWER ──
+  //
+  // 017 and 018 were written with `eval_steps: 200`, copied from `014` (Tier A)
+  // instead of from `015`, which uses **50** — as does `001`, the 40-epoch
+  // baseline every cell here is compared against.
+  //
+  // That is not a cosmetic difference. `load_best_model_at_end` selects the best
+  // checkpoint among the evaluations actually taken, so `eval_steps` sets how
+  // finely the peak can be resolved: ~122 candidate checkpoints at 50, ~30 at
+  // 200. Coarser sampling can only ever miss the peak, never improve on it, so
+  // the re-run cells would have been handicapped against both the baseline AND
+  // their own completed siblings.
+  //
+  // AND THE HANDICAP POINTS THE WRONG WAY. §8.2's provisional reading is that the
+  // longer budget does not help. A settings error that quietly depresses exactly
+  // the cells still outstanding would have produced evidence *for* that reading
+  // by construction. Both jobs were cancelled ~30 min and ~4 min in, before
+  // either wrote a record. `eval_steps: 50` below matches `015` and `001`.
+  //
+  // ─── WHAT DIFFERS FROM 015, AND WHY NONE OF IT IS AN EXPERIMENTAL VARIABLE ───
+  //
+  //   mem   64G -> 128G   the actual fix; §8 has the accounting. ana had ~507 GB
+  //                       free, so the cap bound, not the hardware.
+  //   time  5h  -> 6h     margin only; a healthy cell needs ~3h15m.
+  //
+  // Everything else — `lr`, `bias_lr`, `lora_r`, `num_epochs`, `eval_steps`,
+  // `batch_size`, `accumulation_steps`, `num_workers`, `seed`, `data_seed`,
+  // `max_spd`, the encoding and bias — is `015` verbatim, verified by diffing this
+  // config's expansion against the COMMAND LINE `015` actually emitted rather than
+  // against its .jsonc. That distinction caught two further errors beyond the
+  // `eval_steps` one: `bias_lr` (015 sets 5e-3; the default is 1e-3, so omitting
+  // it would have quietly run the bias channel at a fifth of the baseline's rate)
+  // and a stray `stereo_tags` this file had set explicitly where `015` leaves it
+  // to the default. Only the emitted command line shows defaults; comparing
+  // .jsonc to .jsonc cannot. `num_workers` in particular stays at 3
+  // although lowering it would also cut memory: it is a real variable, and this
+  // sweep's entire claim rests on exactly one thing having moved (40 -> 120
+  // epochs).
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/019_budget_check_reruns.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "019_budget_check_reruns",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The three lost cells, named explicitly rather than as a grid — bace/graph/
+  // seed 0 is still running under `015` and must NOT be re-run here.
+  "cell": [
+    { "task": "bbbp", "seed": 0 },
+    { "task": "bbbp", "seed": 1 },
+    { "task": "bace", "seed": 1 }
+  ],
+
+  "arm": "graph",
+  "bias": "spd+magnetic",
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "data_seed": 0,
+
+  "lr": 3e-5,
+  // `015` sets this explicitly and the RunConfig default is 1e-3, so OMITTING it
+  // would have run the bias channel at a fifth of the baseline's learning rate --
+  // a genuine experimental variable, not a settings detail. Caught by diffing this
+  // config against `015`'s actual emitted command line rather than against its
+  // .jsonc, which is the only comparison that sees defaults.
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+
+  "num_epochs": 120,
+  "eval_steps": 50,              // matches 015 and the 001 baseline — see above
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

@@ -1,0 +1,136 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 016 — RESTORE THE LEAKAGE DETECTOR. Not submitted; held (§8).
+  //
+  // THE SUITE CURRENTLY HAS NO WORKING LEAKAGE DETECTOR AT ALL, and that is a
+  // worse state than the one §3.2.10 was found in. §1 designates
+  // `stereo_assigned` under `stereo_tags: off` as the negative control: strip the
+  // parity tag and the answer becomes *unknowable*, so anything above the base
+  // rate is information arriving by a route the experiment did not intend. That
+  // control is what caught the split defect — 011 measured 0.9928 with the tag
+  // and 0.8152 without, against a 0.715 base, and the 0.10 that did not fall was
+  // the memorised test items.
+  //
+  // `014` then made the control UNMEASURABLE. On the five-corpus pool the family's
+  // test split collapses to a single answer, so both arms score 1.000 and the
+  // off/on contrast has nothing to sit on (§3.2.10.1). Gate A2's second half is
+  // therefore UNVERIFIED ON CLEAN DATA, not passed — the only measurement of it
+  // was taken on the contaminated splits it exists to detect.
+  //
+  // THE POOL, MEASURED RATHER THAN ASSUMED. §9 nominated `bace,bbbp,tox21,lipo`
+  // on the reasoning that HIV screening compounds carry no assigned stereocentres.
+  // That reasoning is now checked directly (2026-09-01, CPU only, generator run
+  // over each scaffold split):
+  //
+  //     pool                       test split: examples / classes / base
+  //     bace,bbbp,tox21,lipo         1000 / 10 / 0.732      <-- usable
+  //     hiv,bace,bbbp,tox21,lipo     1000 /  1 / 1.000      <-- degenerate, as 014 hit
+  //
+  // Two things that measurement settled beyond the headline:
+  //
+  //   * 0.732 is within 0.017 of the 0.715 base 011 ran against, so the detector's
+  //     DYNAMIC RANGE is preserved and 011's numbers remain a usable reference
+  //     point. Had the base landed at 0.95 the family would be formally fine and
+  //     practically useless — a control needs room to fall.
+  //   * On the five-corpus pool the TRAIN split is 0.978 base (3911 of 4000 one
+  //     answer). So that cell was not merely unscorable at test time, it had
+  //     almost nothing to learn from either. `014`'s `stereo_assigned` row is
+  //     void twice over.
+  //
+  // PRE-REGISTERED, BEFORE THE RUNS — the whole point of a control is that its
+  // reading is fixed in advance:
+  //
+  //   base = 0.732 on this pool's test split; sigma at n=1000 is 0.014.
+  //
+  //   PASS  — `off` lands at or below 0.774 (base + 3 sigma). The parity tag is
+  //           the only route to the answer, splits are clean, detector restored,
+  //           gate A2's second half passes on clean data.
+  //   FAIL  — `off` lands materially above 0.774. Information is reaching the
+  //           model by an unintended route EVEN ON MOLECULE-DISJOINT SPLITS, which
+  //           would mean the §3.2.10.1 fix closed one leak and not the class of
+  //           leak. That outcome blocks M4 and is more important than anything in
+  //           the M2 table.
+  //
+  //   The `on` arm is expected high (011: 0.9928) but is NOT the result — it is
+  //   the scale that makes the `off` number readable. Report both, and report the
+  //   gap, never the `off` number alone.
+  //
+  // WHY THE FLAT ARM IS HERE. `flat_serialize` does not consume `stereo_tags`, so
+  // the flat arm is unaffected by the switch and there is no point running it
+  // twice. One flat cell at `on` gives the arm comparison for a family that `014`
+  // could not score at all, which is a second thing this sweep buys.
+  //
+  // ONE SEED, and the §3.2.5 disclosure carries: sigma here is a sampling bound at
+  // n=1000 and says nothing about training variance. That is tolerable for a
+  // control read as pass/fail against a 3-sigma line, and would NOT be tolerable
+  // if the deliverable were the graph-flat margin. Do not quote the margin from
+  // this sweep as a measured result without a second seed.
+  //
+  // HARDWARE. Graph-arm profile from 008's measured records (2.06-3.40h, peak
+  // 21.0-39.8 GB), so: fast tier at 06:00:00, and 64G host memory — the pool is
+  // ~14k molecules scaffold-split up front, well under 014's 56k but far over the
+  // 3.5k that 32G was sized for. The 40 GB A100s must stay out (39.8 GB peak),
+  // but ana's 80 GB cards are the right hand-widening target if the fast tier is
+  // full. `gpus: [...]` renders GPU_BRD and cannot express that split, so widen
+  // after submission with the SKU form rather than by adding "A100" here:
+  //
+  //   scontrol update JobId=<array> Features=GPU_BRD:B300|GPU_BRD:B200|GPU_BRD:H100|GPU_SKU:A100_80GB_PCIE
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/016_leakage_detector_restore.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "016_leakage_detector_restore",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "64G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // Explicit cells, not a grid — a grid would emit the flat x `off` cell that
+  // `flat_serialize` cannot distinguish from flat x `on`, burning a run to
+  // re-measure the same thing.
+  "cell": [
+    { "task": "stereo_assigned", "arm": "graph", "bias": "spd+magnetic", "bias_lr": 1e-2, "stereo_tags": true  },
+    { "task": "stereo_assigned", "arm": "graph", "bias": "spd+magnetic", "bias_lr": 1e-2, "stereo_tags": false },
+    { "task": "stereo_assigned", "arm": "flat",  "bias": "none",         "bias_lr": 5e-3, "stereo_tags": true  }
+  ],
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "seed": 0,
+
+  // The measured non-degenerate pool. See the table above; do NOT widen to five
+  // corpora, which is precisely what broke the family.
+  "pool": "bace,bbbp,tox21,lipo",
+  "train_size": 4000,
+  "val_size": 500,
+  "test_size": 1000,
+  "data_seed": 0,
+
+  // 014's recipe unchanged, so the `on` cell is comparable to that sweep.
+  "lr": 3e-5,
+  "lora": true,
+  "lora_r": 16,
+
+  "num_epochs": 40,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

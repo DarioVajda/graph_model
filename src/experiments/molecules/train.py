@@ -105,17 +105,36 @@ def _convergence(curve, metric):
     its score is a lower bound rather than its ceiling. `tail_gain` is the
     improvement over the last three evals; a run whose curve is still rising there
     ended because cosine annealed the LR to min, not because it converged.
+
+    **`curve` MUST be the training trajectory only.** Read it straight off
+    `trainer.state.log_history` at the end of a run and it is not: `trainer.train()`
+    restores the best checkpoint (`load_best_model_at_end`), and the `trainer.evaluate`
+    call that follows re-scores THAT model on val under the same `eval_` prefix, so
+    the curve gains a final point equal by construction to its own maximum. Then
+    `tail_gain = max - values[-4] >= 0` always, and the flag fires exactly when a run
+    has fallen furthest from its peak — i.e. it reports **overfitting as
+    under-training**. That is not hypothetical: it is what M3a's 16 records did (14
+    flagged `still_improving`, 2 actually were), and it is why `train_and_eval`
+    snapshots the curve before evaluating. `test_the_flag_inverts_on_a_contaminated_curve`
+    pins the failure so it cannot come back silently.
+
+    `peak_fraction` is the more direct reading and needs no threshold: a run whose
+    best eval sits at 0.2 of the way through has budget to spare, one that peaks at
+    1.0 was interrupted.
     """
     if len(curve) < 4:
-        return {"tail_gain": None, "still_improving": None, "best_eval_index": None}
+        return {"tail_gain": None, "still_improving": None,
+                "best_eval_index": None, "peak_fraction": None}
     values = [c[metric] for c in curve]
     tail_gain = values[-1] - values[-4]
+    best = max(range(len(values)), key=values.__getitem__)
     return {
         "tail_gain": tail_gain,
         # 1pp over three evals is inside eval noise at these split sizes; above it,
         # the run wants more budget before its number means anything.
         "still_improving": bool(tail_gain > 0.01),
-        "best_eval_index": max(range(len(values)), key=values.__getitem__),
+        "best_eval_index": best,
+        "peak_fraction": best / (len(values) - 1),
     }
 
 
@@ -128,13 +147,25 @@ def _answer_stats(stats):
     a respectable score next to a task whose base rate is 0.285.
 
     **Which split's floor.** The headline is a TEST number, so the floor it has to
-    beat is the TEST split's majority rate. On Tier A the two coincide (every
-    example is drawn from one generator). On Tier B they do not: the scaffold split
-    moves BBBP from 0.822 positive in train to 0.524 in test, and quoting the
-    corpus-wide 0.765 against a test accuracy would be comparing a score to a floor
-    from a different distribution. So `answers_by_split["test"]` wins when present
-    (Tier B only — Tier A records are unchanged), and `base_rate_source` says which
-    was used rather than leaving a reader to guess.
+    beat is the TEST split's majority rate, not the corpus-wide one. On Tier B the
+    two differ sharply — the scaffold split moves BBBP from 0.822 positive in train
+    to 0.524 in test — and quoting 0.765 against a test accuracy compares a score to
+    a floor from a different distribution. Tier A now splits by molecule and scaffold
+    too, so the same applies there.
+
+    `answers_by_split["test"]` therefore wins whenever it is present, and
+    `base_rate_source` records which was used rather than leaving a reader to guess.
+    The corpus-wide fallback covers artifacts built before either split existed.
+
+    **`degenerate_test_split`** is the case where the floor is the ceiling: every test
+    example carries the same answer, so a constant predictor scores 1.000 and the two
+    arms cannot be compared at all. `n_classes` has always exposed this, but only to
+    someone who thought to look — and a family in that state reports a *perfect*
+    accuracy, which is the last number anyone audits. Measured on `014`:
+    `stereo_assigned` lands 1000/1000 test examples on one answer once the pool
+    includes HIV, because scaffold-splitting sends the rarest scaffolds to test and
+    assigned stereocentres are not among them. Recorded as a boolean so a sweep report
+    can void the family instead of printing a win.
     """
     stats = stats or {}
     by_split = stats.get("answers_by_split") or {}
@@ -143,11 +174,12 @@ def _answer_stats(stats):
     total = sum(answers.values())
     if not total:
         return {"base_rate": None, "answer_distribution": None, "n_classes": 0,
-                "base_rate_source": None}
+                "base_rate_source": None, "degenerate_test_split": None}
     return {"base_rate": max(answers.values()) / total,
             "answer_distribution": dict(sorted(answers.items(), key=lambda kv: -kv[1])),
             "n_classes": len(answers),
-            "base_rate_source": source}
+            "base_rate_source": source,
+            "degenerate_test_split": len(answers) < 2}
 
 
 def _per_example(trainer, test_dataset, cfg, run_name, runs_jsonl):
@@ -266,6 +298,13 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
     )
 
     train_output = trainer.train()
+    # SNAPSHOT THE TRAJECTORY HERE, before the two `evaluate` calls below append to
+    # `log_history`. `load_best_model_at_end` has already restored the best
+    # checkpoint by this point, so the next line re-scores the BEST model on val and
+    # logs it under the same `eval_` prefix. Reading the curve afterwards therefore
+    # appended a final point equal, by construction, to the maximum — which inverted
+    # `still_improving` (see `_convergence`).
+    training_curve = _eval_curve(trainer, metric)
     val_metrics = trainer.evaluate(eval_dataset=val_dataset, metric_key_prefix="eval")
     test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
     perf = step_mem.summary()
@@ -297,8 +336,8 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         "bias_norm_init": bias_norm_init,
         "bias_norm_final": _bias_init_fingerprint(model),
         # Is the headline a ceiling or an interruption? See `_convergence`.
-        "eval_curve": _eval_curve(trainer, metric),
-        **_convergence(_eval_curve(trainer, metric), metric),
+        "eval_curve": training_curve,
+        **_convergence(training_curve, metric),
         # What any score has to beat before it means anything. See `_answer_stats`.
         **_answer_stats(load_dataset_stats(cfg)),
         # Is a mistake explained by the molecule's width? See `analysis.py`.
@@ -309,6 +348,11 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
           f"(best-val {metric}={results['best_val_score']}) "
           f"runtime={results['train_runtime_s']}s peak={results['peak_gb']}GB "
           f"bias_norm {results['bias_norm_init']:.4g} -> {results['bias_norm_final']:.4g}")
+    if results.get("degenerate_test_split"):
+        print(f"[results] *** DEGENERATE TEST SPLIT: all {sum(results['answer_distribution'].values())} "
+              f"test examples answer {list(results['answer_distribution'])[0]!r}. A constant "
+              f"predictor scores 1.000 here, so this family CANNOT compare two arms. "
+              f"Void it in the report rather than quoting the accuracy. ***")
     base = results.get("base_rate")
     print(f"[results] base_rate={'?' if base is None else format(base, '.3f')} "
           f"tail_gain={results.get('tail_gain')} "

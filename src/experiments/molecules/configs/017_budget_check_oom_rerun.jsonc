@@ -1,0 +1,92 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 017 — re-run of the ONE cell `015` lost to a host-RAM OOM. Not a new
+  // experiment: same recipe, same budget, same seed, one more gigabyte of
+  // headroom. Its result belongs in `015`'s table (§8.2) and must be read there.
+  //
+  // WHAT HAPPENED. `015_m3a_budget_check` task 4 (`bbbp` / graph / seed 1) was
+  // OOM-killed by the kernel at 02:13:23, roughly halfway through training:
+  //
+  //     srun: error: ana: task 0: Out Of Memory
+  //     error: Detected 1 oom_kill event in StepId=135502.0
+  //
+  // HOST memory, not GPU — the same class of failure as M3a's OOMs (§ config
+  // 001), which is why `014` and `015` were already raised 32G -> 64G. 64G was
+  // still not enough, and the accounting says so unambiguously:
+  //
+  //     cgroup limit                     67108864K  (64 GiB)
+  //     MaxRSS, the two COMPLETED runs    67047112K  (99.91% of it)
+  //     MaxRSS, the killed run            67048984K  (99.91%, then over)
+  //     MaxRSS, all five still running    67048604K  (99.91%)
+  //
+  // EVERY RUN IN THE SWEEP SITS AT 99.91% OF THE CAP, on two different nodes, to
+  // within 2 MB of each other. That is not one unlucky cell — it is the whole
+  // array running with ~59 MB of margin, where two cells happened to finish and
+  // one happened to be asked for a page it could not get. Reading this as a
+  // property of `bbbp`/graph/seed 1 would be reading noise as signal.
+  //
+  // The identical figure across nodes says the number is not process growth: it
+  // is the cgroup filling with reclaimable page cache from the dataset artifacts.
+  // Normally harmless — the kernel reclaims under pressure — but it leaves no
+  // slack for an allocation spike, and occasionally the spike wins the race.
+  // 128G is therefore not "twice as much RAM for a job that needs 64"; it is
+  // actual headroom above a working set that currently has none. ana had ~507 GB
+  // free at the time, so the cap was the binding constraint, not the hardware.
+  //
+  // WHY NOT ALSO DROP `num_workers`. Fewer loader workers would cut memory too,
+  // and it would change a variable in a sweep whose entire purpose is that ONE
+  // variable moved (40 -> 120 epochs). The memory limit is not an experimental
+  // parameter and can be raised freely; `num_workers` is one and stays at 3.
+  //
+  // SCIENTIFIC STATUS. This cell is a re-run after an infrastructure failure, not
+  // after a result anyone disliked — the run died mid-training and produced no
+  // test number to be tempted by. Recorded here so that is checkable rather than
+  // asserted.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/017_budget_check_oom_rerun.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "017_budget_check_oom_rerun",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",               // the fix — see the accounting above
+      "time": "05:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The single lost cell. Everything below is `015` verbatim.
+  "task": "bbbp",
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "seed": 1,
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "stereo_tags": true,
+  "data_seed": 0,
+
+  "lr": 3e-5,
+  "lora": true,
+  "lora_r": 16,
+
+  "num_epochs": 120,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

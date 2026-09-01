@@ -1,0 +1,87 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 020 — the FOURTH graph cell `015` lost, `bace` / graph / seed 0. Companion to
+  // `019`, split off only because this cell was still running when `019` was
+  // submitted and was deliberately excluded from it. Result belongs in `015`'s
+  // table (§8.2).
+  //
+  // With this one, `015` lost ALL FOUR of its graph cells and none of its four
+  // flat cells:
+  //
+  //     cell                  what happened                    elapsed   reached
+  //     bbbp/graph/seed 0     eval stall -> cancelled          3:02:32   3400/6120
+  //     bbbp/graph/seed 1     host-RAM OOM                     2:13:23   3200/6120
+  //     bace/graph/seed 1     host-RAM OOM                     2:47:45   3950/4440
+  //     bace/graph/seed 0     host-RAM OOM  (this cell)        2:56:18   4300/4440
+  //
+  // A 4/4 failure rate on one arm and 0/4 on the other, at the same memory cap,
+  // is the arm's memory footprint and not chance. The graph arm instantiates the
+  // structural-bias tensors; the flat arm instantiates none. 64G was simply the
+  // wrong cap for it — every failed cell reported MaxRSS 67048604K against a
+  // 67108864K limit. §8 has the accounting.
+  //
+  // THIS CELL GOT TO 4300 OF 4440 STEPS — 97% — before it was killed, which is
+  // the most expensive way to lose a run. Its `checkpoint-4300` carries the full
+  // optimizer/scheduler/RNG state, so resuming was possible in principle; it is
+  // re-run from scratch anyway because `resume_from_checkpoint` is not plumbed
+  // into `train.py` (zero references), and adding it while other cells are using
+  // the harness is the wrong moment. Recorded as a real cost, not a non-issue:
+  // roughly 3 GPU-hours, and it will recur at 120-epoch budgets. Wiring resume
+  // support is worth doing before the next long sweep.
+  //
+  // SETTINGS ARE `019`'s, which are `015`'s, verified by diffing the EMITTED
+  // COMMAND LINE rather than the .jsonc — that check is what caught `eval_steps`
+  // (50, not 200), `bias_lr` (5e-3 explicit; the default 1e-3 would have run the
+  // bias channel at a fifth of the baseline rate) and a stray `stereo_tags`. See
+  // `019`'s header for why those three mattered and why the first two would have
+  // biased the answer toward §8.2's provisional reading.
+  //
+  // Only `mem` (64G -> 128G) and `time` (5h -> 6h) differ from `015`, and neither
+  // is an experimental variable.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/020_budget_check_rerun_bace_s0.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "020_budget_check_rerun_bace_s0",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100", "A100"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "bace",
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "seed": 0,
+
+  "encoding": "rich_levi",
+  "question_node": "on",
+  "data_seed": 0,
+
+  "lr": 3e-5,
+  "bias_lr": 5e-3,               // explicit — the default 1e-3 is NOT 015's value
+  "lora": true,
+  "lora_r": 16,
+
+  "num_epochs": 120,
+  "eval_steps": 50,              // matches 015 and the 001 baseline
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

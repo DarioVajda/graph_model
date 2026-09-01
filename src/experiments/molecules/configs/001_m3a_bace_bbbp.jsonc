@@ -3,7 +3,7 @@
   // 001 — M3a: the first real Tier-B measurement. BACE + BBBP, both arms,
   // 3 seeds. 18 runs.
   //
-  // Renamed from `001_bace.jsonc` on 2026-08-31 (DV green-light) when Tier B was
+  // Renamed from `001_bace.jsonc` on 2026-08-31 when Tier B was
   // scoped to BACE / BBBP / HIV (PLAN.md §1). BBBP joins BACE here because the
   // two are the same size class and the same shape of run; HIV is deliberately
   // NOT here — it is 27x BACE and the tie-collapse stress case, so it gets its
@@ -91,7 +91,15 @@
       "gpus": ["B300", "B200", "H100", "A100"],
       "gpus_per_config": 1,
       "cpus": 4,
-      "mem": "32G",
+      // 64G, raised from 32G on 2026-08-31 after a MEASURED failure: the first
+      // submission lost `bbbp / graph / spd+magnetic / seed 2` to a kernel OOM
+      // kill (`Detected 1 oom_kill event`) at step 1580/2040, 46 minutes in. This
+      // is HOST RAM, not GPU memory — the graph arm peaks at ~21GB on the device
+      // (010) and that was never the problem. BACE (1513 molecules) fits inside
+      // 32G; BBBP (2039) sits right on the edge, so the two sibling seeds
+      // survived and the third did not. A limit that only sometimes holds is a
+      // limit that will lose a different cell next time.
+      "mem": "64G",
       // 008 measured 1.8h for a 5000-step graph run on B200. The longest run
       // here is BBBP graph at ~2040 steps, so ~0.8h plus the ~320s flex autotune
       // and the dataset build. 04:00:00 leaves room on the slowest allowed card.
