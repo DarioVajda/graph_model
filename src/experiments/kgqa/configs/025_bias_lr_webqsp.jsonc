@@ -1,6 +1,6 @@
 {
   // ─────────────────────────────────────────────────────────────────────────
-  // bias_lr bracket (2026-07-15, user call): does a hotter bias-group lr
+  // bias_lr bracket (2026-07-15): does a hotter bias-group lr
   // improve the graph-native arm? Motivated by the 024 ablation — the soft
   // bias is the SOLE topology carrier in graph mode (none arm collapses to
   // .479 vs .724) yet transmits structure slightly worse than flat text

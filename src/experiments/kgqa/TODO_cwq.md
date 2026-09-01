@@ -108,7 +108,7 @@ naming section):
   the graph-bias weight-decay bug is fixed (bias matrices now decayed;
   neutral-to-positive), and `lora_dropout` **0.15** — the only reg lever that
   helped — replaces the 0.05 default.
-- **CWQ epochs come down** (user call, 2026-07-12): CWQ is data-rich, so the
+- **CWQ epochs come down** (decided 2026-07-12): CWQ is data-rich, so the
   E4.2 probe starts from a SHORT schedule (~5 epochs, not 15) and only extends
   if dev F1 is still climbing.
 - **CWQ builds use `versions=1`**: answer sets are near-singleton (median 1),
@@ -263,7 +263,7 @@ cells.*
   96G; flex shape-buffer growth over full-split shapes suspected) → **CWQ
   runs ask `mem: 200G`**; best ckpt survived
   (`cwq_epoch_probe_0000/checkpoint-14000`), no rescoring needed — E4.3
-  supersedes. Schedule: probe validated 6; user call 2026-07-13 raised the
+  supersedes. Schedule: probe validated 6; the 2026-07-13 call raised the
   headline runs to **8 epochs** to stress the short/noisy plateau.
 - [x] **E4.3 CWQ-only headline arms** (3 seeds each, frozen 1B recipe
   adapted per E4.2): graph-native + flat (collapsed serialization — the D2b

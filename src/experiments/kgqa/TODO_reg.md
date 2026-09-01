@@ -62,7 +62,7 @@ by ANY tested regularizer — only more data (CWQ arm) can move it.
   parity, flag round-trips + validate rejections). Full suite: 209 passed, 11
   skipped (GPU-only), 0 failures.
 - [x] Part 6 — probe sweep `015_regularization_probes.jsonc` (sweep name
-  `reg_probes`, 11 runs, B300, max_concurrent 11 per user instruction ≤16).
+  `reg_probes`, 11 runs, B300, max_concurrent 11 to stay under the ≤16 cap).
   Expansion + flag round-trip dry-checked (cache key matches the existing
   nmax50 cache). GPU smoke passed first (all knobs at once, 20 steps, flex +
   grad-ckpt, job 110932, COMPLETED 0:0; artifacts removed). Sweep launched as

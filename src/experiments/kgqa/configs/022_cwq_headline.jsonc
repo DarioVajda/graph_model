@@ -8,7 +8,7 @@
   // caps from E1.1 (max_nodes 1024, n_max 50, versions 1), flat seq_len 8192
   // (covers 99.1-99.4%).
   //
-  // num_epochs 8 (user call 2026-07-13): the 020 probe peaked at epoch 4.78
+  // num_epochs 8 (call of 2026-07-13): the 020 probe peaked at epoch 4.78
   // (dev-256 F1 0.583) and read flat through 6, but the plateau was short and
   // noisy — 8 buys headroom to confirm it. mem 200G: the probe hit host-RAM
   // OOM (MaxRSS 100.6G vs 96G) mid full-split eval after 18h.

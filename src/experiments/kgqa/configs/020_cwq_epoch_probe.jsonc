@@ -3,7 +3,7 @@
   // E4.2 (TODO_cwq, 2026-07-12): CWQ epoch/convergence probe.
   //
   // One seed, graph arm, CWQ-only, to find where dev F1 flattens (expected
-  // ≪15 epochs at 27.6k train questions; the user call of 2026-07-12 is to
+  // ≪15 epochs at 27.6k train questions; the call of 2026-07-12 is to
   // train SHORT — this probe runs 6 epochs and the readout decides the frozen
   // CWQ schedule for the E4.3 headline arms). versions=1 per the near-
   // singleton-answer-set argument (the ver8 augmentation is a no-op on CWQ).

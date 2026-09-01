@@ -11,7 +11,7 @@ content:
   * everything else: the **sweep parameters**, whose JSON *shape* decides how
     they expand into individual runs.
 
-Expansion semantics (decided with the user — type-driven, no marker keywords):
+Expansion semantics (type-driven, no marker keywords):
 
     scalar                  ->  fixed: present in every resolved run unchanged.
     list of scalars         ->  a sweep AXIS: one run per element.

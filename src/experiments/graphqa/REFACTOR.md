@@ -9,7 +9,7 @@ Bring the GraphQA experiment onto the generic `sweep` runner, matching the
 `src/experiments/template` contract (one `RunConfig`, one standalone single-run
 program, one JSONL record per run), the same shape kgqa / probes already use.
 
-## Decisions taken (with the user)
+## Decisions taken
 
 1. **v2 model only.** The legacy v0 path was removed, not kept behind a flag. v0 and
    v2-eager are pinned numerically equivalent at fp32 (loss + every bias gradient +
@@ -126,15 +126,15 @@ inflated); a fix will *raise* them and break comparability with what's already r
 `load_bias_parameters(self.model, self.state.best_model_checkpoint)` after the adapter
 loads (or make checkpoints self-contained in `_save_checkpoint`).
 
-**Decision pending from the user:** scope of the fix (shared trainer vs graphqa-only
-workaround vs document-only), because it reaches into other experiments' published
-results. Options were presented; user wanted to understand the kgqa blast radius first
-(structurally confirmed affected; magnitude unmeasured — no kgqa checkpoint currently on
-disk to cheaply measure, would need a fresh multi-hour run).
+**Decision pending:** scope of the fix (shared trainer vs graphqa-only workaround vs
+document-only), because it reaches into other experiments' published results. The options
+are laid out above; the kgqa blast radius has to be understood before choosing between
+them (structurally confirmed affected; magnitude unmeasured — no kgqa checkpoint currently
+on disk to cheaply measure, would need a fresh multi-hour run).
 
 ## Remaining steps
 
-1. **Resolve the reload bug** (blocker above) — get the user's fix-scope decision, then:
+1. **Resolve the reload bug** (blocker above) — settle the fix scope, then:
    - Override `_load_best_model` in `src/utils/text_graph_trainer_v2.py` to restore bias
      params (or equivalent seam).
    - Add a regression test: train a few steps, force a known-best early checkpoint, assert

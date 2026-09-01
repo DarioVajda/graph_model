@@ -1404,7 +1404,7 @@ constraint. Download sizes measured 2026-07-27: rel-f1 0.7 MB, rel-event 100 MB,
 
 ## 12. Open decisions (recommendation first)
 
-0. **Task-agnostic *method* (§5.0 A)** — settled, per your call. No task- or
+0. **Task-agnostic *method* (§5.0 A)** — settled. No task- or
    dataset-specific code, prompts, column lists or budgets; a new `(dataset, task)` pair
    runs with zero code changes, and a test enforces it. **Hyperparameter values are a
    separate question (§5.0 B):** the construction sweep yields both a `global` setting and

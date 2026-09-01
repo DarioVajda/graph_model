@@ -10,7 +10,7 @@
   //
   // THE RECIPE, AND THE ONE KNOB THAT MOVED. 006 settled `lr 3e-5, lora_r 16`
   // and 007 showed the structural bias — not adapter capacity — carries the
-  // `longest_chain` win. `bias_lr` goes 5e-3 -> 1e-2 here. DV's call, and it is
+  // `longest_chain` win. `bias_lr` goes 5e-3 -> 1e-2 here, and that step is
   // better founded than "a gamble": `relbench` runs `bias_lr 5e-2`, ten times
   // higher than 5e-3, so 1e-2 is mid-range for this repo rather than reckless.
   // 2x rather than 1.4x (7e-3 was the alternative) because a 1.4x step risks

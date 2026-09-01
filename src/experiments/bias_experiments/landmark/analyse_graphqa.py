@@ -192,7 +192,7 @@ def main():
     summary = {}
     for task in TASKS:
         f0 = floor[task]
-        # The two arms the user asked landmark to be compared against, in the
+        # The two arms landmark is compared against, in the
         # configuration landmark itself runs (unmasked) where 017 provides it.
         mag = ctl["magnetic +selfnode"][task] or ctl["magnetic (MLP)"][task]
         mlin = ctl["mag_linear +selfnode"][task] or ctl["magnetic_linear"][task]
