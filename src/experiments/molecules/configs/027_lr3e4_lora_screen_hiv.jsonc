@@ -1,0 +1,102 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 027 — the lr 3e-4 screen on HIV. 6 runs (3 arms x 2 `lora_r`, one seed).
+  // Identical design to `026`; only the dataset, the budget and the eval
+  // cadence differ. Read `026`'s header for the reasoning — the learning-rate
+  // evidence, the fairness argument, the `lora_r` rationale and the
+  // screen-not-measurement caveat all apply here unchanged.
+  //
+  // WHY HIV IS RUN SEPARATELY. It needs a different budget (10 epochs against
+  // 40) and a different eval cadence, and its runs are 2-6 h against 20 min, so
+  // sharing an array with BACE/BBBP would price the short runs at the long ones'
+  // wall clock.
+  //
+  // WHY HIV CARRIES WEIGHT. §8.3.1 makes it the best of the three instruments —
+  // 4112 test molecules, a CSV that is not label-ordered, and DeepChem /
+  // `pretrain-gnns` scaffold conventions that agree byte-for-byte on it. §8.4.3
+  // also found the campaign's only consistent-sign win over the flat twin here
+  // (`rich_atom_only`, three seeds, +0.0159 +/- 0.0042). Both of those readings
+  // were taken at `lr 3e-5`, which `026`'s header shows is below the flat arm's
+  // optimum, so neither survives this config automatically.
+  //
+  // THE SCREEN IS COARSER HERE THAN ON BACE/BBBP. HIV's measured seed-sd runs to
+  // 0.038 (`rich_levi`, §8.4.3), so on one seed nothing below ~0.08 is separable
+  // from a seed draw. That is a wide gate. Any HIV ordering that comes out of
+  // this config is a lead to re-run at three seeds, not a result, and it must not
+  // be reported as one.
+  //
+  // WHAT "BEATS FLAT" WILL AND WILL NOT MEAN — unchanged from the campaign's
+  // standing distinction, repeated because it is the thing most easily lost:
+  //
+  //   * CONDITIONAL ON THIS TEST SET — mean +/- s.e. across seeds. This is what
+  //     §2.2's anchors publish, so a win here is comparable to theirs in kind.
+  //   * GENERALISING TO NEW MOLECULES — the paired per-molecule bootstrap.
+  //     §8.4.3's HIV advantage is NOT resolved at this level (Fisher-combined
+  //     p = 0.17; every 95% CI spans 0), because AUROC precision is set by the
+  //     ~132 actives, not the 4112 molecules.
+  //
+  // BUDGET. 10 epochs = 10270 steps, as `025`, and that budget is measured rather
+  // than argued: across `025`'s twelve runs `peak_fraction` sat at 0.17-0.75 in
+  // ten of them and `test_roc_auc_last` came in below the val-selected score in
+  // 11 of 12, so it overshoots rather than undertrains — which is the safe side,
+  // since `load_best_model_at_end` makes overshoot free.
+  //
+  //   `eval_steps` 400 -> 200. At 10x the learning rate the peak arrives earlier,
+  //   and 25 evaluations across 10270 steps is coarse enough to straddle it. 200
+  //   buys 51 evaluations for a few minutes of eval time against 2-6 h of
+  //   training, which is the right trade when the peak's location is the thing
+  //   being measured.
+  //
+  // HARDWARE / TIME. B200/B300, `max_concurrent` 6 — the whole sweep is one wave.
+  // `025` measured 1.9-5.9 h a run depending on how many tasks shared a node
+  // (0.63 s/it alone, 1.74 s/it with five on one node); at six tasks 12:00:00
+  // keeps the 2x margin over the slow case that `007`'s header argues for.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/027_lr3e4_lora_screen_hiv.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "027_lr3e4_lora_screen_hiv",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "hiv",
+
+  // Identical arm axis to `026`.
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",      "lr": 3e-4, "bias_lr": 1e-2 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only", "lr": 3e-4, "bias_lr": 1e-2 },
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi",      "lr": 3e-4, "bias_lr": 5e-3 }
+  ],
+
+  "lora_r": [16, 32],
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+
+  "num_epochs": 10,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

@@ -1,0 +1,132 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 028 — HIV at `lr 1e-4`, `lora_r` 16. 3 runs (three arms, one seed).
+  //
+  // WHY THIS EXISTS: 3e-4 DESTABILISES THE GRAPH ARM ON HIV.
+  //
+  //   CORRECTION, ENTERED WHEN `027` FINISHED. This header originally read "3e-4
+  //   BREAKS the graph arm" and described both graph r16 runs as peaking at their
+  //   first evaluation and decaying. That was read off mid-flight curves at the
+  //   bottom of an excursion and it is wrong. Both runs RECOVERED. The corrected
+  //   record is below; the decision to test 1e-4 stands, on better grounds than
+  //   the ones first written down.
+  //
+  // WHAT `027` ACTUALLY MEASURED at `lr 3e-4`, all three arms, one seed:
+  //
+  //     arm                        r    val      test     last     peak_frac
+  //     flat                      16   0.7658   0.7447   0.7345      0.08
+  //     flat                      32   0.7488   0.7002   0.7103      0.04
+  //     graph rich_levi           16   0.7783   0.6754   0.6994      1.00
+  //     graph rich_atom_only      16   0.7611   0.6927   0.7349      0.90
+  //     graph rich_levi           32   degenerate, cancelled
+  //     graph rich_atom_only      32   degenerate, cancelled
+  //
+  //   THE GRAPH r16 SIGNATURE — identical in both encodings. An early peak near
+  //   step 1000, then a ~3000-step excursion to near chance (`rich_levi` bottoms
+  //   at 0.423 on step 2000 and 0.490 on step 5000; `rich_atom_only` at 0.493 on
+  //   step 3800), then a clean recovery that is STILL CLIMBING at the end of the
+  //   budget — `rich_levi` finishes at its own maximum, `peak_fraction` 1.00.
+  //   No crash, no OOM, no NaN. This is an unstable but recoverable trajectory,
+  //   not divergence, and it is budget-limited at the far end rather than decayed.
+  //
+  //   AND THE RESULT IS A val->test INVERSION, which is the part that matters.
+  //   `rich_levi` posts the HIGHEST val of any arm (0.7783, above flat's 0.7658)
+  //   and the LOWEST test (0.6754, below flat's 0.7447). `rich_atom_only` does the
+  //   same thing more mildly. So at 3e-4 the graph arm is not failing to fit — it
+  //   is fitting HIV's validation split and not generalising, and val selection
+  //   cannot see that. Two reasons to move off 3e-4, and the second is stronger
+  //   than the instability: a rate at which val and test point in opposite
+  //   directions makes every selected number on this dataset uninterpretable.
+  //
+  //   THE r32 CANCELLATION STANDS, and for a different reason than the r16 story.
+  //   Those two runs emit EXACTLY 0.5000 repeatedly — 7 and 5 of their last 20
+  //   evaluations, interleaved with values scattered 0.43-0.62 — which is a
+  //   constant predictor, not a low score. Thirty evaluations deep with no signal
+  //   is a genuinely dead run, and it is a different failure from r16's excursion,
+  //   which never once produced an exact 0.5. They were cancelled at ~55-62%.
+  //
+  // WHY 1e-4. The graph arm's HIV optimum is bracketed: 3e-5 works (0.7483 /
+  // 0.7598, §8.4.3) and 3e-4 diverges. 1e-4 is the geometric midpoint —
+  // sqrt(3e-5 * 3e-4) = 9.5e-5 — which is the right centre for a learning rate
+  // because the axis is multiplicative, not additive. It is also the value that
+  // measurably helped the FLAT arm on BACE (0.8594 at 1e-4 against 0.8268 at
+  // 3e-5, §8.4.4), so it is not a rate chosen to suit our arm: it is the one
+  // point already known to favour the baseline elsewhere.
+  //
+  // FAIRNESS. `lr 1e-4` is identical on all three arms, `lora_r` 16 on all three,
+  // same budget, same split, same seed, same selection rule. `bias_lr 1e-2` is
+  // graph-only because the flat arm instantiates no bias parameters — the one
+  // declared asymmetry, unchanged from `026`/`027`.
+  //
+  //   The flat arm is re-run here even though `027` already measures it at 3e-4
+  //   and §8.4.3 measures it at 3e-5. Reading the graph arm at 1e-4 against a
+  //   flat number taken at a different learning rate would be exactly the
+  //   confound §8.4.4 exists to record. Both arms move together or neither does.
+  //
+  // WHY `lora_r` 32 IS NOT HERE. `026` rejected it — negative in 5 of 6 BACE/BBBP
+  // cells, severely on flat (-0.049 / -0.063), and on HIV both r32 graph runs
+  // collapsed outright. Holding `lora_alpha = 2r` fixes the scaling but doubling
+  // the rank still doubles the parameter count taking the same step, so r32 acts
+  // as a further learning-rate increase rather than a clean capacity axis. The
+  // axis is closed at r16.
+  //
+  // WHAT THIS CAN AND CANNOT SETTLE. One seed against HIV's measured seed-sd of
+  // up to 0.038 means nothing below ~0.08 separates from a seed draw. This
+  // locates the graph arm's usable learning rate on HIV; it does not measure
+  // whether the graph arm beats flat there. That needs three seeds at whichever
+  // rate survives, and the existing 3e-5 three-seed baseline remains the
+  // reference until then.
+  //
+  // BUDGET. 10 epochs = 10280 steps, `eval_steps` 200, identical to `027` so the
+  // curves are directly comparable eval-for-eval against the 3e-4 collapse.
+  //
+  // HARDWARE / TIME. B200/B300, `max_concurrent` 3. `027` measured ~2.9-3.4 h for
+  // a full run with six sharing two nodes; at three tasks this should be faster,
+  // and 12:00:00 keeps the 2x margin `007`'s header argues for.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/028_hiv_lr1e4_r16.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "028_hiv_lr1e4_r16",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "hiv",
+
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",      "lr": 1e-4, "bias_lr": 1e-2 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only", "lr": 1e-4, "bias_lr": 1e-2 },
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi",      "lr": 1e-4, "bias_lr": 5e-3 }
+  ],
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+
+  "num_epochs": 10,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

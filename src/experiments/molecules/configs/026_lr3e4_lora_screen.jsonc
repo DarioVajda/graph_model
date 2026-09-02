@@ -1,0 +1,125 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 026 — the lr 3e-4 screen, BACE + BBBP. 12 runs (3 arms x 2 datasets x
+  // 2 `lora_r`, one seed). `027` runs the identical design on HIV.
+  //
+  // WHY THE LEARNING RATE MOVES AN ORDER OF MAGNITUDE. Every Tier-B number in
+  // this document was produced at `lr 3e-5`, and that is measurably the wrong
+  // side of the optimum. On BACE the flat arm, with nothing varied but `lr`:
+  //
+  //     lr 1e-5   val 0.7377   test 0.7821          (1 seed)
+  //     lr 3e-5   val 0.7497   test 0.8268 ± 0.0105 (3 seeds, §8.4.3)
+  //     lr 1e-4   val 0.7689   test 0.8594          (1 seed)
+  //
+  //   Monotone in val AND test, +0.033 over the three-seed baseline (~3 seed-sd),
+  //   and the 1e-4 val curve plateaus at ~0.760 from step 1050 with no decay — so
+  //   1e-4 is converged, not diverging, and the optimum is at or above it. A grid
+  //   that stopped at 1e-4 was resolving nothing; neither was a `bias_lr` grid of
+  //   {5e-3, 1e-2, 2e-2}, whose whole span sits inside the ±0.010 seed noise.
+  //   3e-4 is the next step that is large enough to move the result further than
+  //   a seed draw can, which is the only kind of step worth spending runs on now.
+  //
+  //   THE UNCOMFORTABLE COROLLARY, RECORDED HERE BECAUSE IT CUTS AGAINST US:
+  //   flat/BACE at lr 1e-4 (0.8594) beats EVERY graph number in §8.4.3 by 2.8-8.0
+  //   points. That table was run at an lr which handicaps the baseline, so its
+  //   encoding verdict is partly an artifact of an under-tuned flat arm. §8.4.3's
+  //   ranking does not survive this config unless it is reproduced here.
+  //
+  // FAIRNESS. `lr 3e-4` is identical on all three arms. `lora_r` is identical on
+  // all three arms. Same budget, same split, same seed, same selection rule.
+  // `bias_lr 1e-2` is graph-only because the flat arm instantiates no bias
+  // parameters at all (`009`'s header carries the run-record proof) — there is
+  // nothing there to tune. That is the one declared asymmetry and there are no
+  // others.
+  //
+  // WHAT THIS IS AND IS NOT. This is a SCREEN, not a measurement. One seed per
+  // cell against a measured seed-sd of 0.0105 on BACE and 0.0105 on BBBP means
+  // nothing smaller than ~0.02 here is separable from a seed draw. Two limits
+  // follow and both are load-bearing:
+  //
+  //   * Whatever wins gets re-run at three seeds before it is quoted anywhere.
+  //   * One `lr` point per arm cannot tell a peak from a slope. If 3e-4 happens
+  //     to sit near the graph arm's optimum and past flat's, the graph arm wins
+  //     for a reason that has nothing to do with structure. Flat was still
+  //     climbing at 1e-4 and its peak is unlocated, so this risk is live in both
+  //     directions and a second `lr` is the first follow-up either result needs.
+  //
+  // `lora_r` {16, 32}. Never varied in this campaign, applies identically to both
+  // arms, and cheap. `lora_alpha` is derived as `2 * lora_r` (`config.py:136`), so
+  // the alpha/r scaling is constant across the two cells and the axis is adapter
+  // CAPACITY rather than an unintended change of update scale.
+  //
+  // BOTH `rich_levi` AND `rich_atom_only` RUN. §8.4.3 tied them head to head
+  // (+0.0006 +/- 0.0091) and the tie was broken on secondary criteria — win
+  // counts, mean rank, disk. At a learning rate ten times larger that tie-break
+  // carries no weight, so both encodings are measured again rather than one being
+  // carried forward on the old grid's authority. `terse_levi` is dropped: it lost
+  // pooled at more than two standard errors and is the one clear verdict §8.4.3
+  // does deliver.
+  //
+  // SELECTION. On val, never on test, and the full grid of 12 is reported rather
+  // than the winner alone. BACE's val->test rank concordance is 83% (§8.4); BBBP's
+  // is 44%, i.e. chance, because its val saturates at 0.94-0.98 against a test of
+  // 0.70 — so BBBP is read as a held-out check on BACE's choice, not tuned.
+  //
+  // BUDGET. 40 epochs = 1480 steps, `eval_steps` 50, as `001`. At 10x the lr the
+  // peak arrives earlier, and `load_best_model_at_end` makes overshooting free
+  // while undershooting is not recoverable, so the budget is left where it is.
+  //
+  // HARDWARE / TIME. B200/B300, `max_concurrent` 12 — the whole sweep is one
+  // wave. `023`/`024` measured 16-20 min a run at these sizes; 04:00:00 holds the
+  // 2x margin over the ~2.8x slowdown seen when several tasks share a node.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/026_lr3e4_lora_screen.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "026_lr3e4_lora_screen",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  // One axis of 3. `bias_lr` on the flat cell is inert (no bias parameters exist
+  // there) and is pinned to the campaign default so the record stays comparable
+  // rather than carrying a meaningless swept value. `encoding` on the flat cell
+  // is likewise inert — the flat arm serialises SMILES.
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",      "lr": 3e-4, "bias_lr": 1e-2 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only", "lr": 3e-4, "bias_lr": 1e-2 },
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi",      "lr": 3e-4, "bias_lr": 5e-3 }
+  ],
+
+  "lora_r": [16, 32],
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+
+  // `001`'s recipe from here down apart from `lr`, `bias_lr` and `lora_r`, so
+  // every cell here is comparable to the three-seed baseline in §8.4.3.
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}
