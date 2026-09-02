@@ -1,9 +1,15 @@
 # Molecules × GTLM — implementation plan
 
-**Status:** M0–M2 complete (2026-08-30). **M3 is next, and it is scoped to BACE / BBBP / HIV**
-(§1 Tier B, 2026-08-31). Written to run **before** the generalist trunk
-(`src/generalist/PLAN.md` §7 names molecules as an admission-gate domain and leaves the
-representation decision open — this document is that decision).
+**Status (2026-09-02):** M0–M2 complete. **M3a and M3b are measured on all three sets** — 36 runs,
+three encodings + the flat twin, three seeds (§8.4.3) — and gate B1 fails on every one of them.
+**But every Tier-B number so far was taken at `lr 3e-5`, which is below the flat arm's optimum
+(§8.4.4), so both the gate-B1 failure and the encoding ranking are confounded with an under-tuned
+baseline.** Resolving that is the only thing in flight: `026`/`027` screen `lr 3e-4` × `lora_r`
+{16, 32} across three arms and three datasets, 18 runs, one seed — a screen, not a measurement.
+`012`/`013` are superseded by `022`/`025`. **`016` remains written and held.** `021` closed the
+checkpoint-selection question (§8.4). M3 remains scoped to BACE / BBBP / HIV (§1 Tier B). Written
+to run **before** the generalist trunk (`src/generalist/PLAN.md` §7 names molecules as an
+admission-gate domain and leaves the representation decision open — this document is that decision).
 
 **Condensed 2026-08-31.** The Tier-A campaign generated ~90 runs across ten sweeps and this
 document grew a blow-by-blow account of each. That narrative is preserved in git history
@@ -35,14 +41,21 @@ Every sweep is reproducible from `configs/`, one file per sweep, numbered contig
 | `010_tier_b_smoke` | 2 | **first GPU contact for the Tier-B path** — plumbing only, no quotable number | 8 |
 | `011_m2_loose_ends` | 7 | M2's two stated holes: a second seed on §3.2.8's `longest_chain` cells, and gate A2's never-run `stereo_tags: off` control — **running it is what exposed §3.2.10** | 8, 3.2.10 |
 | `012_m3b_hiv_prep` | 2 | builds the two HIV artifacts (~2.6 GB graph) so 013 hits a warm cache — **written, not submitted** | 8 |
-| `013_m3b_hiv` | 9 | M3b — HIV, both arms, 3 seeds, budget in *steps* not epochs. **Written, not submitted: gated on M3a's `tied_pair_fraction`** | 8 |
+| `013_m3b_hiv` | 9 | M3b — HIV, both arms, 3 seeds, budget in *steps* not epochs. The `tied_pair_fraction` gate it was blocked on **has been read and is clean** (§8, M3b); it is now held at the decision gate. **Written, not submitted** | 8 |
 | `014_m2_rerun_molsplit` | 20 | ✅ **THE M2 CLOSING TABLE** — ten families × both arms on molecule-disjoint splits, one recipe, one dataset build. Supersedes `008`+`009`+the three families quoted from `004`. **5 graph wins / 2 ties / 2 flat / 1 void; every graph margin grew** | 3.2.5 |
-| `015_m3a_budget_check` | 8 | does Tier B want a longer budget? 3× epochs on BACE/BBBP × both arms × 2 seeds. Exists because §8.2's inverted flag made "M3a is budget-limited" look true; this measures it instead of arguing it | 8.2 |
+| `015_m3a_budget_check` | 8 | ✅ **it does not.** 3× epochs on BACE/BBBP × both arms × 2 seeds; mean Δ −0.005, 0/8 still improving, arm gap unmoved. Four graph cells lost to a 64G cap and re-run as `019`/`020` | **8.2.1** |
 | `016_leakage_detector_restore` | 3 | **restores the suite's only leakage detector** — `stereo_assigned` off/on on the measured non-degenerate pool, with the pass line pre-registered at 0.774. **Written, not submitted: held pending a decision** | 9, 2.5 |
 | `017_budget_check_oom_rerun` | 1 | ⚠️ **SUPERSEDED BY `019`, cancelled before producing a number** — carried `eval_steps 200` where `015` uses 50 | 8.2 |
 | `018_budget_check_stall_rerun` | 1 | ⚠️ **SUPERSEDED BY `019`, cancelled before producing a number** — same `eval_steps` error | 8.2 |
 | `019_budget_check_reruns` | 3 | three of the four graph cells `015` lost to infrastructure, re-run at 128G. **Results belong in `015`'s table**, not their own. Command line verified identical to `015`'s | 8.2 |
 | `020_budget_check_rerun_bace_s0` | 1 | the fourth (`bace`/graph/seed 0), split off only because it was still running when `019` was submitted — it then OOMed at **97%** of training | 8.2 |
+| `021_dual_score_encodings` | 8 | ✅ **what checkpoint selection is worth, and a first look at the three encodings.** 8/8 COMPLETED. Selection is worth −0.017 mean; **val ANTI-ranks the encodings on BBBP**; neither task's encoding spread is resolved | **8.4** |
+| `022_m3b_hiv_prep` | 4 | builds the **four** HIV artifacts (flat + three encodings) so `025` hits a warm cache. **Supersedes `012`**, which predates the encoding axis and asked for two | 8.4 |
+| `023_encodings_seed1` | 8 | seed 1 of `021`'s screen, one job / eight runs in sequence. The power calculation that justifies the extra seeds is in its header and in §8.4 | 8.4 |
+| `024_encodings_seed2` | 8 | seed 2, identical to `023` but for the seed | 8.4 |
+| `025_m3b_hiv_encodings` | 12 | ✅ **M3b — HIV, four arms, 3 seeds, 10 epochs.** 12/12 COMPLETED. `rich_atom_only` beats flat on **all three seeds** (+0.0159 ± 0.0042) — the only consistent-sign win in the campaign. **Supersedes `013`** | **8.4.3** |
+| `026_lr3e4_lora_screen` | 12 | 🔄 **the lr 3e-4 screen** — 3 arms × BACE/BBBP × `lora_r` {16, 32}, one seed. Replaces an abandoned `lr` × `bias_lr` grid whose ceiling was on the wrong side of the optimum | **8.4.4** |
+| `027_lr3e4_lora_screen_hiv` | 6 | 🔄 the same screen on HIV, 10 epochs, `eval_steps` 200 | **8.4.4** |
 
 `014` **supersedes `008` + `009`**, which measured the same families on contaminated splits
 (§3.2.10). It also folds the two files back into one: with `bias_lr` carried on the arm bundle,
@@ -137,9 +150,9 @@ text. Record `stereo_tags` in every run record.
 
 ### Tier B — MoleculeNet ⚠️ SCOPED 2026-08-31
 
-Scaffold split (ours, `scaffold_split`), ROC-AUC. Built at M3 (`tier_b.py`); GPU runs pending.
-Molecule counts are post-drop; *examples* are `(molecule, endpoint)` pairs after skipping absent
-labels.
+Scaffold split (ours, `scaffold_split` — DeepChem's, verified against the source in §8.3.1),
+ROC-AUC. Built at M3 (`tier_b.py`); BACE and BBBP measured (§2.6), HIV held (§8). Molecule counts
+are post-drop; *examples* are `(molecule, endpoint)` pairs after skipping absent labels.
 
 **Primary set — run these three, and nothing else, until they have reported:**
 
@@ -174,7 +187,10 @@ rank-based and unaffected**, which is why it is the headline metric and the one 
 reports. **`accuracy` and `f1` are badly affected** — a model that learns the training prior scores
 near-chance accuracy on BBBP's test split while ranking perfectly well — so do not read those
 fields as a health check on a run, and do not compare them across datasets. This is the scaffold
-split doing exactly what it is for (a structurally novel test set), not a bug.
+split doing exactly what it is for (a structurally novel test set), not a bug — the label shift is a
+*side effect* of grouping by scaffold, since a chemical series shares a core and tends to share
+potency. §8.3.1 has the mechanism, and §8.3 the one place it does bite: val and test are shifted
+relative to *each other*, which is a checkpoint-selection problem rather than a measurement one.
 
 **Deferred, not cancelled:**
 
@@ -192,7 +208,8 @@ Tier B). Deferring them thins that arm considerably. Record it as a deferral so 
 dropped: **they re-enter at M3c if the primary three clear the gate in §8.**
 
 `ogbg-molhiv` optionally, if the OGB leaderboard framing is wanted; same molecules as HIV under a
-different split.
+different split — and per §8.3.1 the only *genuinely* standardized one in this space, since OGB ships
+published index files rather than a splitter everyone reimplements.
 
 ### Tier C — ChEBI-20 captioning (optional, unbuilt)
 
@@ -237,13 +254,26 @@ comparison rather than a shortcut, and it means none of these numbers is a gener
 
 ### 2.2 The primary three — MoleculeNet classification, scaffold split, ROC-AUC ↑
 
-InstructMol (arXiv:2311.16208, **current version**, Table 2; 3 random seeds, scaffold splits).
-Primary source, read 2026-08-31.
+InstructMol (arXiv:2311.16208, **current version**, Table 2). Primary source, read 2026-08-31;
+split protocol verified against the paper and both reference implementations 2026-09-01.
 
 **Every number below is as compiled in InstructMol's Table 2**, not re-run by us and not read from
 each method's own paper — so a row's own paper may quote a different figure under a different
 split. The model links go to the method's own paper, for what it *is*; the numbers stay attributed
 to the table that put them side by side.
+
+**Which rows are theirs, and what protocol produced them.** InstructMol §4.1 states *"Scaffold
+splits are used for the classification task, and the experiments are conducted with three random
+seeds"* and *"we use the recommended splits from Ramsundar et al. (2019)"* — the DeepChem book.
+DeepChem's `ScaffoldSplitter` is **deterministic**: `split()` accepts a `seed` argument and never
+uses it. So their three seeds share one split, and their ± is **training variance only — the same
+quantity as ours in §2.6**, not split variance.
+
+Four rows were run by InstructMol's own authors: **InstructMol-G, InstructMol-GS, Llama-2-7B-chat
+and Vicuna-v1.3-7B**. Every other row is copied from that method's own paper. Gates B2 and B3 are
+both written against author-run rows, so **both rest on one paper's protocol and one paper's
+execution** — a single point of failure, not four independent anchors. If their Llama-2-7B baseline
+is under-tuned, B3 inherits it.
 
 | | BACE | BBBP | HIV | how it works | why it is in this table |
 |---|---:|---:|---:|---|---|
@@ -380,9 +410,11 @@ the graph-vs-flat question, because it is the part that does not depend on GTLM 
    stronger, not weaker — but "our flat twin beats published 7B baselines" is a claim about an
    untuned configuration and should not be quoted as a tuned one.
 2. **Not three splits.** All three seeds share one deterministic scaffold split, so the ± is
-   training variance only and carries **no split variance at all**. The published rows we compare
-   against are means over 3 scaffold splits. See §8.3 — val and test here are different populations,
-   which also makes checkpoint selection on BBBP close to arbitrary.
+   training variance only and carries **no split variance at all**. §2.2's author-run rows carry the
+   same limitation for the same reason (verified 2026-09-01), so their ± is comparable in kind to
+   ours — an earlier claim here that those rows were means over three scaffold splits was wrong and
+   is withdrawn. See §8.3 — val and test are different populations, which also makes checkpoint
+   selection on BBBP close to arbitrary.
 3. **Not the whole gate.** B1 is written over three sets; HIV (M3b, `013`) has not run.
 
 **What it does not settle, and must not be read as settling.** Whether the graph arm loses because
@@ -897,33 +929,22 @@ recorded answer distribution exactly, so it describes the real training data):
 | `fg_presence` / `fg_count` | molecule | ~69% | ~11% *(the asked group varies)* |
 | `ring_size`, `ring_membership`, `aromatic_ring`, `fg_atom_membership` | atom | ~70% | ~6% *(the named atom varies)* |
 
-**Re-scored on unseen molecules — no GPU required.** `per_example/*.jsonl` already records `i` and
-`correct` for every test item, and the generation is deterministic, so each row maps back to its
-molecule. Every run's recomputed overall accuracy reproduces its recorded `test_accuracy` (asserted,
-not assumed — a mismatch would mean the mapping is wrong and the numbers meaningless).
+**The mechanism was confirmed, not inferred.** `per_example/*.jsonl` records `i` and `correct` for
+every test item and generation is deterministic, so each row maps back to its molecule; every run's
+recomputed accuracy reproduces its recorded `test_accuracy` exactly. **Accuracy on the duplicate
+subset is 1.0000 in almost every run.**
 
-**Accuracy on the duplicate subset is 1.0000 in almost every run**, which is the mechanism
-confirmed rather than inferred.
-
-**SUPERSEDED 2026-09-01 — `014` re-measured all of this properly, and §3.2.5 now holds the result.**
-A post-hoc re-scoring was done at the time (re-computing each run's accuracy on the subset of test
-molecules never seen in training, using the stored `per_example/*.jsonl`), and it is no longer worth
-carrying: it could not fix either of the two things that mattered. **Power** — it left ~270–316
-examples where the design intended 1000. And **selection** — `load_best_model_at_end` had chosen the
-checkpoint by val AUROC, and the *val* split overlapped train exactly as the test split did, so
-which weights were kept was itself contaminated, and no subsetting can undo that.
-
-Its conclusions are recorded here only as a matter of record, because the clean re-measurement
-disagreed with one of them in an interesting way. The re-scoring found every verdict direction
-surviving but magnitudes moving **both** ways — `ring_size` +0.115 → +0.103 and `ring_membership`
-+0.020 → +0.013 both *shrank* — and concluded that the contamination had inflated some margins.
-**`014` shows the opposite: on a clean measurement every graph margin grew** (§3.2.5). The
-subsetting was misleading in the one direction it was supposed to be conservative about, which is a
-reason to distrust post-hoc repair of a broken split in general and to re-run instead.
-
-*(An earlier draft of this section additionally claimed "every margin widens", computed on a weak
-novelty definition that excluded only exact `(molecule, question)` duplicates rather than every
-molecule seen under any question. That claim was withdrawn at the time.)*
+**The post-hoc repair is SUPERSEDED by `014` and is not worth carrying** — §3.2.5 holds the result.
+Re-scoring each run on the never-seen subset could fix neither thing that mattered: **power**, since
+it left ~270–316 examples where the design intended 1000; nor **selection**, since
+`load_best_model_at_end` had picked the checkpoint on a val split contaminated exactly as test was,
+and no subsetting undoes that. It is recorded only because the clean re-measurement disagreed with it
+in the direction that matters — the re-scoring concluded contamination had *inflated* some margins
+(`ring_size` +0.115 → +0.103, `ring_membership` +0.020 → +0.013), while **`014` shows every graph
+margin grew**. Post-hoc repair of a broken split proved misleading in the one direction it was
+supposed to be conservative about: **re-run instead.** (An earlier draft's "every margin widens"
+claim, computed on a novelty definition that excluded only exact `(molecule, question)` duplicates,
+was withdrawn at the time.)
 
 **§3.2.8's ablation, re-scored and now at two seeds** (`011` supplied seed 1). Note this table is
 the *ablation*, not the headline: `none` is the graph arm with its structural channel deliberately
@@ -1232,8 +1253,8 @@ parse time. Both are free today and expensive to retrofit. Per `feedback-keep-co
 | **M2** | ✅ **2026-08-28 → 09-01.** Tier-A generator (`tasks.py`, 10 families), `dataset.py`, the experiment package, and eleven sweeps (~110 runs). Speed/memory settled (§3.1.2); recipe fixed (§3.2.7); bias ablated (§3.2.8); split defect found, fixed and fully re-measured (§3.2.10, `014`); closing table delivered (§3.2.5). | **5 graph wins / 2 ties / 2 flat losses / 1 void on molecule-disjoint Tier A**, split along *representational explicitness*; the bias is load-bearing and it is SPD | ~75 GPU-h |
 | **M3-prep** | ✅ **2026-08-31.** The Tier-B scoring readout and example builder had **no tests** — `evaluate.py` is a port of relbench's and the tests were left behind in the port. Added `test_score_readout.py` (20) and `test_tier_b_examples.py` (25): known-AUROC synthetic logits, the sigmoid trap, tie-collapse instruments, label alignment against the BACE CSV, scaffold disjointness, and the ordering contract `load_data` slices on. Suite 216 → 221. | a silent scoring bug can no longer reach a headline | CPU |
 | **M3-smoke** | ✅ **`010_tier_b_smoke`, 2026-08-31.** First GPU contact for the Tier-B path — **and it failed, exactly as intended** (§8.1). | the Tier-B path runs end to end | ~0.2 GPU-h |
-| **M3a** | ✅ **2026-09-01. 18/18 COMPLETED** (`001_m3a_bace_bbbp.jsonc`). BACE + BBBP, both arms + `bias=none`, 3 seeds. Two cells were lost to a host OOM at `--mem 32G` and re-run at 64G; the config now carries 64G. | **Gate B1 FAILS on both sets** — the graph arm loses to its own flat twin (−0.017 / −0.033), exactly as §3.2.5 pre-registered. B2 and B3 both met, by both arms. §2.6 | ~12 GPU-h |
-| **M3b** | ⬜ **HIV**, both arms, 3 seeds (`012` prep + `013` train, both written and verified, **neither submitted — held at the decision gate above**). Separated because it is 27× BACE and the tie-collapse stress case (~145 test positives). **The M3a diagnostic that gated it has been read and is clean**: `n_distinct` 67–87 of 152/204 and `tied_pair_fraction` 0.004–0.017, so the readout is not collapsing at this scale — but HIV is 27× larger and remains the stress case, so read the same two fields **before** its AUROC. Budget is set in *steps* (5 epochs ≈ 5140, matching Tier A's settled 5000) because 40 epochs here would be 41k steps and BACE's 1512 steps would be 1.5 epochs — neither is "the same budget". If the graph arm is `still_improving` at 5 epochs, re-run **both** arms at 10, and treat 5 as a lower bound. | the third anchor ladder filled in | ~25 GPU-h |
+| **M3a** | ✅ **2026-09-01. 18/18 COMPLETED** (`001_m3a_bace_bbbp.jsonc`). BACE + BBBP, both arms + `bias=none`, 3 seeds. Two cells were lost to a host OOM at `--mem 32G` and re-run at 64G; the config now carries 64G. | **Gate B1 FAILS on both sets** — the graph arm loses to its own flat twin (−0.017 / −0.033), exactly as §3.2.5 pre-registered. B2 and B3 both met, by both arms. **Confirmed not a budget artifact** (§8.2.1: 3× epochs moves the gap −0.035 → −0.046 on BACE and −0.022 → −0.021 on BBBP). §2.6 | ~12 GPU-h |
+| **M3b** | ⬜ **HIV**, both arms, 3 seeds (`012` prep + `013` train, both written and verified, **neither submitted — held at the decision gate above**). Separated because it is 27× BACE and the tie-collapse stress case (~145 test positives). **§8.3.1 gives it three independent advantages over BACE/BBBP that were not part of the original case for it:** its measurement error is ±0.024 against ±0.037/±0.032; its CSV is **not** label-ordered, so §8.3's val/test population split does not bite; and the DeepChem and `pretrain-gnns` scaffold conventions produce **byte-identical** splits on it, making it the only Tier-B set comparable to both anchor lineages without caveat. **The M3a diagnostic that gated it has been read and is clean**: `n_distinct` 67–87 of 152/204 and `tied_pair_fraction` 0.004–0.017, so the readout is not collapsing at this scale — but HIV is 27× larger and remains the stress case, so read the same two fields **before** its AUROC. Budget is set in *steps* (5 epochs ≈ 5140, matching Tier A's settled 5000) because 40 epochs here would be 41k steps and BACE's 1512 steps would be 1.5 epochs — neither is "the same budget". If the graph arm is `still_improving` at 5 epochs, re-run **both** arms at 10, and treat 5 as a lower bound. | the third anchor ladder filled in | ~25 GPU-h |
 | — | **DECISION GATE. Provisionally NOT passed, and the call is mine to make, not this document's.** B1 needs ≥2 of 3 and has 0 of 2, so no HIV result can rescue it. There *is* no unexplained collapse against §2.2 — the opposite: B2 and B3 are both met (§2.6). So the gate's own rule says **the work is diagnosis, not more datasets**, and the diagnosis is already specified: M4's encoding sweep separates "the endpoints are motif-driven" from "Levi is the wrong graph for chemistry", which predict the same M3a result. **Held as of 2026-09-01** — M3b/`013` remains unsubmitted. | pass/fail recorded here | — |
 | **M3c** | ⬜ Tox21 + SIDER (the deferred sets, §1), which also restores §4 arm 2's large multi-task set. Verify §2.3's anchors against the Uni-Mol PDF first. | multi-endpoint routing exercised | ~20 GPU-h |
 | **M4** | ✅ **UNBLOCKED 2026-09-01.** The Tier-A re-run it was waiting on is done (`014`, §3.2.5) — the verdicts held and every graph margin grew. §3.2.5's *explicitness* hypothesis also gives the sweep a sharper job than "which of three cells wins": it predicts which families should separate them. Still outstanding from the re-run backlog: `007`'s bias ablation has never been measured on a clean split (§3.2.8). Then: encoding sweep, §3.2's **3 cells** (`rich×levi`, `terse×levi`, `rich×atom_only`) × `±smiles` × bias arms × 3 seeds, on the non-saturated Tier-A families + BACE/BBBP. Never on a saturated family, never at the stale recipe. Run `terse×levi` first — cheapest, and it decides whether the featurizer is needed at all. | §3.2's arms decided and written into a frozen config | ~100 GPU-h *(estimate)* |
@@ -1246,10 +1267,14 @@ parse time. Both are free today and expensive to retrofit. Per `feedback-keep-co
 `stereo_tags: off` control, which had never been executed (§2.5). Running the latter is what
 exposed §3.2.10.
 
-**In flight as of 2026-09-01:** `015` (job 135484), the Tier-B budget check — the falsification test
-for §8.2's fixed instrument, which says the extra budget is probably unnecessary — plus `019`
-(job 135609), its three lost graph cells re-run. `014` (job 135331) is **done**, 20/20, and is
-§3.2.5.
+**Nothing in flight as of 2026-09-01.** `014` (job 135331) is **done**, 20/20, and is §3.2.5.
+`015` + `019` + `020` are **done**, 8/8 cells, and are §8.2.1: the tripled budget does not help,
+gate B1's failure is not a budget artifact, and M3a needs no re-run.
+
+**Held and unsubmitted:** `012`/`013` (M3b/HIV, behind the decision gate below) and `016` (the
+leakage detector, §9). `016` has the standing argument for jumping the queue — until it runs the
+suite has no leakage detector at all, and every result in this document rests on splits nothing is
+currently checking.
 
 **`015` lost ALL FOUR of its GRAPH cells and none of its four flat cells.** 4/4 against 0/4 at the
 same memory cap is the arm's footprint, not chance: the graph arm instantiates the structural-bias
@@ -1267,109 +1292,51 @@ Every failed cell reported MaxRSS 67048604K against the 67108864K limit. All fou
 having produced no test number, so nothing was discarded that anyone could have preferred. `019`
 re-runs three at 128G and `020` the fourth, which was still running when `019` went in.
 
-**The result: `015` currently has ZERO graph-arm TEST data.** Its flat arm is complete and a clean
-null, and that is worth little on its own — the graph arm is the one whose convergence was in
-question. No conclusion about the budget can be written until `019`/`020` land.
-
-#### What the failed runs' dev curves already say — and a confound they exposed
-
-The four killed cells trained 52–97% of the way and left readable `trainer_state.json`, so their
-validation trajectories survive. Best `eval_roc_auc` against M3a's, with the peak located as a
-fraction of the 120-epoch budget (40 epochs = 33.3%):
-
-| cell | best val | peak @ | M3a best val | Δ |
-|---|---:|---:|---:|---:|
-| `bace`/s0 | 0.7181 | 45.0% | 0.6915 | **+0.0266** |
-| `bace`/s1 | 0.7098 | 30.4% | 0.6862 | **+0.0236** |
-| `bbbp`/s0 | 0.9626 | 6.5% | 0.9647 | −0.0021 |
-| `bbbp`/s1 | 0.9595 | 10.6% | 0.9628 | −0.0033 |
-
-BBBP is settled: no gain, peaks in the first tenth. BACE looks like a real gain, and **three checks
-say it is not evidence that the longer budget helped.**
-
-1. **The flat arm is the control and it moved too.** Flat BACE dev rose +0.0155 / +0.0101 while its
-   test went +0.0137 / −0.0309 — nowhere. A dev gain of this size demonstrably does not transfer on
-   this dataset.
-2. **Truncate to M3a's evaluation count and most of the gain is already there.** `best val` is a
-   maximum over evaluations taken, and 120 epochs affords ~3× as many draws as 40; the max of 85
-   noisy draws beats the max of 29 by construction. Cutting each curve to M3a's own count: `bace`/s1
-   reaches **0.7098 — its entire full-run maximum — within the first 29 evaluations**, and `bace`/s0
-   reaches 0.7079 of its eventual 0.7181. The gain is not bought by training longer.
-3. **Because `num_epochs` also sets the LR schedule, these are not the same run truncated.**
-   `lr_scheduler_type="cosine_with_min_lr"` spans the whole budget, so at matched steps the two runs
-   are on different trajectories: **at step 1350, where `bace`/s1 peaked, the 120-epoch run is at
-   2.449e-05 against the 40-epoch run's 3.529e-06 — 7× the learning rate.** The 40-epoch run has
-   decayed to near its floor while the 120-epoch run is still near peak LR.
-
-**So `015` does not cleanly isolate "budget" at all — it varies budget AND schedule shape together.**
-On the dev evidence the extra *duration* buys nothing on either dataset; what BACE's graph arm
-appears to like is the **gentler LR decay**, which is a different claim needing a different
-experiment (same step count, schedule length varied). That experiment is not written. Until the test
-numbers land this stays a dev-only reading of incomplete runs at one seed per cell, and it is
-recorded here so the confound is not rediscovered later as a surprise.
+All four were re-run and the sweep is complete; the result is §8.2.1. Two procedural lessons from
+the re-runs are worth keeping.
 
 **Resume was possible and was not used.** Three of the four killed cells left `checkpoint-N` with
 full optimizer, scheduler, RNG and trainer state (`bbbp`/seed 1's was killed mid-write and has
-none), and `bace`/seed 0's was at 97%. All four are being re-run from step 0 anyway, because
-`resume_from_checkpoint` is not plumbed into `train.py` — zero references — and adding it while
-other cells are using the harness is the wrong moment. The cost is real: roughly 3 GPU-hours on that
-one cell, and it will recur at 120-epoch budgets against a tight ceiling. **Wire resume support
+none), and `bace`/seed 0's was at 97%. All four were re-run from step 0 anyway, because
+`resume_from_checkpoint` is not plumbed into `train.py` — zero references. Roughly 3 GPU-hours on
+that one cell, and it recurs at every long budget against a tight ceiling. **Wire resume support
 before the next long sweep.**
 
-**A settings error in the first attempt at those re-runs is recorded here because it pointed the
-wrong way.** `017`/`018` were written with `eval_steps 200`, copied from `014` (Tier A) instead of
-from `015`, which uses **50** — as does `001`, the baseline every cell is compared against. That
-governs how finely `load_best_model_at_end` can resolve the peak (~122 candidate checkpoints at 50,
-~30 at 200), and coarser sampling can only miss the peak, never beat it. It would therefore have
-depressed exactly the cells still outstanding, manufacturing evidence *for* §8.2's provisional
-"the longer budget does not help". Both were cancelled before either wrote a record. Re-checking
-`019` against the command line `015` actually emitted — not against its `.jsonc`, which cannot show
-defaults — caught two more: `bias_lr` (`015` sets 5e-3, the default is 1e-3, so omitting it would
-have run the bias channel at a fifth of the baseline's rate) and a stray explicit `stereo_tags`.
-`019`'s emitted command is now byte-identical to `015`'s for the shared cell. **Diff the emitted
-command, not the config, whenever a re-run has to match an existing sweep.**
+**A settings error in the first attempt pointed the wrong way, which is why it is recorded.**
+`017`/`018` were written with `eval_steps 200`, copied from `014` (Tier A) instead of from `015`,
+which uses **50** — as does `001`, the baseline every cell is compared against. That governs how
+finely `load_best_model_at_end` can resolve the peak (~122 candidate checkpoints at 50, ~30 at 200),
+and coarser sampling can only miss the peak, never beat it. It would have depressed exactly the
+cells still outstanding, manufacturing evidence *for* §8.2's provisional reading. Both were cancelled
+before either wrote a record. Re-checking `019` against the command line `015` actually emitted — not
+against its `.jsonc`, which cannot show defaults — caught two more: `bias_lr` (`015` sets 5e-3, the
+default is 1e-3, so omitting it would have run the bias channel at a fifth of the baseline's rate)
+and a stray explicit `stereo_tags`. **Diff the emitted command, not the config, whenever a re-run has
+to match an existing sweep.**
 
-**All four flat cells landed and the flat arm is a clean null:** BACE +0.014 / −0.031, BBBP −0.009 /
-+0.017 — two up, two down, mean −0.002, every one peaking inside the original 40-epoch budget and
-the BBBP pair at 2–3% of the tripled one. That is also the control for the one live counter-argument
-in this sweep: the BACE **graph** cells reached validation ~0.025 above M3a, which has the shape of
-"40 epochs was tight". The flat arm's validation rose too (+0.010, +0.016) and its test scores went
-nowhere, so a validation gain of that size is **not predictive of test here**, and the graph arm's
-test numbers are what will settle it.
+**`015` ran the whole array at 99.91% of its memory cap**, a standing hazard for every config here
+rather than an incident in one. Against a 64 GiB cgroup limit (67108864K), the two completed runs
+peaked at 67047112K, the killed run at 67048984K and all five then-running runs at 67048604K — **on
+two different nodes, within 2 MB of each other**. A figure that identical across nodes is not process
+growth; it is the cgroup filling with reclaimable page cache from the dataset artifacts, harmless
+right up until an allocation spike outruns reclaim. Two cells won that race and one lost, so
+`bbbp`/graph/seed 1 was not a cell with a memory problem — it was the cell whose spike landed first.
+`014` and `015` had already gone 32G → 64G after M3a's OOMs; the lesson is that the **margin**, not
+the limit, is what has to be checked, and 64G left ~59 MB of it while the node had ~507 GB free.
+**New Tier-B configs should ask for 128G**, and `MaxRSS` against `ReqMem` is worth reading before
+concluding a sweep was clean.
 
-**`015` ran the whole array at 99.91% of its memory cap**, and that is a standing hazard for every
-config in this directory, not an incident in one. Measured 2026-09-01 against a 64 GiB cgroup limit
-(67108864K): the two completed runs peaked at 67047112K, the killed run at 67048984K, and all five
-then-running runs at 67048604K — **on two different nodes, within 2 MB of each other**. A figure that
-identical across nodes is not process growth; it is the cgroup filling with reclaimable page cache
-from the dataset artifacts, which is harmless right up until an allocation spike outruns reclaim.
-Two cells won that race and one lost. So `bbbp`/graph/seed 1 was not a cell with a memory problem —
-it was the cell whose spike landed first, and reading the failure as a property of that cell would
-be reading noise as signal. `014` and `015` had already been raised 32G → 64G after M3a's OOMs; the
-lesson is that the *margin*, not the limit, is what has to be checked, and 64G leaves ~59 MB of it.
-ana had ~507 GB free at the time. **New Tier-B configs should ask for 128G**, and a run's `MaxRSS`
-against `ReqMem` is worth reading before concluding a sweep was clean.
-
-**`015` also lost a cell to a STALL, and that is the failure worth learning from.** Task 0
-(`bbbp`/graph/seed 0) ran normally for 1h53m and 3450 of 6120 steps, completing 102 periodic
-evaluations at ~5 s each. Evaluation 103 then took 53:54 to reach batch 15 of 51, degrading
-monotonically — 226 → 255 → 281 → 305 → **345 s/batch**, roughly 4000× its own established rate.
-**The job stayed `RUNNING` and its log kept being written the whole time**, so job state, log
-freshness, and `MaxRSS` all reported health; only comparing the step counter against its own history
-showed anything wrong. It was cancelled once the arithmetic was decisive rather than left to hit the
-wall: 1.98 h of limit remained, the current evaluation alone needed 2.26 h at the best rate seen
-during the stall and 3.45 h at the latest, and 43% of training was still ahead. Host RSS was
-byte-identical to the two healthy graph runs beside it, so the page-cache story above does **not**
-explain this one; `ixh` was shared with three jobs from another user, one 5 days old, which makes
-contention the leading explanation — **leading, not established**, since it was diagnosed from
-outside the node. A stall watcher now compares each running job's step counter against its own
-previous value and reports no movement over ~20 minutes, which is the check that would have caught
-this in a fifth of the time it actually took.
-
-**Written and NOT submitted, all three held pending a decision:** `012`/`013` (M3b/HIV, behind the decision gate
-above), and `016_leakage_detector_restore` (§9) — the last of which is the one with a standing
-argument for jumping the queue, since until it runs the suite has no leakage detector and every
-result in this document rests on splits nothing is currently checking.
+**The stall is the failure worth learning from.** `bbbp`/graph/seed 0 ran normally for 1h53m and 3450
+of 6120 steps, completing 102 evaluations at ~5 s each. Evaluation 103 then took 53:54 to reach batch
+15 of 51, degrading monotonically 226 → 255 → 281 → 305 → **345 s/batch**, ~4000× its own established
+rate. **The job stayed `RUNNING` and its log kept being written**, so job state, log freshness and
+`MaxRSS` all reported health; only the step counter against its own history showed anything wrong. It
+was cancelled once the arithmetic was decisive: 1.98 h of limit left, the current evaluation alone
+needing 2.26–3.45 h, and 43% of training still ahead. Host RSS was byte-identical to the healthy runs
+beside it, so the page-cache story does **not** explain this one; `ixh` was shared with three jobs
+from another user, making contention the leading explanation — **leading, not established**, since it
+was diagnosed from outside the node. A stall watcher now flags a step counter that has not moved in
+~20 minutes.
 
 ### 8.1 What the Tier-B smoke caught (2026-08-31)
 
@@ -1443,6 +1410,61 @@ trajectory flips from `still_improving: False` to `True` when the post-reload po
 direction nobody checked, after §3.2.10's split and §8.1's `base_rate`. The pattern is not bad
 luck: a diagnostic that is only ever *read*, never *asserted on*, has no error-detecting surface.
 
+#### 8.2.1 CONFIRMED BY DIRECT MEASUREMENT — `015` + `019` + `020`, 8/8 complete (2026-09-01)
+
+The fixed instrument's claim was that M3a did **not** need a longer budget. That is a prediction,
+and the point of `015` was to give it a chance to be wrong: BACE and BBBP × both arms × seeds 0/1 at
+**120 epochs**, three times M3a's, everything else identical. Eight of eight are now in (four cells
+re-run at 128G after `015`'s memory failures, command lines verified identical).
+
+| task | arm | seed | 40ep | **120ep** | Δ | peak of budget |
+|---|---|---:|---:|---:|---:|---:|
+| `bace` | flat | 0 | 0.8360 | 0.8497 | +0.0138 | 0.23 |
+| `bace` | flat | 1 | 0.8563 | 0.8254 | −0.0309 | 0.18 |
+| `bace` | graph | 0 | 0.8084 | 0.7759 | **−0.0325** | **0.60** |
+| `bace` | graph | 1 | 0.7957 | 0.8068 | +0.0111 | 0.22 |
+| `bbbp` | flat | 0 | 0.7019 | 0.6928 | −0.0091 | 0.03 |
+| `bbbp` | flat | 1 | 0.6897 | 0.7066 | +0.0169 | 0.02 |
+| `bbbp` | graph | 0 | 0.6926 | 0.6868 | −0.0059 | 0.06 |
+| `bbbp` | graph | 1 | 0.6733 | 0.6698 | −0.0035 | 0.04 |
+
+**The prediction holds. Tripling the budget does not help.** Mean Δ **−0.005**; 3 cells up, 5 down;
+**0 of 8 still improving** at 120 epochs; **7 of 8 peaked inside the original 40-epoch budget**, the
+four BBBP cells within the first *tenth* of it. Only three cells move beyond their seed sd and two
+of those move **down**. The arm gap — the thing gate B1 turns on — is untouched: BACE −0.035 →
+−0.046, BBBP −0.022 → −0.021. **§2.6's B1 failure is not a budget artifact, and M3a needs no re-run.**
+
+**The decisive cell is `bace`/graph/seed 0, and it inverts the intuition.** It is the one cell that
+peaked *outside* the old budget (0.60, ≈ epoch 72) and it posted the **largest dev gain in the
+sweep, +0.0245** — by every in-training signal, the run that most wanted more budget. Its test score
+fell **−0.0325**, the worst decline in the sweep. More budget did not find a better model; it found
+more chances to select an overfit one against a validation split that does not track test. A late
+val peak is therefore **not** evidence a budget was binding, and this document should stop treating
+it as such.
+
+**Dev movement predicted nothing here, and that was checked in advance rather than after.** Both
+BACE graph cells gained ≈ +0.025 dev; their test scores came back +0.011 and −0.033. The flat arm
+had already shown the same disconnect (+0.016/+0.010 dev → +0.014/−0.031 test), which is why the
+dev-only reading recorded before the test numbers landed called the gain unpersuasive on three
+independent grounds — the flat-arm control, the max-over-more-draws artifact, and the LR confound
+below. All three were vindicated.
+
+**A DESIGN FLAW IN `015` ITSELF, which limits what it can claim.** `num_epochs` sets the length of
+the `cosine_with_min_lr` schedule, so changing the budget changes the *learning-rate trajectory*,
+not just the duration: **at step 1350 the 120-epoch run is at 2.449e-05 against the 40-epoch run's
+3.529e-06 — 7×**, one still near peak LR while the other has decayed to its floor. `015` therefore
+varies budget **and** schedule shape together and cannot separate them. It is still sound for the
+question actually asked — *is the 40-epoch number a ceiling or an interruption?* — because both
+readings answer that the same way, and `peak_fraction` needs no cross-run comparison at all. It is
+**not** sound as evidence about learning-rate schedules, and no such claim should be drawn from it.
+Isolating that needs a fixed step count with schedule length varied; not written.
+
+**Cost, recorded because it was avoidable.** `015` lost all four graph cells to a 64G cap the flat
+arm cleared (§8), one at 97% of training, and all four were re-run from step 0 because
+`resume_from_checkpoint` is not plumbed into `train.py`. The first re-run attempt (`017`/`018`) also
+carried a wrong `eval_steps` that would have biased results *toward* this section's conclusion; it
+was caught before either wrote a record. See `019`'s header.
+
 **Blast radius checked: molecules only.** Nine experiments set `load_best_model_at_end`, but
 `still_improving` / `tail_gain` / `eval_curve` appear nowhere outside `molecules/train.py`
 (`grep` over `src/`), so no other experiment derives a convergence claim from `log_history` and none
@@ -1492,9 +1514,10 @@ they differ measurably on a trivial proxy (SMILES length shifts by 15 characters
 
 **What follows, and what does not.**
 
-- **Comparability with §2.2 is preserved, and that is the main thing.** Every published scaffold-split
-  number we anchor against was produced by this same DeepChem ordering. Replacing it with something
-  "fairer" would silently break the comparison the anchor table exists to make.
+- **Comparability with §2.2's author-run rows is preserved, and that is the main thing.** Those four
+  rows came from this same DeepChem ordering (§2.2, verified 2026-09-01). The copied specialist rows
+  did not — §8.3.1 measures the gap — but those are the "ceiling, not target" rows, not the gates.
+  Replacing our split with something "fairer" would silently break the comparison §2.2 exists to make.
 - **Checkpoint selection is the casualty.** `metric_for_best_model=eval_roc_auc` selects on val, which
   is a different population from the one reported, and on BBBP that signal saturates by **epoch 2**
   and then varies by an sd of 0.002–0.009. The selected checkpoint is close to arbitrary among the
@@ -1510,6 +1533,343 @@ held-out slice of *train* instead of val; or report both the val-selected and la
 scores so the selection's contribution is visible. The third is cheap and additive and is the one
 worth doing first.
 
+#### 8.3.1 How standard the split actually is (measured 2026-09-01)
+
+`scaffold_split` was written to be DeepChem's, and it is — verified line by line against
+`deepchem/splits/splitters.py`: same sort key `(len(group), group[0])` descending, same
+`include_chirality=False`, same pour order, same absence of a working seed. **But there is no
+universal standard behind it.** At least four protocols are called "scaffold split":
+
+| protocol | who uses it | split variance |
+|---|---|---|
+| DeepChem `ScaffoldSplitter` — deterministic, largest-first | **ours**; MoleculeNet; §2.2's author-run rows | none: one split |
+| `pretrain-gnns` `scaffold_split` — same algorithm, `include_chirality=True` | GROVER, MolCLR, GraphMVP, MolCA, most specialist rows | none, but a *different* single split |
+| `pretrain-gnns` `random_scaffold_split` / Chemprop `scaffold_balanced` — seeded | Chemprop lineage | mean ± sd over splits |
+| OGB `ogbg-mol*` — published index files | OGB leaderboard | none; genuinely standardized |
+
+Nearly everyone *cites* DeepChem regardless — Hu et al. 2020 and GROVER both describe themselves as
+using it while shipping a reimplementation with the chirality flag flipped. One nominal standard,
+several near-copies, and the divergence invisible in the prose.
+
+**What that one flag costs, measured by computing both splits end to end on our own data:**
+
+| | scaffolds `False` → `True` | molecules changing split | test-set overlap |
+|---|---|---:|---:|
+| BACE | 671 → 739 | 8.1% | **80.9%** — 29 of 152 test molecules differ |
+| BBBP | 1025 → 1102 | 5.9% | **90.7%** — 19 of 204 differ |
+| HIV | 19081 → 19081 | **0.0%** | **100%** |
+
+The two lineages are far closer than "different protocols" suggests, and **on HIV they are the same
+split** — those SMILES carry no stereochemistry that changes a Murcko scaffold. Which convention
+produced a BACE test set matters less than that set having only 152 molecules in it.
+
+**Which is the binding constraint.** Hanley–McNeil standard error on test ROC-AUC at AUC ≈ 0.78:
+
+| | test molecules | positives | s.e. |
+|---|---:|---:|---:|
+| BACE | 152 | 92 | **±0.037** |
+| BBBP | 204 | 107 | **±0.032** |
+| HIV | 4112 | 132 | **±0.024** |
+
+Every effect this campaign chases is 0.02–0.05 — about one standard error of the instrument. Arms
+share a test set so paired contrasts are tighter than these absolute figures, but the validation
+split is the same size and is what selects the checkpoint. **No budget buys precision here; only a
+bigger test set does** (§8.2.1 is the direct demonstration). HIV gains less than its molecule count
+implies because AUROC precision is set by the smaller class and HIV is 3.2% positive.
+
+**The file ordering behind §8.3 is sharper than "ordered by source series".** Positive rate by decile
+of CSV row order:
+
+```
+BACE  0.67 0.65 1.00 1.00 1.00 0.25 0.00 0.00 0.00 0.00
+BBBP  0.68 0.41 0.74 0.41 0.41 1.00 1.00 1.00 1.00 1.00
+HIV   0.04 0.02 0.03 0.02 0.03 0.03 0.05 0.03 0.03 0.06
+```
+
+The label is close to a step function of row index on BACE and BBBP, and the singleton tiebreak *is*
+row index — which is the whole mechanism. **HIV is not ordered.** The artifact is dataset-specific,
+and the dataset it spares is the one M3b needs.
+
+**Two things checked and clean.** Scaffold overlap between every pair of splits is **zero** on all
+three sets: no leakage, the split is sound and only miscalibrated for selection. And the loader drops
+11 of 2050 BBBP molecules and 8 of 41127 HIV on parse/encodability, 0 on BACE — a paper quoting 2050
+BBBP molecules is not scoring the same test set we are.
+
+**The train/test label shift is a side effect, not a design goal.** Scaffold correlates with activity
+because a chemical series shares a core *and* tends to share potency, so grouping by scaffold groups
+by label: BBBP train is 82.2% positive against 52.5% on test. Nobody targets a base rate or reports
+one. For ROC-AUC it also matters less than it looks — AUROC is rank-based, prevalence-invariant in
+expectation, and blind to calibration. **The covariate shift is what costs us, not the label
+frequency.**
+
+**What may and may not be changed.** The *test* set is what standardization buys; changing it breaks
+every comparison in §2.2. **Checkpoint selection is not standardized at all** and papers rarely state
+it, so val handling is ours to change, provided no test molecule informs selection and the choice is
+stated. That makes both §8.3 options legitimate. Switching to *random* scaffold splits for
+comparability is **withdrawn as an option** — it would move us away from §2.2's author-run rows,
+which are deterministic-split like ours.
+
+### 8.4 `021` — checkpoint selection is worth −0.017, and on BBBP val ANTI-ranks the arms (8/8 COMPLETED, 2026-09-01)
+
+Eight runs: BACE + BBBP × the three encodings + the flat SMILES twin, one seed, `001`'s recipe
+verbatim. `train.py` now scores the final checkpoint beside the val-selected one, so selection cost
+is a **paired, within-run** difference rather than an unknown.
+
+**Validity gate — passes.** `rich_levi` × {flat, graph} replicates two `001` seed-0 cells; all four
+land within −0.0110 to +0.0093. This sweep measures what `001` measured.
+
+**1. Within a run, val-selection helps.** Mean Δ(last − best-val) = **−0.0168**, range −0.0497 to
++0.0135, and 2 of 8 cells move by more than the test s.e. (`bbbp`/graph/`rich_atom_only` −0.0348,
+`bbbp`/graph/`terse_levi` −0.0497). Despite §8.3's population mismatch, `load_best_model_at_end` is
+doing real work and not selecting noise. **Keep it.**
+
+**2. Across runs, val ranks arms well on BACE and not at all on BBBP.** At seed 0 the BBBP ordering
+came back perfectly inverted:
+
+| BBBP arm | best val | test |
+|---|---:|---:|
+| `rich_atom_only` | **0.9766** ← best val | **0.6811** ← worst test |
+| flat | 0.9656 | 0.7083 |
+| `rich_levi` | 0.9591 | 0.6913 |
+| `terse_levi` | **0.9536** ← worst val | **0.7152** ← best test |
+
+**An earlier reading of that table — "val is ANTI-correlated with test on BBBP" — was drawn from this
+one seed and is withdrawn.** Measured over all three seeds (`021`+`023`+`024`, and `025` for HIV), the
+rank concordance between `best_val_score` and `test_roc_auc` across arms within a (task, seed) is:
+
+| task | concordant pairs | val range | test range |
+|---|---|---|---|
+| BACE | **15/18 = 83%** | 0.651–0.755 | 0.771–0.834 |
+| BBBP | **8/18 = 44%** | 0.944–0.982 | 0.681–0.715 |
+| HIV | 2/4 = 50% *(n too small)* | 0.789–0.812 | 0.701–0.755 |
+
+So BBBP is **uninformative, not inverted** — 44% is chance, and the seed-0 inversion was a
+small-sample artifact of four points. The mechanism is visible in the ranges: BBBP's val is
+saturated at 0.94–0.98 while its test sits at 0.70, so what varies on val there is noise, whereas
+BACE's val is unsaturated at 0.65–0.76 and tracks test well.
+
+**The operational rule.** Val is sound for choosing a **checkpoint within** a run everywhere, and
+sound for choosing **between configurations** on BACE (83%) but not on BBBP, where selection is
+effectively a coin flip. Hyperparameter tuning must therefore be selected on a set whose val is
+unsaturated; a BBBP val-selected winner carries no information and must not be reported as tuned.
+Nothing may be selected on test.
+
+**3. The encodings do not separate on either small set.**
+
+| BACE | | BBBP | |
+|---|---:|---|---:|
+| flat | 0.8321 | `terse_levi` | 0.7152 |
+| `rich_levi` | 0.8223 | flat | 0.7083 |
+| `terse_levi` | 0.7821 | `rich_levi` | 0.6913 |
+| `rich_atom_only` | 0.7792 | `rich_atom_only` | 0.6811 |
+
+Spreads 0.0529 and 0.0341. **The two tasks rank the encodings in opposite orders** — `rich_levi` is
+the best encoding on BACE and second-worst on BBBP — which is a noise signature, not a finding. And
+`terse_levi`'s BBBP lead over flat is **+0.0069**, while the *same run* moves **0.0497** depending on
+which of its own checkpoints is scored: the margin is seven times smaller than the run's internal
+checkpoint spread. **That is not a graph-arm win and must not be quoted as one.**
+
+The bias channel trained everywhere (`bias_norm` 6.27 → 39.90–51.61), so nothing here is a dead-channel
+artifact. `tied_pair_fraction` 0.005–0.024 — the tie-collapse trap is not firing.
+
+#### 8.4.1 The error term §8.3.1 used is the wrong one for comparing arms
+
+§8.3.1's Hanley–McNeil figures (±0.037 BACE, ±0.032 BBBP) bound how well a 152/204-molecule test set
+estimates the **population** AUROC. Every arm is scored on the **same** test set, so those sampling
+errors are common-mode and largely cancel in a difference; what does not cancel is training variance,
+measured at sd 0.021 / 0.013 in §2.6. At three seeds the s.e. of a difference of means is
+sd·√(2/3) = 0.017 / 0.011, so the resolvable gap is **0.034 on BACE and 0.021 on BBBP** — and `021`'s
+observed gaps (0.040 and 0.043 for `rich_levi` over the other two encodings on BACE; 0.034 across
+BBBP) sit just above them. Reading "not resolved, and seeds cannot help" off the ±0.037 was an error
+of the wrong denominator, and `023`/`024` follow from correcting it.
+
+**The ±0.037 has not gone away.** Three seeds buys the narrow claim — *better on this benchmark* —
+and every claim about molecules in general still carries the wider bar. Both must be written down
+together.
+
+#### 8.4.2 The Tier-B per-example report had never run — fixed 2026-09-01
+
+`per_example_path` was null on **every Tier-B run ever executed**: 0/18 on `001`, 0/3 on `019`, 0/8 on
+`021`, against 20/20 on Tier A's `014`. `write_per_example_report` read the Tier-B margin readout with
+the Tier-A exact-match unpacking — masking a `(N, 3)` prediction array with a `(N, 1536)` label mask —
+and raised `IndexError: boolean index did not match indexed array ... dimension is 3 but corresponding
+boolean dimension is 1536` on every call. The `try/except` that keeps an analysis failure from losing a
+training run turned that into a silent null, so it read as a nicety nobody had asked for rather than an
+instrument that had never worked.
+
+This is the same class of defect as §3.2.10 and it is now in §9 twice for a reason: **untested
+plumbing whose failure mode is a plausible-looking absence.**
+
+Fixed by giving Tier B its own unpacking (`tier_b_scores`), which writes `margin`, `y_true` and
+`y_score` per molecule. Two consequences worth the cost:
+
+* **Paired comparison becomes possible.** Two arms on a fixed test set have common-mode error; only a
+  per-molecule readout can cancel it. On HIV's 4112 test molecules that is a far sharper test than any
+  spread-vs-s.e. argument in §8.4.
+* **The report now checks itself.** The AUROC recomputed from the written rows must equal the one
+  `make_margin_metrics` reported from the same predictions; a mismatch means the rows are misaligned
+  with the dataset, which is exactly the failure that would otherwise look plausible.
+
+### 8.4.3 THE ENCODING VERDICT — 36 runs, three datasets, three seeds (2026-09-02)
+
+`021` + `023` + `024` (BACE/BBBP) and `025` (HIV), one recipe, one split, three seeds, 36/36
+COMPLETED. Test ROC-AUC, paired against the flat twin within each (dataset, seed):
+
+| encoding | BACE | BBBP | HIV | pooled (9 cells) | beats flat |
+|---|---:|---:|---:|---:|---:|
+| `rich_levi` | **−0.0061** | −0.0170 | +0.0044 | −0.0062 ± 0.0066 | 2/9 |
+| `rich_atom_only` | −0.0265 | −0.0100 | **+0.0159 ± 0.0042** | −0.0069 ± 0.0092 | **5/9** |
+| `terse_levi` | −0.0488 | **+0.0005** | −0.0232 | −0.0238 ± 0.0091 | 3/9 |
+
+**`terse_levi` is out.** It loses pooled at more than 2 s.e. and is worst on two of three datasets —
+the one encoding this campaign can rule out.
+
+**`rich_levi` and `rich_atom_only` are statistically tied**: +0.0006 ± 0.0091 head-to-head. The
+choice is therefore on tie-breakers, and `rich_atom_only` takes all of them — 5/9 cells beating flat
+against 2/9, best mean rank across the three datasets (1.67 vs 2.0), a third the artifact size, and
+**the only consistent-sign win over the flat arm anywhere in this campaign** (HIV, 3/3 seeds,
++0.0240 / +0.0100 / +0.0137). `rich_levi` by contrast is erratic on HIV (sd 0.038, sign flips).
+
+**That tie-break is RETIRED as of 2026-09-02 — see §8.4.4.** Every number in the table above was
+measured at `lr 3e-5`, which is below the flat arm's optimum, so the ranking is confounded with an
+under-tuned baseline. Both `rich_levi` and `rich_atom_only` are carried forward and re-measured;
+`terse_levi`'s elimination is the one verdict here that stands on its own.
+
+**The mechanism, which is why this is more than a coin flip.** The Levi transform DOUBLES every
+graph distance, and the newly-working per-example report (§8.4.2) measured **53% of BACE molecules
+touching the `max_spd 32` clamp** — Levi diameter p50 33.5, max 82. `rich_atom_only` carries no bond
+nodes, roughly halving the diameter and largely escaping the clamp. That predicts the clamp-avoiding
+encoding should do best on the largest and most structurally diverse set, which is what HIV shows.
+**This makes `max_spd` a first-class suspect for the whole Tier-B gap** and is the cheapest untested
+lead in the campaign — §9.
+
+#### 8.4.3.1 Two claims, and the difference between them
+
+Conditioning matters here and the two numbers must never be conflated:
+
+* **On the benchmark as a fixed test set** — mean ± s.e. over seeds. `rich_atom_only` on HIV is
+  +0.0159 ± 0.0042, i.e. 3.8 s.e. **This is exactly the quantity §2.2's anchors publish** —
+  InstructMol reports mean ± std over three seeds on one deterministic scaffold split — so a win of
+  this kind is comparable to theirs on equal terms.
+* **Generalising to new molecules** — the paired per-molecule bootstrap (§8.4.2). Here **nothing is
+  resolved**: every one of the 14 per-cell 95% CIs spans 0, and `rich_atom_only`'s three HIV seeds
+  Fisher-combine to **p = 0.17**.
+
+The reason the 4112-molecule test set does not rescue this is §8.3.1's: HIV is 3.2% positive, so
+AUROC precision is set by the ~132 actives, not the 4112 molecules. **An earlier expectation that
+HIV's larger test set would make the paired test far sharper was wrong** — its paired CI is ±0.047
+against BBBP's ±0.050 on 204 molecules. Effective n is ~132 vs ~107.
+
+Both numbers get reported. The bootstrap is a stricter bar than the field applies to itself, and it
+should not be mistaken for our result being weaker than the anchors it is compared with.
+
+### 8.4.4 EVERY TIER-B NUMBER SO FAR WAS MEASURED AT THE WRONG LEARNING RATE (2026-09-02)
+
+The whole Tier-B campaign — `001`, `021`, `023`, `024`, `025`, and therefore §2.6 and §8.4.3 — ran at
+`lr 3e-5`. That is measurably below the flat arm's optimum. Varying nothing but `lr` on BACE/flat:
+
+| `lr` | best val | test ROC-AUC |
+|---|---:|---:|
+| 1e-5 | 0.7377 | 0.7821 *(1 seed)* |
+| 3e-5 | 0.7497 ± 0.0084 | 0.8268 ± 0.0105 *(3 seeds, §8.4.3)* |
+| 1e-4 | **0.7689** | **0.8594** *(1 seed)* |
+
+Monotone in val **and** test, +0.033 over the three-seed baseline (≈3 seed-sd), and the 1e-4 val
+curve plateaus at ~0.760 from step 1050 with no decay — converged, not diverging. So the optimum is
+at or above 1e-4 and the campaign has been reading the left-hand slope.
+
+**The corollary cuts against us and is recorded here for that reason.** flat/BACE at `lr 1e-4`
+(0.8594) beats **every** graph number in §8.4.3 by 2.8–8.0 points. §8.4.3's encoding ranking is
+therefore partly an artifact of a handicapped baseline, and none of it survives unless it is
+reproduced at a properly tuned `lr`. The same doubt attaches to §2.6's gate-B1 failure, which was
+measured on the same slope.
+
+**What replaced the abandoned grid.** The superseded `026`/`027` swept `lr` {1e-5, 3e-5, 1e-4} ×
+`bias_lr` {5e-3, 1e-2, 2e-2}. Both spans sit inside the ±0.010 seed noise, so 60 runs would have
+resolved nothing; they were cancelled at 2/60 and their records discarded, the two BACE/flat rows
+above being the whole of what they produced. The replacement spends the budget on a step large
+enough to move the result further than a seed draw can: **`lr 3e-4`, `lora_r` {16, 32}, three arms
+(`rich_levi`, `rich_atom_only`, flat), three datasets, one seed — 18 runs.**
+
+**It is a screen, not a measurement, and the two limits are load-bearing:**
+
+* One seed against a measured seed-sd of 0.0105 (BACE), 0.0105 (BBBP) and up to 0.038 (HIV) means
+  nothing below ~0.02 on BACE/BBBP or ~0.08 on HIV is separable from a seed draw. **Whatever wins is
+  re-run at three seeds before it is quoted.**
+* One `lr` point per arm cannot tell a peak from a slope. If 3e-4 lands near the graph arm's optimum
+  and past flat's, the graph arm wins for a reason that has nothing to do with structure. Flat was
+  still climbing at 1e-4 and its peak is unlocated, so the risk is live in both directions and a
+  second `lr` is the first follow-up either outcome needs.
+
+`lora_r` is new to the campaign, applies identically to both arms, and is safe as an axis:
+`lora_alpha` is derived as `2 * lora_r` (`config.py:136`), so the alpha/r scaling is constant and the
+axis is adapter capacity rather than an unintended change of update scale.
+
+#### 8.4.5 THE SCREEN — BACE + BBBP, 12/12 (`026`, job 135925, 2026-09-02)
+
+Test ROC-AUC at `lr 3e-4`, one seed, against each cell's own `lr 3e-5` three-seed baseline. The
+`vs sd` column is the delta in units of that dataset's measured seed-sd, and anything under 2× is
+not separable from a seed draw.
+
+| task | arm | encoding | r | val | test | Δ vs 3e-5 | vs sd | peak |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| bace | flat | — | 16 | 0.7341 | **0.8598** | +0.0329 | +3.1× | 0.32 |
+| bace | flat | — | 32 | **0.7450** | 0.8111 | −0.0157 | −1.5× | 0.46 |
+| bace | graph | `rich_levi` | 16 | 0.7096 | 0.8220 | +0.0012 | +0.1× | 0.50 |
+| bace | graph | `rich_levi` | 32 | 0.7261 | 0.8027 | −0.0181 | −1.7× | 0.36 |
+| bace | graph | `rich_atom_only` | 16 | 0.7312 | 0.7986 | −0.0017 | −0.2× | 0.54 |
+| bace | graph | `rich_atom_only` | 32 | 0.7304 | 0.8246 | +0.0243 | +2.3× | 0.82 |
+| bbbp | flat | — | 16 | 0.9653 | 0.7008 | −0.0009 | −0.1× | 0.36 |
+| bbbp | flat | — | 32 | 0.9623 | 0.6382 | −0.0635 | −6.1× | 0.13 |
+| bbbp | graph | `rich_levi` | 16 | 0.9746 | **0.7306** | +0.0459 | +4.4× | 0.28 |
+| bbbp | graph | `rich_levi` | 32 | 0.9682 | 0.7150 | +0.0303 | +2.9× | 0.21 |
+| bbbp | graph | `rich_atom_only` | 16 | 0.9788 | 0.7032 | +0.0115 | +1.1× | 0.15 |
+| bbbp | graph | `rich_atom_only` | 32 | 0.9613 | 0.6772 | −0.0145 | −1.4× | 0.18 |
+
+**The result splits by dataset and the two halves point opposite ways.**
+
+* **BACE: the flat arm wins, and the higher lr widened the gap.** Best-vs-best is flat 0.8598 against
+  graph 0.8246, −0.035 for the graph arm. Going 3e-5 → 3e-4 at r16 moved flat **+0.0329** and the
+  graph arms **+0.0012** / **−0.0017** — the learning rate the campaign was missing belonged to the
+  baseline. The BACE gap therefore widens from +0.0061 at 3e-5 (§8.4.3) to **+0.0378** at 3e-4.
+* **BBBP: `rich_levi` wins by +0.0298 (2.8 seed-sd) at matched r16**, 0.7306 against flat's 0.7008,
+  and it is the best BBBP number in the campaign. Both `rich_levi` cells beat both flat cells.
+
+**`rich_levi` is the better encoding at this learning rate, 3 of 4 head-to-head cells** (BACE r16
++0.0234, BBBP r16 +0.0274, BBBP r32 +0.0378; BACE r32 −0.0219). §8.4.3's tie-break toward
+`rich_atom_only` was made at an lr that suppressed the difference and does not survive; the
+pre-registered prediction that `rich × levi` wins (§3.2, 2026-08-29) is the one that does.
+
+**THE BBBP WIN IS FRAGILE AND MUST NOT BE QUOTED WITHOUT THIS.** It depends on checkpoint selection
+in a way flat's number does not:
+
+| BBBP, r16 | best-val checkpoint | last checkpoint | selection gain |
+|---|---:|---:|---:|
+| flat | 0.7008 | 0.7003 | +0.0005 |
+| graph `rich_levi` | 0.7306 | 0.6883 | **+0.0423** |
+
+The graph arm's advantage (+0.0298) is *smaller than its own selection gain*, and on a last-vs-last
+comparison **the sign flips and flat wins by +0.0120**. The selection is legitimate — `load_best_model_at_end`
+on val, applied identically to both arms — but BBBP's val saturates at 0.96–0.98 against a test of
+0.70 and ranks arms at 44%, i.e. chance (§8.4). So this is an early spike picked by a near-blind
+instrument, and it needs the three-seed re-run before it counts as anything.
+
+**`lora_r` 32 is rejected: negative in 5 of 6 cells** (only BACE `rich_atom_only` gains, +0.0260).
+On flat it is severe — −0.0486 BACE, −0.0626 BBBP — and BBBP/flat/r32 peaks at 13% of training and
+decays, the too-high-effective-lr signature. Holding `lora_alpha = 2r` fixes the scaling but doubling
+the rank still doubles the parameter count taking 3e-4 steps, so r32 is partly a further lr increase
+rather than a clean capacity axis. **r16 is the setting; the axis is closed.**
+
+**The pre-registered selection rule fires against us and is reported as promised.** Selecting on BACE
+val picks **flat r32** (val 0.7450) → test 0.8111, while the test-best cell is flat r16 (test 0.8598,
+val 0.7341) — a **0.049** selection cost. BACE val mis-ranks *within* an arm even though it ranks
+*across* arms at 83%; cross-arm concordance does not transfer to within-arm choices, and §8.4's
+concordance figure should not be read as licensing this use.
+
+**Status: one seed per cell.** Nothing here is a result yet. The BBBP `rich_levi` r16 cell is the one
+worth three seeds; the BACE conclusion (flat ahead, gap widened) is the more robust of the two
+because it runs with the +3.1σ flat improvement rather than against it.
+
 **M1's round-trip test is the highest-value test in the plan.** An encoding bug — a dropped aromatic
 flag, a bond mapped to the wrong Levi node — is otherwise completely silent: the model trains, the
 loss falls, the number is just mediocre, and six weeks later it looks like an architectural
@@ -1524,6 +1884,12 @@ nothing runs on the login node except M0's download and stats.
 
 * **Framing.** Reported as "GTLM on MoleculeNet", the honest outcome (lose to Uni-Mol, beat our flat
   twin) reads as failure. §0 and §2.5 exist to fix the frame in advance.
+* **UNTESTED, AND NOW THE CHEAPEST LEAD IN THE CAMPAIGN — the `max_spd` clamp.** §8.4.3 measured 53%
+  of BACE molecules touching `max_spd 32` (Levi diameter p50 33.5, max 82), and the encoding that
+  halves the diameter by dropping bond nodes is the only one that ever beat the flat arm. The clamp
+  has never been varied on Tier B. If it is the binding constraint, every Tier-B graph number in this
+  document is measuring a truncation artifact rather than the architecture. One sweep at
+  `max_spd` ∈ {32, 64} on the chosen encoding settles it.
 * **RESOLVED — Tier A's test split was not molecule-disjoint** (§3.2.10). Fixed 2026-08-31
   (§3.2.10.1) and fully re-measured 2026-09-01 (`014`, §3.2.5): the verdicts held and **every graph
   margin grew**. Kept in this list because the *lesson* outlived the defect. Tier-A generation had
@@ -1576,9 +1942,20 @@ nothing runs on the login node except M0's download and stats.
 * **Scaffold-split variance.** Small sets swing by several AUROC points across seeds. ≥3 seeds,
   mean ± sd, no per-dataset cherry-picking — the survey's instability finding (§2.4) is the
   evidence for this.
+* **The test sets are too small to resolve the effects this campaign chases** (§8.3.1, measured
+  2026-09-01). Test ROC-AUC carries a Hanley–McNeil s.e. of **±0.037 on BACE and ±0.032 on BBBP**
+  against arm gaps of 0.02–0.05. Paired contrasts on a shared test set are tighter than that, but
+  the *validation* split is the same size and is what selects the checkpoint. **This is a ceiling on
+  the instrument, not on the model, and no amount of compute moves it** — §8.2.1 is the direct
+  demonstration. Treat any single-set Tier-B difference under ~0.03 as unresolved, and prefer HIV
+  (±0.024) for claims that have to carry weight.
 * **Anchor incomparability.** InstructMol is 7B with a pretrained graph encoder; Uni-Mol is 3D +
   10M-molecule pretraining; Mol-LLM is a multi-task generalist. Almost all are fine-tuned per
-  dataset (§2.1). **Our matched control is our own flat twin.**
+  dataset (§2.1). **Our matched control is our own flat twin.** Two further limits measured
+  2026-09-01: §2.2's four author-run rows all come from **one paper**, so gates B2 and B3 share a
+  single point of failure; and the copied specialist rows mostly use `pretrain-gnns`' scaffold split,
+  which differs from ours by the `include_chirality` flag and moves 8.1% of BACE and 5.9% of BBBP
+  molecules between splits (§8.3.1). Both are second-order against the s.e. above.
 * **Our own arms are not equally tuned** (§3.2.5 disclosure 2). Until a flat `lr` sweep is run, the
   claim is "beats our flat twin", never "beats a fully-tuned baseline".
 * **Levi changing the spectrum** — mitigated by the `atom_only` arm being in M4, not a follow-up.
