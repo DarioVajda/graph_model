@@ -1,0 +1,124 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 030 — three-seeding the two cells the `026` screen put weight on.
+  // 8 runs (2 datasets x 2 arms x seeds {1, 2}); seed 0 is `026`'s and is pooled.
+  //
+  // WHY THIS EXISTS. `026` was declared a SCREEN, not a measurement — one seed
+  // against a measured seed-sd of 0.0105 on both datasets. Two of its cells are
+  // now carrying claims, and neither is quotable on one seed:
+  //
+  //     bace  flat  r16   val 0.7341   test 0.8598   last 0.8449
+  //     bace  graph r16   val 0.7096   test 0.8220   last 0.7976   rich_levi
+  //     bbbp  flat  r16   val 0.9653   test 0.7008   last 0.7003
+  //     bbbp  graph r16   val 0.9746   test 0.7306   last 0.6883   rich_levi
+  //
+  //   * THE BBBP WIN. Graph leads flat by +0.0298, i.e. 2.8 seed-sd. On one seed
+  //     that is a lead, not a result.
+  //   * THE WIDENED BACE LOSS. Flat leads graph by +0.0378, against +0.0061 at
+  //     `lr 3e-5` (§8.4.3). The claim that tuning WIDENED the gap is the more
+  //     consequential of the two and it rests on a single draw per cell.
+  //
+  //   Both get three seeds or neither gets quoted. Confirming the loss costs the
+  //   same four runs as confirming the win and is run in the same sweep, because a
+  //   design that re-measures only the favourable cell is not a measurement.
+  //
+  // WHAT THREE SEEDS FIXES AND WHAT IT DOES NOT. It fixes seed noise. It does not
+  // fix either of the two things already known to be wrong with the BBBP cell, and
+  // those must be reported alongside the mean:
+  //
+  //   * SELECTION. BBBP's val->test rank concordance is 44%, i.e. chance, because
+  //     val saturates at 0.94-0.98 against a test of 0.70 (§8.4). The graph cell's
+  //     val-selected score beats its own last-checkpoint score by +0.0423; flat's
+  //     gain is +0.0005. Nearly the whole +0.0298 margin is selection.
+  //   * THE SIGN FLIPS LAST-vs-LAST. On final checkpoints flat leads by +0.0120.
+  //     A margin that exists only under a selection rule that BBBP's own
+  //     concordance says is coin-flipping is not an architectural result.
+  //
+  //   So the report from this config is mean +/- s.e. over three seeds for BOTH
+  //   `test_roc_auc` and `test_roc_auc_last`, and the second number is not
+  //   optional. If the win survives only under val selection it is reported as
+  //   what it is. BACE, whose concordance is 83%, has no such problem — and there
+  //   flat leads on both measures (+0.0378 selected, +0.0473 last).
+  //
+  // THE `bias_lr` CONFOUND, STATED BECAUSE THREE SEEDS DO NOT REMOVE IT. Every
+  // graph cell from `026` onward carries `bias_lr` 1e-2 while the §8.4.3 baselines
+  // carry 5e-3, so any graph "delta against the 3e-5 baseline" moves two knobs at
+  // once and stays ambiguous however many seeds are run. The flat deltas are clean
+  // — the flat arm instantiates no bias parameters, so `bias_lr` is inert there.
+  //   What this config measures IS clean: graph against flat at matched `lr`,
+  //   matched `lora_r`, matched budget and matched seed, within one sweep.
+  //   Separating `lr` from `bias_lr` needs its own arm at 5e-3 and is not folded
+  //   in here, because adding a third arm would change what these eight runs mean.
+  //
+  // WHY `rich_levi` REPRESENTS THE GRAPH ARM. It won the `026` screen at r16 on
+  // both datasets — bace 0.8220 against `rich_atom_only`'s 0.7986, bbbp 0.7306
+  // against 0.7032. §8.4.3's tie-break toward `rich_atom_only` was retired for
+  // exactly this reason (§8.4.4). `rich_atom_only` stays at one seed; it is not
+  // in contention on either dataset at this learning rate.
+  //
+  // WHY SEEDS {1, 2} AND NOT {0, 1, 2}. `data_seed` is pinned at 0, so the split
+  // is fixed and `seed` varies training only. Every other field below restates
+  // `026` exactly, which makes `026`'s seed-0 cells the third member of each
+  // triple. This is the same pooling `021`/`023`/`024` used for the §8.4.3
+  // baselines, and it saves four runs that would reproduce numbers already held.
+  //
+  // FAIRNESS. `lr 3e-4`, `lora_r` 16, same budget, same split, same seeds, same
+  // selection rule on both arms. `bias_lr` is the one declared asymmetry and it is
+  // inert on flat. Both arms are re-measured; neither is carried forward on the
+  // screen's authority.
+  //
+  // BUDGET / HARDWARE. `026` unchanged: 40 epochs = 1480 steps, `eval_steps` 50.
+  // B200/B300, `max_concurrent` 8, one wave. 16-20 min a run measured;
+  // 04:00:00 keeps the 2x margin over the ~2.8x slowdown when tasks share a node.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/030_three_seed_confirm.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "030_three_seed_confirm",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 8,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  // The two cells under test, on both datasets. `encoding` and `bias_lr` on the
+  // flat cell are inert and pinned to the campaign default so the record stays
+  // comparable rather than carrying a meaningless swept value.
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2 },
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3 }
+  ],
+
+  // Seed 0 lives in `026`; these two complete the triple.
+  "seed": [1, 2],
+  "data_seed": 0,
+
+  "question_node": "on",
+
+  // `026` from here down, unchanged, so the pooling above is exact.
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

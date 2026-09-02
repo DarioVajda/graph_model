@@ -1,0 +1,126 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 029 — the `max_spd` clamp ablation. 4 runs (2 datasets x `max_spd` {32, 64},
+  // `rich_levi`, `lora_r` 16, one seed).
+  //
+  // WHY THIS EXISTS. §9 has carried `max_spd` as "the cheapest untested lead in
+  // the campaign" since §8.4.2's per-example report started working. The clamp has
+  // never been varied on Tier B, and the standing worry is that if it binds, every
+  // Tier-B graph number measures a truncation artifact rather than the
+  // architecture. Four twenty-minute runs settle it, so it gets settled.
+  //
+  // THE ARITHMETIC CEILING, MEASURED — AND IT IS SMALLER THAN §8.4.3 IMPLIES.
+  // `026`'s per-example reports carry `clamped_fraction`, so the ceiling on what
+  // raising the clamp CAN do is now a measurement rather than an assumption:
+  //
+  //                        molecules touching   mean fraction of    max Levi   above
+  //                          the clamp          PAIRS clamped       diameter    64
+  //     bace rich_levi          53.3%              2.56%               82      0.66%
+  //     bbbp rich_levi          24.5%              1.20%               72      0.49%
+  //     bace rich_atom_only      0.7%              0.045%              41      0
+  //     bbbp rich_atom_only      0.5%              0.006%              36      0
+  //
+  //   §8.4.3 argues the mechanism from the first column — "53% of BACE molecules
+  //   touch the clamp" — and that overstates it. The bias is a per-PAIR lookup, so
+  //   the second column is the quantity that governs: at `max_spd` 64 the model
+  //   can see a different bias on 2.6% of BACE pairs and 1.2% of BBBP pairs, and
+  //   on nothing else. If the clamp is the binding constraint on Tier B, the whole
+  //   effect has to come out of that 2.6%. That is a low prior, and it is written
+  //   here before the runs rather than after them.
+  //
+  //   The direction of §8.4.3's mechanism story does survive: `rich_atom_only`
+  //   really does escape the clamp almost entirely (0.045% against 2.56%), which
+  //   is a 57x differential. Only the magnitude was overstated.
+  //
+  // WHY {32, 64} AND NOT {32, 64, 128}. 64 already covers the distribution —
+  // 0.66% of BACE and 0.49% of BBBP molecules have a Levi diameter above it, and
+  // the maxima are 82 and 72. A third level would buy a fraction of a percent of a
+  // fraction of a percent. If 64 moves nothing, 128 cannot.
+  //
+  // WHY `rich_levi` AND WHY r16. `rich_levi` is the encoding the clamp actually
+  // bites (2.56% against `rich_atom_only`'s 0.045%) and it is the one that won the
+  // `026` screen head-to-head, 3 of 4 cells at r16. `lora_r` 32 is closed — `026`
+  // rejected it in 5 of 6 cells and both HIV r32 graph runs collapsed.
+  //
+  // NO FLAT ARM, AND THIS IS NOT AN ARM COMPARISON. `max_spd` sizes the SPD bias
+  // table (`bias.py:101`), which the flat arm does not instantiate — a flat cell
+  // here would be a duplicate of `026`'s, not a control. This is a graph-INTERNAL
+  // ablation: it asks whether the graph arm has been handicapped by its own
+  // hyperparameter, and it cannot change any graph-vs-flat number except by
+  // replacing the graph configuration, at which point the flat arm is re-run
+  // alongside it as `028` does. The `026` flat cells at the same lr, seed and
+  // budget remain the reference for reading these four numbers in context.
+  //
+  // THE `max_spd` 32 CELL IS A DELIBERATE REPLICATE. It restates `026`'s
+  // `rich_levi` r16 configuration exactly — same lr, `bias_lr`, budget, split,
+  // seed, selection rule — so the comparison against 64 is paired within one
+  // sweep rather than borrowed across two. It doubles as a reproducibility check
+  // on `026`: if the 32 cell does not land near 0.8220 (bace) / 0.7306 (bbbp),
+  // that is worth knowing on its own.
+  //
+  // HIV IS NOT HERE. `028` has not yet settled the HIV learning rate, and running
+  // the clamp at a rate that is about to change would produce a number that has to
+  // be thrown away. If 32 -> 64 moves BACE or BBBP, HIV follows at whatever rate
+  // `028` leaves standing; if it moves neither, HIV is not worth the 3 h a run.
+  //
+  // WHAT ONE SEED CAN SETTLE. Against a measured seed-sd of 0.0105 on both
+  // datasets, nothing under ~0.02 here separates from a seed draw. That is enough
+  // to kill the hypothesis — a clamp that binds on a third of the graph arm's
+  // Tier-B deficit would show far more than 0.02 — but not enough to confirm a
+  // small positive. A move that clears the gate gets three seeds before it is
+  // quoted; a null result stands as a null result and §9's lead is closed.
+  //
+  // BUDGET / HARDWARE. `026`'s recipe unchanged: 40 epochs = 1480 steps,
+  // `eval_steps` 50. B200/B300, `max_concurrent` 4, one wave. `023`/`024` measured
+  // 16-20 min a run; 04:00:00 keeps the 2x margin `007`'s header argues for.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/029_max_spd_clamp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "029_max_spd_clamp",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  // The graph arm alone — see the header on why a flat cell would be a duplicate
+  // rather than a control.
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2 }
+  ],
+
+  // The one axis under test.
+  "max_spd": [32, 64],
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+
+  // `026`'s recipe from here down, so the 32 cell is a same-configuration
+  // replicate of `026`'s `rich_levi` r16 result on each dataset.
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs"
+}
