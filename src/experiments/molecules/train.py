@@ -11,6 +11,7 @@ Speed and memory are first-class results here, not diagnostics: M2's stated job
 s/it with a measured one.
 """
 
+import glob
 import os
 
 import torch
@@ -182,22 +183,80 @@ def _answer_stats(stats):
             "degenerate_test_split": len(answers) < 2}
 
 
-def _per_example(trainer, test_dataset, cfg, run_name, runs_jsonl):
+def _per_example(trainer, test_dataset, cfg, run_name, runs_jsonl, yes_id=None):
     """Write the per-example error/geometry report next to the sweep's records.
 
     Wrapped in a try/except on purpose: this is *analysis*, and a failure here
     must not lose a training run that already cost GPU-hours. A missing report is
     visible in the record as a null; a crashed job at the last line is not.
+
+    That safety net also hid a real defect for the whole campaign: the report had
+    never once succeeded on Tier B (0/18 on `001`, 0/3 on `019`, 0/8 on `021`,
+    against 20/20 on Tier A's `014`), because it read the margin readout with the
+    exact-match unpacking and raised `IndexError` every time. The null looked like
+    an absent nicety rather than an untested instrument. `yes_id` is what Tier B
+    needs to unpack its own predictions; passing it is what fixed that.
     """
     try:
         out_dir = os.path.join(os.path.dirname(runs_jsonl) or ".", "per_example")
         os.makedirs(out_dir, exist_ok=True)
         return write_per_example_report(
-            trainer, test_dataset, cfg, os.path.join(out_dir, f"{run_name}.jsonl"))
+            trainer, test_dataset, cfg, os.path.join(out_dir, f"{run_name}.jsonl"),
+            yes_id=yes_id)
     except Exception as exc:                                  # noqa: BLE001
         print(f"[analysis] per-example report failed ({type(exc).__name__}: {exc}); "
               "the training result above is unaffected.")
         return {"per_example_path": None}
+
+
+def _score_last_checkpoint(trainer, test_dataset, best_step):
+    """Test score of the FINAL checkpoint, recorded beside the val-selected one.
+
+    `load_best_model_at_end` reports whichever checkpoint scored best on *val*,
+    and PLAN.md §8.3 measured that val is a different **population** from test on
+    every Tier-B set — different chemical series, drawn from a disjoint slice of
+    the source CSV, and on BBBP saturating by epoch 2. The headline therefore
+    rests on a selection signal shown to be unreliable, and nothing in the record
+    says what that selection is worth. This turns it into a number: one extra
+    evaluation pass, no extra training, no protocol change to what is reported.
+
+    `save_total_limit=2` with `load_best_model_at_end=True` keeps the best
+    checkpoint *and* the most recent one, so both are on disk. When the best IS
+    the most recent there is only one, `last_is_best` says so, and the last score
+    is left null rather than restated — a duplicated number would otherwise look
+    like an independent measurement in any table that averages these.
+
+    MUST be called after every field derived from the best model has been
+    captured: it swaps the weights in place and does not put them back.
+    """
+    out = {"test_roc_auc_last": None, "test_accuracy_last": None,
+           "last_checkpoint_step": None, "best_checkpoint_step": best_step,
+           "last_is_best": None}
+    try:
+        found = glob.glob(os.path.join(trainer.args.output_dir, "checkpoint-*"))
+        steps = sorted(int(os.path.basename(p).rsplit("-", 1)[1]) for p in found)
+        if not steps:
+            print("[last-ckpt] no checkpoint directories on disk; skipping")
+            return out
+        last = steps[-1]
+        out["last_checkpoint_step"] = last
+        out["last_is_best"] = (last == best_step)
+        if last == best_step:
+            print(f"[last-ckpt] the best checkpoint IS the last ({last}); "
+                  "scores coincide, leaving test_roc_auc_last null")
+            return out
+        print(f"[last-ckpt] scoring checkpoint-{last} (best was {best_step}) ...")
+        trainer._load_from_checkpoint(
+            os.path.join(trainer.args.output_dir, f"checkpoint-{last}"))
+        m = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
+        out["test_roc_auc_last"] = m.get("test_roc_auc")
+        out["test_accuracy_last"] = m.get("test_em_accuracy")
+    except Exception as exc:                                  # noqa: BLE001
+        # Same contract as `_per_example`: this is measurement *about* the run,
+        # and it must never lose a run that already cost GPU-hours.
+        print(f"[last-ckpt] failed ({type(exc).__name__}: {exc}); "
+              "the training result above is unaffected.")
+    return out
 
 
 def _bias_init_fingerprint(model):
@@ -229,6 +288,10 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         os.environ["WANDB_PROJECT"] = cfg.wandb_project
 
     metric, compute_metrics, preprocess_logits = _scoring(cfg, tokenizer)
+    # The per-example report unpacks Tier B's margin readout itself, so it needs the
+    # same `yes` id the metric uses. Resolved once, here, rather than re-derived in
+    # the analysis path where it could drift from what the scorer actually used.
+    yes_id = answer_token_ids(tokenizer)[0] if cfg.tier() == "B" else None
 
     train_dataset, val_dataset, test_dataset = load_data(cfg)
     for name, ds in (("train", train_dataset), ("val", val_dataset), ("test", test_dataset)):
@@ -309,6 +372,20 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
     test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
     perf = step_mem.summary()
 
+    # ORDER MATTERS BELOW. Everything that describes the BEST model is captured
+    # first, because `_score_last_checkpoint` loads the final checkpoint into the
+    # live model in place and does not restore it. Inlining any of these into the
+    # results literal underneath would silently re-attribute them to the last
+    # checkpoint instead — `bias_norm_final` and the per-example report both read
+    # the model, not the metrics.
+    bias_norm_final = _bias_init_fingerprint(model)
+    per_example = _per_example(trainer, test_dataset, cfg, internal_run_name, runs_jsonl,
+                               yes_id=yes_id)
+    best_ckpt = trainer.state.best_model_checkpoint
+    last_checkpoint = _score_last_checkpoint(
+        trainer, test_dataset,
+        int(best_ckpt.rsplit("-", 1)[1]) if best_ckpt else None)
+
     results = {
         # Tier A's headline is exact match; Tier B's is ROC-AUC. Both are written
         # so `sweep.report` can aggregate either without a per-tier special case;
@@ -334,17 +411,21 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         "block_sparsity": density.get("block_sparsity_mean") if density else None,
         # Null-gate evidence (see `_bias_init_fingerprint`).
         "bias_norm_init": bias_norm_init,
-        "bias_norm_final": _bias_init_fingerprint(model),
+        "bias_norm_final": bias_norm_final,
         # Is the headline a ceiling or an interruption? See `_convergence`.
         "eval_curve": training_curve,
         **_convergence(training_curve, metric),
         # What any score has to beat before it means anything. See `_answer_stats`.
         **_answer_stats(load_dataset_stats(cfg)),
         # Is a mistake explained by the molecule's width? See `analysis.py`.
-        **_per_example(trainer, test_dataset, cfg, internal_run_name, runs_jsonl),
+        **per_example,
+        # What is checkpoint selection worth, given §8.3? See `_score_last_checkpoint`.
+        **last_checkpoint,
     }
     headline = (results["test_accuracy"] if cfg.tier() == "A" else results["test_roc_auc"])
+    last = results["test_accuracy_last"] if cfg.tier() == "A" else results["test_roc_auc_last"]
     print(f"[results] tier {cfg.tier()} headline={headline} "
+          f"last-ckpt={last if last is not None else 'same as best'} "
           f"(best-val {metric}={results['best_val_score']}) "
           f"runtime={results['train_runtime_s']}s peak={results['peak_gb']}GB "
           f"bias_norm {results['bias_norm_init']:.4g} -> {results['bias_norm_final']:.4g}")

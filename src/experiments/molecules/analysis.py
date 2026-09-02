@@ -93,16 +93,52 @@ def per_example_correct(preds, labels):
     return out
 
 
-def write_per_example_report(trainer, dataset, cfg, out_path):
+def tier_b_scores(predictions, yes_id):
+    """Per-example ``(margin, y_true, y_score)`` from the Tier-B readout.
+
+    `make_margin_preprocessor` reduces the (B, L, V) logits to
+    ``(logit_yes, logit_no, true_token_id)`` per example, so the Tier-A
+    exact-match path — which masks predictions with the (N, L) label mask —
+    cannot read this array at all: it raises `IndexError` on a 3-wide row against
+    a 1536-wide mask. Tier B needs its own unpacking, and it is the more useful
+    one. The margin is the exact quantity the reported AUROC is computed from, so
+    writing it per molecule is what makes a **paired** comparison between two arms
+    possible: on a fixed test set two arms' AUROC errors are common-mode, and only
+    a per-molecule readout can cancel them.
+    """
+    preds = np.asarray(predictions, dtype=np.float64)
+    if preds.ndim != 2 or preds.shape[1] != 3:
+        raise ValueError(
+            "the Tier-B per-example readout expects the margin preprocessor's "
+            f"(N, 3) output, got {preds.shape}.")
+    margin = preds[:, 0] - preds[:, 1]
+    y_true = (preds[:, 2] == yes_id).astype(int)
+    y_score = 1.0 / (1.0 + np.exp(-margin))
+    return margin, y_true, y_score
+
+
+def write_per_example_report(trainer, dataset, cfg, out_path, yes_id=None):
     """Run the test set once more, and write one JSON line per example.
 
-    Returns the summary dict that also goes into the run record. The accuracy
-    recomputed here is asserted against the trainer's own, because a silent
+    Returns the summary dict that also goes into the run record. The score
+    recomputed here is checked against the trainer's own, because a silent
     misalignment between predictions and dataset rows would make every geometry
     conclusion below it wrong in a way that looks entirely plausible.
+
+    `yes_id` is required on Tier B and ignored on Tier A — the two tiers report
+    different things (a token span vs a logit margin) and so unpack differently.
     """
     output = trainer.predict(dataset, metric_key_prefix="pe")
-    correct = per_example_correct(output.predictions, output.label_ids)
+
+    tier_b = cfg.tier() == "B"
+    if tier_b:
+        if yes_id is None:
+            raise ValueError("a Tier-B per-example report needs `yes_id`.")
+        margin, y_true, y_score = tier_b_scores(output.predictions, yes_id)
+        correct = [bool(p == t) for p, t in zip((y_score >= 0.5).astype(int), y_true)]
+    else:
+        margin = y_true = y_score = None
+        correct = per_example_correct(output.predictions, output.label_ids)
 
     rows = []
     for i, ok in enumerate(correct):
@@ -111,6 +147,12 @@ def write_per_example_report(trainer, dataset, cfg, out_path):
         item = dataset[i]
         spd = item.get("shortest_path_dists")
         row = {"i": i, "correct": ok}
+        if tier_b:
+            # The three columns a paired test needs. `margin` is pre-sigmoid and
+            # is what `n_distinct` / `tied_pair_fraction` are computed on, so it
+            # is written raw rather than only as the squashed score.
+            row.update(margin=float(margin[i]), y_true=int(y_true[i]),
+                       y_score=float(y_score[i]))
         if spd is not None:
             row.update(geometry_of(spd))
             row["clamped_fraction"] = clamped_fraction(spd, cfg.max_spd)
@@ -128,9 +170,22 @@ def write_per_example_report(trainer, dataset, cfg, out_path):
     acc = float(np.mean([r["correct"] for r in rows])) if rows else 0.0
     diam = [r["diameter"] for r in rows if "diameter" in r]
     clamp = [r["clamped_fraction"] for r in rows if "clamped_fraction" in r]
+
+    # On Tier B the report can check itself: the AUROC recomputed from the rows
+    # just written must equal the one `make_margin_metrics` reported from the same
+    # predictions. If they disagree, the rows are misaligned with the dataset and
+    # every per-molecule conclusion drawn from this file is void — which is
+    # exactly the failure that would otherwise look entirely plausible.
+    per_example_roc_auc = None
+    if tier_b and rows and len(np.unique([r["y_true"] for r in rows])) == 2:
+        from sklearn.metrics import roc_auc_score
+        per_example_roc_auc = float(roc_auc_score(
+            [r["y_true"] for r in rows], [r["y_score"] for r in rows]))
+
     summary = {
         "per_example_path": out_path,
         "per_example_accuracy": acc,
+        "per_example_roc_auc": per_example_roc_auc,
         "diameter_p50": float(np.median(diam)) if diam else None,
         "diameter_p90": float(np.percentile(diam, 90)) if diam else None,
         "diameter_max": int(max(diam)) if diam else None,

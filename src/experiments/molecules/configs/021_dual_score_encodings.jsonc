@@ -1,0 +1,125 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 021 — the three GTLM encodings against the flat twin on BACE + BBBP, with
+  // BOTH the val-selected and the last-checkpoint test score recorded. 8 runs,
+  // one seed. Seeds 1-2 follow only if the margins warrant them (below).
+  //
+  // TWO QUESTIONS, AND THEY HAVE VERY DIFFERENT STATISTICAL POWER. Read the
+  // second one with the first one's caveat firmly in mind.
+  //
+  // 1. WHAT IS CHECKPOINT SELECTION WORTH? This is the well-powered question and
+  //    the reason the sweep is cheap. §8.3 measured that Tier-B val and test are
+  //    different populations — disjoint slices of a label-ordered CSV, 100%
+  //    singleton scaffolds, and on BBBP the val signal saturates by epoch 2 and
+  //    then wobbles by sd 0.002-0.009. Every headline in this document was
+  //    selected by `load_best_model_at_end` against that signal, and nothing in
+  //    the record says what the selection bought. `train.py` now scores the FINAL
+  //    checkpoint as well (`test_roc_auc_last`), so the answer is a **paired,
+  //    within-run** difference: same weights lineage, same test set, two
+  //    checkpoints. Paired contrasts do not carry the cross-run seed noise that
+  //    dominates question 2, which is why one seed is enough to see it.
+  //
+  // 2. DO THE THREE ENCODINGS SEPARATE? This is the UNDER-POWERED one and it is
+  //    a screen, not a ranking. §8.3.1 measured the instrument: BACE test carries
+  //    a Hanley-McNeil s.e. of +/-0.037 on 152 molecules and BBBP +/-0.032 on
+  //    204, against arm gaps of 0.02-0.05. One seed adds training noise (sd
+  //    0.013-0.021, §2.6) on top of that. So this arm of the sweep can find a
+  //    LARGE encoding effect and cannot rank close ones — and if all four land
+  //    within a few hundredths, the correct reading is "not resolved here",
+  //    never "the encodings do not matter". §3.2.5's Tier-A families are where
+  //    that question is properly powered (1000 test examples, deterministic
+  //    labels, +/-0.010 against margins of +0.13 to +0.16); this is the Tier-B
+  //    look, not the encoding verdict.
+  //
+  // WHY ONE SEED FIRST. Eight runs give the selection answer immediately and a
+  // rough encoding picture in one wave. Seeds 1-2 are worth adding exactly when
+  // the encoding margins come back close enough that noise is the open question
+  // — which is the case they would settle — and are not worth adding to confirm
+  // a result already outside the s.e. above.
+  //
+  // THE RECIPE IS `001`'s, VERBATIM, and that is the point: `lr 3e-5 /
+  // bias_lr 5e-3 / lora_r 16 / 40 epochs / eval_steps 50 / batch 4 x accum 8`.
+  // Every cell here is therefore directly comparable to the M3a table in §2.6,
+  // and `rich_levi` x both arms is a REPLICATION of two of its cells at seed 0 —
+  // built-in evidence that this sweep measures the same thing `001` did. If those
+  // two do not reproduce (`bace` flat 0.8360, graph 0.8332; `bbbp` flat 0.7019,
+  // graph 0.6820), something moved that should not have, and the encoding rows
+  // are not readable until it is explained.
+  //
+  //   40 epochs is kept although §8.2.1 showed BBBP peaks at epoch 4-8 and BACE
+  //   at 23-28, i.e. the budget is 3-8x larger than the curves need. Comparability
+  //   with `001` is worth more than the GPU-hours here, and 40 epochs is already
+  //   past every measured peak. The shorter budget belongs in a sweep that is not
+  //   also trying to replicate an existing table.
+  //
+  // THE FOUR ARMS. `encoding` is graph-arm-only (`config.py:40`), so the flat
+  // cell carries `rich_levi` purely so its record matches `001`'s; the value is
+  // inert there. `bias: spd+magnetic` on all three graph cells — this sweep
+  // varies the ENCODING and nothing else, so the bias channel stays at the
+  // setting every other Tier-B number in this document used.
+  //
+  // HARDWARE. B200 only, pinned as a list so it renders as a `GPU_BRD`
+  // constraint (`project-frida-cluster`: node weights are INVERTED against speed,
+  // so a broad GPU list lands on the slowest card first). Five B200s are free, so
+  // `max_concurrent` is 5 and the eight runs finish in two waves. 128G, not
+  // `001`'s 64G: §8 measured `015` running its whole array at 99.91% of a 64G cap
+  // and losing 4 of 4 graph cells to it. The graph arm carries the bias tensors;
+  // 64G is the wrong cap for it and the margin is what has to be checked, not the
+  // limit. 03:00:00 is generous — BBBP graph is ~2040 steps and B200 ran 5000
+  // steps in 1.8h (008), so ~45min plus the flex autotune.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/021_dual_score_encodings.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "021_dual_score_encodings",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 5,          // = the free B200 count; 8 runs in two waves
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200"],             // list form -> GPU_BRD constraint; see above
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",                // NOT 001's 64G — see the hardware note
+      "time": "03:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  // The one axis this sweep varies. `rich_levi` x {graph, flat} replicates two
+  // `001` cells at seed 0 and is the sweep's own validity check.
+  "arm_encoding": [
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "terse_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only" }
+  ],
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+
+  // `001` verbatim from here down. Nothing in this block is an experimental
+  // variable in this sweep, and every value was checked against the command line
+  // `001` actually emitted rather than against its .jsonc — only the emitted
+  // command shows defaults (the lesson from `019`).
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}
