@@ -1,0 +1,60 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 024 — seed 2 of the `021` encoding screen. Identical to `023` in every field
+  // but `seed`. 8 runs: BACE + BBBP x the three GTLM encodings + the flat SMILES
+  // twin.
+  //
+  // The design, the power calculation that motivates the extra seeds, the
+  // one-job-eight-runs choice and the H100-by-weight hardware note are all in
+  // `023`'s header and are not repeated here. Split across two configs rather
+  // than one `seed: [1, 2]` sweep so the two chains occupy two GPUs and finish in
+  // ~5h wall-clock rather than ~10h on one.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/024_encodings_seed2.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "024_encodings_seed2",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  "arm_encoding": [
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "terse_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only" }
+  ],
+
+  "question_node": "on",
+  "seed": 2,
+  "data_seed": 0,
+
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

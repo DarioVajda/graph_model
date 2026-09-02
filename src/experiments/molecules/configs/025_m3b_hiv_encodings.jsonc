@@ -1,0 +1,133 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 025 — M3b: HIV, the three GTLM encodings + the flat SMILES twin, 3 seeds.
+  // 12 runs. The third and last dataset of the scoped Tier B (PLAN.md §1), and
+  // the one that was always going to carry the most weight.
+  //
+  // REQUIRES `022` TO HAVE FINISHED. Four HIV `.gtds` artifacts, ~2.6GB each,
+  // must exist before this is submitted; cold, one run builds while eleven hold
+  // B200s idle on an flock. Supersedes 013, which predates the encoding axis and
+  // asked for a bias ablation on `rich_levi` only.
+  //
+  // WHY HIV IS THE DATASET THAT CAN ACTUALLY SETTLE THIS. §8.3.1 measured all
+  // three benchmarks as instruments, and HIV wins on every axis that matters:
+  //
+  //   * MEASUREMENT ERROR. 4112 test molecules against BACE's 152 and BBBP's 204,
+  //     giving a Hanley-McNeil s.e. of **+/-0.024** vs +/-0.037 and +/-0.032.
+  //     Smaller than it looks at first glance only because HIV is 3.2% positive,
+  //     so 4112 molecules carry just ~132 actives and the minority class sets the
+  //     precision — but still the best of the three.
+  //   * NO LABEL-ORDERED CSV. BACE and BBBP are sorted such that the label is
+  //     nearly a step function of row index, and the scaffold splitter's singleton
+  //     tie-break is row order — which is why §8.3 found val and test to be
+  //     different populations there. HIV's CSV is not ordered that way.
+  //   * SPLIT CONVENTIONS AGREE. The `include_chirality` flag that separates the
+  //     DeepChem and `pretrain-gnns` scaffold conventions moves 8.1% of BACE and
+  //     5.9% of BBBP between splits; on HIV it moves **0.0%** and the two
+  //     conventions produce byte-identical splits. An HIV number is comparable to
+  //     both lineages without qualification.
+  //
+  // THE BUDGET IS IN STEPS, NOT EPOCHS, AND IT IS THE ONE REAL DESIGN CHOICE HERE.
+  // HIV has 32895 training examples against BACE's 1210, so at batch 4 x accum 8
+  // one epoch is 1027 optimizer steps where BACE's is 37. Reusing `021`'s 40
+  // epochs would be 41080 steps and ~20h a run; reusing BACE's 1480 STEPS would be
+  // 1.4 epochs. Neither is "the same budget".
+  //
+  //   **10 epochs = 10270 steps.** 013 proposed 5, matching the 5000-step budget
+  //   every Tier-A sweep from 006 onward settled on, and then argued against
+  //   itself in its own header: a short budget biases specifically AGAINST the
+  //   graph arm, because the graph arm pays a start-up cost on a modality Llama
+  //   has never seen while flat SMILES is pretrained-native (§3.2.4.1), and
+  //   `feedback-dont-call-floors-early` has fired three times in this campaign.
+  //   Doubling to 10 epochs costs ~3h a run and removes that objection: it is 2x
+  //   the Tier-A budget, and every example is seen 10 times.
+  //
+  //   OVERSHOOTING IS NOW SAFE AND, MORE TO THE POINT, VISIBLE. `train.py` scores
+  //   the final checkpoint alongside the val-selected one, so a budget that runs
+  //   long no longer silently degrades the headline — `load_best_model_at_end`
+  //   protects it and `test_roc_auc_last` reports what the overshoot cost. That
+  //   changes the asymmetry: undertraining is an unrecoverable confound, whereas
+  //   overtraining is a measured quantity. Overshoot is the correct side to err on
+  //   and this config errs on it deliberately.
+  //
+  //   READ `still_improving` ON THE GRAPH ARM BEFORE READING ANY AUROC. If it is
+  //   True at 10 epochs the number is a LOWER BOUND, and the honest response is to
+  //   re-run BOTH arms longer — never to report the cell, and never to extend one
+  //   arm alone (§3.2.4.2).
+  //
+  // READ `n_distinct` AND `tied_pair_fraction` FIRST, in that order. HIV is the
+  // tie-collapse stress case: ~3.2% positives, ~132 actives in test, so a handful
+  // of distinct margins decides the AUROC outright. `021` measured
+  // `tied_pair_fraction` at 0.005-0.024 on BACE/BBBP, which is why this is no
+  // longer a gate — but an AUROC computed over a handful of distinct scores is a
+  // coin flip wearing a metric's name, and HIV is where that would first bite.
+  //
+  // EVAL CADENCE. Val is 4112 examples, so an eval is not free the way BACE's 151
+  // were. `eval_steps` 400 gives ~26 evals — enough for `still_improving` (which
+  // reads the last four) and for a readable curve, at roughly 0.6h of the run.
+  // No `max_eval_examples`: it would cap val AND test alike
+  // (`prepare_tier_b_graphs`), and a test AUROC over a subsample is not comparable
+  // to the §2.2 anchors, which use the full scaffold-split test set.
+  //
+  // HARDWARE. B200/B300 only, and this is the sweep that gets them — it is the
+  // long pole and the one whose latency matters. B200 is preferred by weight
+  // (1165836 vs B300's 1176837, and Slurm takes the lowest); both are fast, and
+  // excluding H100/A100 keeps the inverted-weight trap from parking a 6h run on a
+  // slow card. `max_concurrent` 12 so all twelve run at once where the cards
+  // allow. 128G for the ~2.6GB artifact, on §8's margin lesson. 12:00:00 is ~2x
+  // the worst-case estimate (10270 steps at the graph arm's measured 1.86 s/step
+  // plus eval ~= 6h) — 007's header records a run killed mid-flight for sizing a
+  // limit to the expected case instead of the slow one.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/025_m3b_hiv_encodings.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "025_m3b_hiv_encodings",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "hiv",
+
+  // The same four arms `021`/`023`/`024` ran, so the encoding verdict is read
+  // across three datasets on one axis rather than assembled from three designs.
+  "arm_encoding": [
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "terse_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only" }
+  ],
+
+  "question_node": "on",
+  "seed": [0, 1, 2],
+  "data_seed": 0,
+
+  // 10 epochs x 1027 steps/epoch = 10270 steps. See the budget note above.
+  "num_epochs": 10,
+  "eval_steps": 400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

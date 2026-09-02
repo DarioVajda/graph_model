@@ -1,0 +1,78 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 022 — M3b step 1 of 2: BUILD the four HIV datasets. No training.
+  //
+  // SUPERSEDES 012, which built only `rich_levi` + flat. The HIV arm now carries
+  // the same three-encoding axis `021` ran on BACE/BBBP, and the `.gtds` cache key
+  // includes the encoding (`dataset.py:294`) — so `terse_levi` and
+  // `rich_atom_only` are separate artifacts that 012 never asked for. Four builds,
+  // not two. 012 is left in place as the record of the original two-artifact plan;
+  // it should not be submitted.
+  //
+  // WHY A SEPARATE BUILD, unchanged from 012's reasoning. HIV is 41127 molecules,
+  // 27x BACE. The measured BACE `rich_levi` artifact is 96MB for 1513 examples, so
+  // each HIV graph artifact lands near **2.6GB**, and building one means
+  // featurising 41k molecules — Levi expansion, shortest paths and a magnetic
+  // Laplacian each. `load_or_create_dataset` serialises that behind an flock, so
+  // if 025's twelve runs start cold, ONE builds while the other eleven sit on
+  // allocated B200s waiting on the lock. Building first turns that into one job
+  // and leaves 025 hitting a warm cache.
+  //
+  // `mode: data_prep` runs `run_data_prep_mode`, which builds and writes the
+  // `.gtds` plus its meta sidecar and exits. It still requests a GPU because the
+  // sweep runner always does; the work itself is CPU and RAM.
+  //
+  // MEMORY. 128G, not 012's 64G. A ~2.6GB artifact is held in memory while it is
+  // tokenised and featurised and the fp32 cast doubles the float features before
+  // they are written, so the peak is a multiple of the on-disk size and 64G was
+  // never measured against it. §8 recorded `015` running its whole array at 99.91%
+  // of a 64G cap and losing 4 of 4 graph cells to it; the margin is the thing to
+  // check, not the limit.
+  //
+  // HARDWARE. The broad list is deliberate and exploits the inverted node weights
+  // (A100 1121k < H100 1144k < B200 1166k < B300 1177k, and Slurm picks the
+  // lowest): a wide `gpus` list lands on the SLOWEST free card, which is the right
+  // outcome for exactly one job in this campaign. This is a CPU/RAM build, GPU
+  // speed is irrelevant to it, and every fast card it declines to take is one 025
+  // can have.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/022_m3b_hiv_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "022_m3b_hiv_prep",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["L4", "A100", "H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+  "task": "hiv",
+
+  // The four artifacts 025 needs. `bias` does not affect the artifact (both
+  // features are always computed, so one `.gtds` serves every bias arm —
+  // dataset.py:223), but `arm` and `encoding` both do.
+  "arm_encoding": [
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "terse_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only" }
+  ],
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+  "max_spd": 32
+}

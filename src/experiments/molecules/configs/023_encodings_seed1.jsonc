@@ -1,0 +1,99 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 023 — seed 1 of the `021` encoding screen. 8 runs: BACE + BBBP x the three
+  // GTLM encodings + the flat SMILES twin. Sibling of `024` (seed 2); together
+  // they take `021`'s one-seed picture to three seeds.
+  //
+  // WHY SEEDS ARE WORTH ADDING HERE, and the correction that makes the case.
+  // `021` came back with both tasks' encoding spreads inside the instrument —
+  // BACE 0.0529, BBBP 0.0341 — and the two tasks ranking the encodings in
+  // OPPOSITE orders (`rich_levi` best on BACE, second-worst on BBBP). Reading
+  // that against §8.3.1's Hanley-McNeil s.e. of +/-0.037 and +/-0.032 says "not
+  // resolved, and more seeds will not help".
+  //
+  //   That reading uses the wrong error term, and this is the correction. The
+  //   Hanley-McNeil figure bounds how well a 152/204-molecule test set estimates
+  //   the POPULATION AUROC. Every arm here is scored on the SAME test set, so
+  //   their sampling errors are common-mode and cancel in a difference; what does
+  //   not cancel is training variance, measured at sd 0.021 (BACE) and 0.013
+  //   (BBBP) in §2.6. At three seeds the s.e. of a difference of means is
+  //   sd*sqrt(2/3) = 0.017 and 0.011, so the resolvable gap is **0.034 on BACE
+  //   and 0.021 on BBBP**. `021`'s observed gaps — 0.040 and 0.043 for
+  //   `rich_levi` over the two other encodings on BACE, 0.034 for the BBBP spread
+  //   — sit just above those thresholds. Three seeds is the cheapest experiment
+  //   that can move this from "not resolved" to a ranking.
+  //
+  //   The +/-0.037 has NOT gone away. It still governs any claim about molecules
+  //   in general. What three seeds buys is the narrower claim — "better on this
+  //   benchmark" — and that claim must be written with the wider bar attached.
+  //
+  // ONE JOB, EIGHT RUNS IN SEQUENCE (`granularity: single`). These runs are not
+  // urgent: the HIV sweep (`025`) is, and it wants every fast card it can get.
+  // Eight sequential runs at `021`'s measured 19-46 min each is ~5h on the cards
+  // this asks for, which is comfortably overnight, and it occupies ONE GPU
+  // instead of eight. Splitting the seed work across an array would finish it
+  // sooner and would take those cards away from the run whose latency actually
+  // matters.
+  //
+  // HARDWARE, and why the list is ordered the way it is. Node weights are
+  // INVERTED against speed on this cluster (A100 1121k < H100 1144k < B200 1166k
+  // < B300 1177k) and Slurm allocates the lowest weight that satisfies the
+  // constraint. Listing H100 first-by-weight means this lands on an H100 while
+  // any is free — fast enough for an overnight job, and NOT a Blackwell — and
+  // falls back to B200/B300 only if the H100s are full, so a busy `ixh` delays
+  // nothing. A100 is deliberately excluded: at ~2.5x a B200 the eight-run chain
+  // would run ~12h and stop being an overnight job.
+  //
+  // THE RECIPE IS `021`'s, WHICH IS `001`'s, VERBATIM. Nothing here is an
+  // experimental variable except the seed. 40 epochs is kept for the same reason
+  // `021` kept it — comparability with the M3a table in §2.6 outweighs the
+  // GPU-hours, and 40 epochs is already past every peak §8.2.1 measured.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/023_encodings_seed1.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "023_encodings_seed1",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "single",      // one job, eight runs in sequence — see above
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100", "B200", "B300"],   // H100 by weight; Blackwell only as fallback
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",           // ~5h expected; the chain must not be cut mid-run
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  "arm_encoding": [
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "terse_levi" },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_atom_only" }
+  ],
+
+  "question_node": "on",
+  "seed": 1,
+  "data_seed": 0,                   // the split is fixed; only training varies
+
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}
