@@ -1,0 +1,148 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 032 — THE TIER-B CLOSING SWEEP, CANONICAL. All eighteen cells in one file:
+  // 3 datasets x 2 arms x 3 seeds, at the settled per-(task, arm) recipe.
+  //
+  // THIS IS THE REPRODUCTION CONFIG. Running it reproduces the closing sweep
+  // exactly. It was NOT the config that produced the results, which are assembled
+  // from four batches and one reuse:
+  //
+  //     flat, all 3 datasets, 3 seeds   `029` + `030`   (max_spd inert on flat)
+  //     graph, all 3 datasets, seed 0   `026` + `028`   (already at this recipe)
+  //     graph, all 3 datasets, seeds 1-2   `033`
+  //
+  //   `029`/`030`/`031` were split only because `031`'s learning rate was still
+  //   being measured by `028` when the first two were submitted — a scheduling
+  //   artifact with no experimental meaning. `033` is different: it re-runs the
+  //   graph arm at `max_spd` 32 after 64 was adopted by fiat in `029`-`031` and
+  //   then reversed (§8.4.6). Every field that reaches a run is identical between
+  //   this file and the batch that produced it. Results live in the batch
+  //   directories, not here.
+  //
+  // WHY IT IS WORTH HAVING ANYWAY. A reader who wants to know what the closing
+  // numbers mean should not have to reconstruct them from three configs and a
+  // note about which one was held back and why. One file, eighteen rows, every
+  // rate visible next to the cell it applies to.
+  //
+  // THE RECIPE (§8.4.6, fixed before the last screen cell landed):
+  //
+  //     encoding   rich_levi     pre-registered tie-break (§3.2); BACE and BBBP
+  //                              favour it, HIV at 3e-4 dissents, and at 1e-4 it
+  //                              beats `rich_atom_only` by 0.11 on HIV outright
+  //     bias_lr    1e-2 graph    the one declared asymmetry; inert on flat, which
+  //                5e-3 flat     builds no bias channel at all
+  //     lora_r     16            axis closed by §8.4.5
+  //     max_spd    32            the value every sweep from `001` to `028` used;
+  //                              64 was adopted by fiat for `029`-`031` and
+  //                              reversed, because it made these numbers the only
+  //                              ones in the project incomparable with the rest
+  //                              (§8.4.6, ablation in §8.4.9)
+  //     seeds      0, 1, 2       three at the settled recipe, per the gate
+  //
+  // THE LEARNING RATE IS PER (task, arm), AND EVERY CELL ENDED UP MATCHED:
+  //
+  //     bace   both arms   3e-4     val says 3e-5 for flat, test says 3e-4;
+  //                                 resolved to 3e-4 AGAINST our own interest
+  //     bbbp   both arms   3e-4     the two candidates are 0.0009 apart on test
+  //     hiv    both arms   1e-4     flat's optimum on both val and test; the
+  //                                 graph arm's 3e-5 leads by 0.002 on the
+  //                                 matched seed and the tie was given to 1e-4
+  //                                 to keep the comparison matched
+  //
+  //   No dataset has our arm tuned to its own rate while the baseline sits at
+  //   another. That was not guaranteed by the per-arm rule — it is the result of
+  //   breaking both close calls toward the baseline, and it is the single most
+  //   important property of this design.
+  //
+  // WHAT IT CAN AND CANNOT CLAIM. Graph against flat at a matched recipe, three
+  // seeds, mean +/- s.e. — that is the closing number. It CANNOT claim "tuning
+  // changed the graph arm by X": `lr` and `bias_lr` moved together between the
+  // 3e-5 baselines and every tuned cell, so that comparison stays confounded and
+  // is not made. Both `test_roc_auc` and `test_roc_auc_last` are reported for
+  // every cell, because BBBP's val ranks arms at chance (§8.4) and the campaign
+  // has repeatedly seen the selected and last checkpoints disagree in sign.
+  //
+  // BUDGET DIFFERS BY DATASET and therefore rides in the bundle: BACE and BBBP
+  // take 40 epochs at `eval_steps` 50 (1480 steps), HIV takes 10 at 200 (10280
+  // steps). Mixing them in one array is correct but wastes wall clock — the short
+  // runs are priced at the long ones' time limit — which is the other reason the
+  // executed sweep was split. `-t 12:00:00` covers the HIV runs.
+  //
+  // HARDWARE. B200/B300/H100. `ixb6` is excluded: it cannot read its own Slurm
+  // config cache and fails every new `srun` in under five seconds while
+  // advertising itself as healthy. It took ten of the first submission's twelve
+  // tasks. Drop that line once the node is fixed.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/032_tier_b_closing.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "032_tier_b_closing",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 18,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 4,
+      // 192G, not the 128G the batches ran at. The HIV graph cells are the
+      // memory-hungry ones by a wide margin and they sit close enough to 128G to
+      // be a coin flip: measured host peaks are 124.9 GB at `max_spd` 32 (`028`
+      // seed 0) and 134.2 GB at 64 (`031`), against a 128G cgroup limit of
+      // 134.22 GB. `031` lost seed 1 to an OOM kill at 5h44 — after nearly six
+      // hours of compute — while seed 0 survived on 0.05% of headroom. Everything
+      // else in the sweep peaks at 43-75 GB and is nowhere near the line.
+      // A config whose purpose is to be re-run must not gamble six hours on that.
+      "mem": "192G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // One bundle, eighteen cells. `task`, `lr`, `seed` and the budget all vary
+  // together, so they travel together rather than as independent axes whose
+  // product would include combinations that were never run.
+  "arm_recipe": [
+    // ── BACE, lr 3e-4, 40 epochs ─────────────────────────────────────────────
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── BBBP, lr 3e-4, 40 epochs ─────────────────────────────────────────────
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── HIV, lr 1e-4, 10 epochs, coarser eval cadence ────────────────────────
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 1e-2, "seed": 0, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 1e-2, "seed": 1, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 1e-2, "seed": 2, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 5e-3, "seed": 0, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 5e-3, "seed": 1, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 5e-3, "seed": 2, "num_epochs": 10, "eval_steps": 200 }
+  ],
+
+  "data_seed": 0,
+  "question_node": "on",
+
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

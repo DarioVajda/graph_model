@@ -1,0 +1,152 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 029 — THE TIER-B CLOSING SWEEP, BACE + BBBP. 12 runs (2 datasets x 2 arms x
+  // 3 seeds). `030` runs the HIV flat arm, `031` the HIV graph arm, and `032` is
+  // the single canonical config that reproduces all eighteen cells in one file.
+  // Together they are the closing act of the specialist campaign: a measurement,
+  // not exploration, and nothing further is planned after them.
+  //
+  // THE RECIPE. Decided in §8.4.6, written down before the last screen cell
+  // landed so that none of it could be chosen after seeing the result it applies
+  // to:
+  //
+  //     encoding   rich_levi     pre-registered tie-break (§3.2), and already
+  //                              determined: BACE and BBBP both favour it, HIV
+  //                              dissents, two-against-one fires the tie-break
+  //     lr         3e-4          per (task, arm); see the rule below
+  //     bias_lr    1e-2          the value the screen ran at this rate
+  //     lora_r     16            axis closed by §8.4.5 (r32 negative in 5 of 6)
+  //     max_spd    64            REVERSED AFTER THIS RAN — see below
+  //     seeds      0, 1, 2       the gate asks for three at the settled recipe
+  //
+  // `max_spd` 64 WAS A MISTAKE AND IS REVERSED (§8.4.6). Sweeps `001` through `028`
+  // all ran at 32; raising it here made these numbers the only ones in the project
+  // incomparable with the rest, and the clamp ablation it was adopted without turned
+  // out null (§8.4.9). **This file's GRAPH rows are therefore ablation, not headline
+  // — `033` re-ran that arm at 32 and the closing table takes it from there.** The
+  // FLAT rows are unaffected and remain the closing sweep's flat arm: `max_spd` sizes
+  // the SPD bias table, which the flat arm never builds, proven bitwise in `030`.
+  //
+  // THE LEARNING RATE IS CHOSEN PER (task, arm), AND THE RULE IS DECLARED BECAUSE
+  // IT DECIDES THE HEADLINE NUMBER:
+  //
+  //     Each (task, arm) gets the rate best supported for THAT arm. Where val and
+  //     test disagree, the tie goes to whichever rate is better for the FLAT arm.
+  //
+  //   The second clause is selection on test, and it is applied AGAINST our own
+  //   interest. It fires exactly once, on BACE/flat:
+  //
+  //       BACE flat   lr 3e-5   val 0.7497   test 0.8268   (3 seeds)
+  //       BACE flat   lr 3e-4   val 0.7341   test 0.8598   (1 seed)
+  //
+  //   Val prefers 3e-5, test prefers 3e-4 by +0.033. Selecting per-arm on val
+  //   would give flat 3e-5 (0.8268) against graph's 3e-4 (0.8220) and turn a
+  //   comfortable loss into a near-tie — a win manufactured by handing the
+  //   baseline a rate we have direct evidence is worse for it. The override takes
+  //   3e-4. §8.4.5 independently found BACE val cannot make within-arm choices
+  //   (it mis-ranks `lora_r` at a 0.049 test cost) even though it ranks ACROSS
+  //   arms at 83%, so this is not an exception invented for the occasion.
+  //
+  //   NOWHERE ELSE DOES THE RULE BITE. BACE graph (val 0.7096 > 0.6981, test
+  //   0.8220 > 0.8208) and BBBP graph (val 0.9746 > 0.9602, test 0.7306 > 0.6847)
+  //   both have val and test agreeing on 3e-4. BBBP flat splits 0.0009 on test
+  //   and 0.0014 on val between the two rates — inside a seed-sd of 0.0105 either
+  //   way — so matching it to 3e-4 costs the baseline nothing measurable and buys
+  //   a matched comparison.
+  //
+  //   CONSEQUENCE: BOTH ARMS RUN AT 3e-4 ON BOTH DATASETS HERE. The graph-vs-flat
+  //   comparison in this config is matched on `lr`, `lora_r`, budget, split,
+  //   seeds, eval cadence and selection rule. HIV is where the rates diverge by
+  //   arm (`030`, `031`), and that is stated there rather than smuggled.
+  //
+  // WHY 3e-5 IS NOT A CANDIDATE FOR EITHER ARM HERE. It is the rate §8.4.4 shows
+  // handicaps the flat arm on BACE, and keeping it would favour our own arm. That
+  // elimination is expensive: three-seed flat baselines already exist at 3e-5 for
+  // all three datasets, so keeping it would have made this sweep nearly free. It
+  // is refused anyway.
+  //
+  // WHAT §8.4.4 CANNOT BE CITED FOR. Its BACE `lr` 1e-5 and 1e-4 rows (0.7821 and
+  // 0.8594) came from the abandoned grid whose records that same section says were
+  // DISCARDED. No `runs.jsonl` row, no eval curve, no per-example file survives
+  // either. The direction is corroborated independently — `026` measures
+  // BACE/flat at 0.8598 at 3e-4 against the three-seed 0.8268 at 3e-5 — and that
+  // is the number quoted above and everywhere after. The 1e-4 row is not
+  // reproducible from this repository and is not used.
+  //
+  // FAIRNESS. Identical `lr`, `lora_r`, budget, split, seeds, eval cadence and
+  // selection rule on both arms. `bias_lr` is the one declared asymmetry and it is
+  // inert on the flat arm, which instantiates no bias channel at all — BACE flat
+  // r16 carries 11,406,848 trainable parameters against the graph arm's
+  // 22,679,040, and the whole difference is the bias channel and prefix nodes.
+  // `encoding` on the flat cell is likewise inert; it serialises SMILES.
+  //
+  // WHAT THIS SWEEP CAN CLAIM. Graph against flat at a matched recipe, three
+  // seeds, mean +/- s.e. — the number the campaign closes on. What it CANNOT claim
+  // is "tuning changed the graph arm by X": `lr` and `bias_lr` moved together
+  // between the 3e-5 baselines and every tuned cell, so that comparison stays
+  // confounded and is not made.
+  //
+  // REPORT BOTH SELECTED AND LAST. BBBP's val ranks arms at 44%, i.e. chance
+  // (§8.4), and `026`'s BBBP graph cell beat its own last checkpoint by +0.0423
+  // against flat's +0.0005 — with the sign flipping last-vs-last. So every cell
+  // here reports `test_roc_auc` AND `test_roc_auc_last`, and the second is not
+  // optional. Three seeds fixes seed noise; it does not fix a near-blind selector.
+  //
+  // BUDGET / HARDWARE. `001`'s recipe: 40 epochs = 1480 steps, `eval_steps` 50.
+  // B200/B300/H100, `max_concurrent` 12 — one wave. `023`/`024` measured 16-20 min
+  // a run on B200/B300; H100 is slower and `003` confirmed it runs the flex
+  // compile path, so 06:00:00 keeps the 2x margin `007`'s header argues for even
+  // on the slow hardware with several tasks sharing a node.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/029_tier_b_closing_bace_bbbp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "029_tier_b_closing_bace_bbbp",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      // `ixb6` cannot read its own Slurm config cache — every `srun` on it dies in
+      // under five seconds with "unable to read /var/spool/slurm/d/conf-cache/
+      // slurm.conf: Permission denied". It took six tasks of the first submission
+      // and failed all six. Jobs already running on it are unaffected; only new
+      // `srun` invocations are. Drop this line once the node is fixed.
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": ["bace", "bbbp"],
+
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2 },
+    { "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 5e-3 }
+  ],
+
+  "seed": [0, 1, 2],
+  "data_seed": 0,
+
+  "question_node": "on",
+
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 64
+}

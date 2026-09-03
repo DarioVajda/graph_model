@@ -1,0 +1,132 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 031 — THE TIER-B CLOSING SWEEP, HIV GRAPH ARM. 3 runs (one arm, three seeds).
+  // The last of the three batches. `029` ran BACE + BBBP, `030` the HIV flat arm,
+  // and `032` is the canonical config reproducing all eighteen cells in one file.
+  // Read `029`'s header for the recipe and the learning-rate rule.
+  //
+  // WHY THIS WAS HELD BACK. The learning rate is chosen per (task, arm) — §8.4.6 —
+  // and this arm's third candidate (`028`, `lr` 1e-4) was still running when the
+  // other two batches went in. Submitting it then would have meant guessing the
+  // rate or defaulting to one of the two rates already known to be worse. It is
+  // the only cell in the sweep whose rate was not settled in advance, and the
+  // evidence that settled it is below.
+  //
+  // THE EVIDENCE, seed 0 throughout so the comparison is matched:
+  //
+  //     HIV graph rich_levi   lr 3e-5   val 0.7924   test 0.7862
+  //     HIV graph rich_levi   lr 1e-4   val 0.7860   test 0.7839
+  //     HIV graph rich_levi   lr 3e-4   val 0.7783   test 0.6754
+  //
+  //   3e-4 is eliminated outright: it costs 0.11 on test and produces the val->test
+  //   inversion §8.4.7 records — highest val of any arm, lowest test. 3e-5 and 1e-4
+  //   are a TIE: 0.006 apart on val and 0.002 on test, against a measured HIV
+  //   seed-sd of 0.0377. Nothing separates them.
+  //
+  //   THE COMPARISON IS MADE SEED-TO-SEED AND NOT AGAINST THE THREE-SEED MEAN.
+  //   §8.4.3's 3e-5 three-seed mean is 0.7483; its seed 0 alone is 0.7862. Reading
+  //   a one-seed 1e-4 result against the three-seed mean would have made 1e-4 look
+  //   like a 0.036 improvement, and reading it against seed 0 shows a 0.002
+  //   deficit. The matched-seed number is the honest one and it is what is used.
+  //
+  // WHY 1e-4 WINS A TIE IT DOES NOT LEAD. Because it is the rate the FLAT arm's
+  // own optimum landed on (§`030`: val 0.8240 and test 0.7485, best on both), so
+  // taking it makes HIV a MATCHED comparison instead of a per-arm-tuned one. That
+  // costs this arm 0.002 on the matched seed and buys a design in which no dataset
+  // has us tuned to our own rate while the baseline sits at another. With BACE and
+  // BBBP both at 3e-4 on both arms, the whole closing sweep is now matched.
+  //
+  //   Picking 3e-5 here would have been defensible on the numbers and is refused
+  //   anyway: a tie broken toward our own arm is the kind of small, individually
+  //   justifiable choice that accumulates into a result nobody can trust.
+  //
+  // THE TWO ENCODINGS DIVERGE COMPLETELY AT THIS RATE, which is worth recording
+  // because it retires the last of §8.4.3's reasoning. At `lr` 1e-4 on HIV,
+  // `rich_levi` scores 0.7839 and `rich_atom_only` 0.6731 — a 0.11 gap on the same
+  // seed and split. §8.4.3 called them statistically tied (+0.0006 +/- 0.0091) and
+  // broke the tie toward `rich_atom_only` on secondary criteria; that tie held only
+  // at `lr` 3e-5. `rich_levi` is the encoding, and the pre-registered prediction
+  // from §3.2 (2026-08-29) is the one that survived.
+  //
+  // STABILITY. The `028` curve for this cell climbs 0.710 -> 0.786 with no
+  // excursion and `peak_fraction` 0.68 — healthy, and unlike `rich_atom_only` at
+  // the same rate, which collapsed, or either encoding at 3e-4, which spent ~3000
+  // steps near chance before recovering. One seed does not guarantee the other two
+  // behave; any run here that peaks in its first 15% or sits at chance for a long
+  // stretch is reported rather than quietly averaged in.
+  //
+  // SUPERSEDED, AND MOSTLY DESTROYED BY AN UNDER-SIZED MEMORY REQUEST. `max_spd` 64
+  // was reversed (§8.4.6) and `033` re-ran this arm at 32, which is where the closing
+  // HIV number comes from. What survived here would have been the HIV leg of the
+  // clamp ablation — except that **two of the three cells were OOM-killed**, seed 0
+  // at 5h44 and seed 2 at 6h02, both at host RSS 134.16 GB against the 128G cgroup
+  // limit of 134.22 GB. Only seed 1 completed, at 134.15 GB — 0.05% of headroom.
+  // All three ran at the ceiling and which one lived was luck.
+  //
+  //   READING `sacct` AGAINST THIS: the array index is NOT the seed. `136323_0` ran
+  //   seed 1, `_1` ran seed 0, `_2` ran seed 2. The seed lives in the run label.
+  //
+  //   n=1 is not a measurement, so HIV contributes nothing to the ablation, which is
+  //   reported on BACE and BBBP only (§8.4.9). Cost: 11.8 GPU-hours that ran nearly
+  //   to completion and produced nothing.
+  //
+  //   THE LESSON IS THE MEMORY REQUEST, NOT THE CLAMP. HIV graph cells peak at
+  //   124.9 GB even at `max_spd` 32, against 43-75 GB for every BACE, BBBP and
+  //   HIV-flat cell; `--mem 128G` is 134.22 GB. The headroom was never checked
+  //   against a measured peak before submitting. `032` and `033` carry 192G.
+  //
+  // It is not re-run: six more GPU-hours cannot change a recipe that rests on
+  // continuity with `001`-`028` rather than on these numbers, and the ablation is
+  // already null at n=3 on both datasets where it is complete.
+  //
+  // BUDGET / HARDWARE. Identical to `030`: 10 epochs = 10280 steps, `eval_steps`
+  // 200, B200/B300/H100, `ixb6` excluded (see `029`), 12:00:00.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/031_tier_b_closing_hiv_graph.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "031_tier_b_closing_hiv_graph",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      // See `029`'s note: `ixb6` cannot read its own Slurm config cache and fails
+      // every new `srun` in under five seconds. Drop this once the node is fixed.
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "hiv",
+
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 1e-2 }
+  ],
+
+  "seed": [0, 1, 2],
+  "data_seed": 0,
+
+  "question_node": "on",
+
+  "num_epochs": 10,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 64
+}

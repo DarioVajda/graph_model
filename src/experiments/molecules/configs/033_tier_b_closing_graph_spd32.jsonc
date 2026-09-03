@@ -1,0 +1,121 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 033 — THE CLOSING SWEEP'S GRAPH ARM AT `max_spd` 32. Six runs: seeds 1 and 2
+  // on each of BACE, BBBP and HIV. Seed 0 already exists at this exact recipe on
+  // all three tasks and is read from where it landed rather than re-run.
+  //
+  // WHY 32 IS THE RECIPE. Every sweep in this project from `001` to `028` — 26 of
+  // them, Tier A and Tier B alike — ran at `max_spd` 32. 64 appears in exactly two
+  // places, `029` and `030`, and was introduced at the last step of the campaign on
+  // the reasoning that it is cheap and probably inert. That reasoning was fine and
+  // the decision was still wrong: it made the closing sweep the only numbers in the
+  // project not directly comparable with §8.4.3, §8.4.4, §8.4.5 or the Tier-A
+  // specialists, in exchange for nothing anyone had asked for. 32 is not a new
+  // choice being made here. It is the setting the campaign has always used, and
+  // this config restores it.
+  //
+  //   That reason is worth stating precisely because a better-looking one is
+  //   available and must not be used. The graph arm scores higher at 32 on TEST in
+  //   both cells where the two settings can be compared (BACE +0.0430, BBBP
+  //   +0.0185, seed 0). Selecting on that column would be indefensible. The
+  //   continuity argument does not depend on it and would hold if the sign were
+  //   reversed — which, on VALIDATION, for BACE, it is: val prefers 64 there by
+  //   +0.0271 while test prefers 32 by 0.0430. That disagreement is recorded in
+  //   §8.4.9 rather than resolved in our favour.
+  //
+  // THE FLAT ARM IS NOT RE-RUN, and this is not a shortcut. `max_spd` sizes the SPD
+  // bias table (`bias.py:101`); the flat arm builds no bias channel, so the field
+  // never reaches a tensor. The proof is on disk: HIV flat seed 0 was run twice,
+  // once at 32 (`028`) and once at 64 (`030`), and returned 0.7485067419 both
+  // times — bitwise identical to ten decimal places. `029` and `030`'s flat rows
+  // therefore ARE the max_spd-32 flat rows and are used unchanged.
+  //
+  //   The same two runs bound the noise floor for reading any max_spd comparison.
+  //   BACE and BBBP flat moved -0.0128 and +0.0076 between `026` and `029` on a
+  //   field that cannot affect them; the only other thing that changed was the H100
+  //   entering the allowed node set. That is nondeterminism, and it is the scale
+  //   against which the graph deltas above have to be read.
+  //
+  // CELLS REUSED RATHER THAN RE-RUN (identical on all of: arm, encoding, bias,
+  // lr, bias_lr, lora_r, max_spd, data_seed, batch_size, accumulation_steps,
+  // question_node, num_epochs, eval_steps):
+  //
+  //     bace seed 0   `026_lr3e4_lora_screen`   test 0.8220  val 0.7096
+  //     bbbp seed 0   `026_lr3e4_lora_screen`   test 0.7306  val 0.9746
+  //     hiv  seed 0   `028_hiv_lr1e4_r16`       test 0.7839  val 0.7860
+  //
+  // THE RECIPE IS OTHERWISE UNCHANGED from §8.4.6 and needs no re-argument here:
+  // `rich_levi` by the pre-registered tie-break, `bias_lr` 1e-2 as the one declared
+  // asymmetry, `lora_r` 16, and the per-(task, arm) learning rate that came out
+  // matched on all three datasets — 3e-4 on BACE and BBBP, 1e-4 on HIV.
+  //
+  // BUDGET rides in the bundle because it differs by dataset: BACE and BBBP take 40
+  // epochs at `eval_steps` 50, HIV takes 10 at 200. At `029`'s measured rates that
+  // is roughly 0.75 h per BACE run, 1.05 h per BBBP run and ~5 h per HIV run; the
+  // 12:00:00 limit covers the longest.
+  //
+  // HARDWARE. B200/B300/H100. `ixb6` is excluded: it cannot read its own Slurm
+  // config cache and fails every new `srun` in under five seconds while advertising
+  // itself as healthy. Drop that line once the node is fixed.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/033_tier_b_closing_graph_spd32.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "033_tier_b_closing_graph_spd32",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 4,
+      // RAISED TO 192G AFTER SUBMISSION — the executed run of this file used 128G,
+      // and the copy under `results/033_.../config.jsonc` records that. The HIV
+      // graph cells are the only ones anywhere near the line: host peaks are
+      // 124.9 GB at `max_spd` 32 (`028` seed 0) and 134.2 GB at 64 (`031`), against
+      // a 128G cgroup limit of 134.22 GB. `031` lost a seed to an OOM kill at 5h44.
+      // The two HIV cells here ran at 128G and cleared it on ~7% headroom, which is
+      // luck rather than margin; anyone re-running this file should not repeat it.
+      // BACE and BBBP peak at 43-68 GB and were never at risk.
+      "mem": "192G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // One bundle, six cells. `task`, `lr`, `seed` and the budget vary together, so
+  // they travel together rather than as independent axes whose product would
+  // include the three seed-0 cells that already exist.
+  "arm_recipe": [
+    { "task": "bace", "seed": 1, "lr": 3e-4, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "seed": 2, "lr": 3e-4, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "seed": 1, "lr": 3e-4, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "seed": 2, "lr": 3e-4, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "hiv",  "seed": 1, "lr": 1e-4, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "seed": 2, "lr": 1e-4, "num_epochs": 10, "eval_steps": 200 }
+  ],
+
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+  "bias_lr": 1e-2,
+
+  "data_seed": 0,
+  "question_node": "on",
+
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

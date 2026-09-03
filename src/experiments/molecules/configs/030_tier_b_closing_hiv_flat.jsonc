@@ -1,0 +1,120 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 030 — THE TIER-B CLOSING SWEEP, HIV FLAT ARM. 3 runs (one arm, three seeds).
+  // `029` runs BACE + BBBP, `031` the HIV graph arm, `032` is the canonical
+  // config reproducing all eighteen cells. Read `029`'s header for the recipe and
+  // for the learning-rate rule; only the dataset, the rate, the budget and the
+  // eval cadence differ here.
+  //
+  // WHY THE HIV ARMS ARE SPLIT ACROSS TWO CONFIGS, AND WHY THAT IS NOT A
+  // FAIRNESS PROBLEM. The learning rate is chosen per (task, arm) — §8.4.6 — and
+  // on HIV the two arms do not land on the same rate. The flat arm's optimum is
+  // settled and is submitted now; the graph arm's third candidate was still
+  // running when this went in, so `031` is held until it lands. Splitting the
+  // submission does not split the experiment: same split, same budget, same eval
+  // cadence, same seeds, same selection rule, same `data_seed`. The ONLY thing
+  // that differs between `030` and `031` is the learning rate, which is the axis
+  // being tuned per arm, and `bias_lr`, which has no flat equivalent.
+  //
+  // WHY 1e-4 FOR THE FLAT ARM, AND IT IS NOT CLOSE. Varying nothing but `lr`:
+  //
+  //     HIV flat   lr 3e-5   val 0.7946   test 0.7439   (3 seeds, §8.4.3)
+  //     HIV flat   lr 1e-4   val 0.8240   test 0.7485   (1 seed, `028`)
+  //     HIV flat   lr 3e-4   val 0.7658   test 0.7447   (1 seed, `027`)
+  //
+  //   1e-4 is best on val AND on test, so `029`'s tie-break clause never fires —
+  //   there is no disagreement to break. Note how little test moves across an
+  //   order of magnitude (0.7439 / 0.7485 / 0.7447, a 0.005 spread against a
+  //   seed-sd of 0.0377): §8.4.4's "the campaign measured at a rate that
+  //   handicaps the baseline" is a BACE-SPECIFIC finding, not a universal one.
+  //   On HIV the flat arm was never meaningfully under-tuned, and this config
+  //   will say so at three seeds.
+  //
+  // NOTHING IS REUSED, DELIBERATELY. `028`'s flat HIV seed 0 already ran `lr`
+  // 1e-4, `lora_r` 16, 10 epochs, `eval_steps` 200, `data_seed` 0 — identical to
+  // this config in every field that reaches the flat arm, differing only in
+  // `max_spd` (32 there, 64 here), which sizes the SPD bias table the flat arm
+  // never builds. Re-running seed 0 anyway costs one HIV run and buys a direct
+  // check on that inertness claim: if `max_spd` really is inert on flat, this
+  // cell should reproduce `028`'s 0.7485. If it does not, the claim is wrong and
+  // every "matched" comparison in the campaign needs re-examining. A 4 h run to
+  // test a load-bearing assumption is cheap.
+  //
+  //   IT REPRODUCED IT EXACTLY: 0.7485067419 both times, bitwise to ten decimals.
+  //   That single run is the campaign's proof that `max_spd` is inert on the flat
+  //   arm, and it is what lets this file's rows serve as the closing sweep's flat
+  //   arm unchanged after `max_spd` 64 was reversed for the graph arm (§8.4.6,
+  //   §8.4.9). It also doubles as the placebo for the clamp ablation: the same
+  //   comparison on BACE and BBBP moved -0.0128 and +0.0076 on an inert field,
+  //   which bounds run-to-run nondeterminism when the node type changes.
+  //   Best 4 h the campaign spent.
+  //
+  // AUROC PRECISION IS SET BY THE ACTIVES, NOT THE MOLECULES. HIV is 3.2%
+  // positive, so ~132 actives govern and the paired per-molecule CI is +/-0.047 —
+  // no tighter than BBBP's +/-0.050 on 204 molecules (§8.4.3.1). Three seeds give
+  // a mean +/- s.e. on this fixed test set, which is what §2.2's anchors publish
+  // and is comparable to theirs in kind. It does NOT resolve generalisation to
+  // new molecules; that is the paired bootstrap, reported separately and expected
+  // to span 0.
+  //
+  // BUDGET. 10 epochs = 10280 steps, `eval_steps` 200, identical to `027`/`028`
+  // so the curves stay comparable eval-for-eval against both screened rates.
+  // `025` measured `peak_fraction` at 0.17-0.75 in ten of twelve runs, so this
+  // budget overshoots rather than undertrains — the safe side, since
+  // `load_best_model_at_end` makes overshoot free.
+  //
+  // HARDWARE / TIME. B200/B300/H100, `max_concurrent` 3 — one wave. `027`/`028`
+  // measured 2.9-5.9 h a run on B200/B300 depending on node sharing; H100 is
+  // slower, so 12:00:00 holds the 2x margin over the slow case.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/030_tier_b_closing_hiv_flat.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "030_tier_b_closing_hiv_flat",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      // See `029`'s note: `ixb6` cannot read its own Slurm config cache and fails
+      // every new `srun` in under five seconds. Drop this once the node is fixed.
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "hiv",
+
+  // `encoding` and `bias_lr` are inert on the flat arm and are pinned to the
+  // campaign default so the record stays comparable rather than carrying a
+  // meaningless swept value.
+  "arm_recipe": [
+    { "arm": "flat", "bias": "none", "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 5e-3 }
+  ],
+
+  "seed": [0, 1, 2],
+  "data_seed": 0,
+
+  "question_node": "on",
+
+  "num_epochs": 10,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 64
+}
