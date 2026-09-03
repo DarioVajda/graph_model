@@ -386,6 +386,12 @@ def _sbatch_argv(jobname, logpath, wrap, sb, array=None):
         argv += ["-A", str(sb["account"])]
     if sb.get("nodelist"):
         argv += ["-w", str(sb["nodelist"])]
+    # `exclude` is the counterpart to `nodelist`: a comma-separated node list to
+    # keep the job off. A single sick node that fails every task in seconds costs
+    # a whole array otherwise, and pinning with `nodelist` to route around it
+    # over-constrains the scheduler.
+    if sb.get("exclude"):
+        argv += ["-x", str(sb["exclude"])]
     argv += ["--wrap", wrap]
     return argv
 
