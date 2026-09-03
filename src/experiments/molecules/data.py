@@ -692,12 +692,16 @@ TIER_B = {
     "lipo":    TierBSpec("Lipophilicity.csv", "smiles", ("exp",), "regression"),
 }
 
-#: Held out from all molecule training, permanently. Declared 2026-08-28 in
-#: PLAN.md §4.1, before any molecule run existed; mirrored in
-#: `src/generalist/PLAN.md` §3.3. Never add either to a training mixture, in any
-#: arm, including the specialist arm.
+#: Held out from all molecule training, permanently. `bond_path` and `clintox`
+#: were declared 2026-08-28 in PLAN.md §4.1, before any molecule run existed;
+#: mirrored in `src/generalist/PLAN.md` §3.3. `longest_chain` joins them for the
+#: generalist (`src/generalist/MOLECULE_GENERALIST.md` §4): two held-out Tier-A
+#: families make the zero-shot readout a pair rather than a single point, and
+#: `longest_chain` is the one whose specialist result is already recorded, so the
+#: zero-shot number has a specialist number to sit against. Never add any of the
+#: three to a training mixture, in any arm, including the specialist arm.
 HELD_OUT_DATASETS = ("clintox",)
-HELD_OUT_TIER_A_TASKS = ("bond_path",)
+HELD_OUT_TIER_A_TASKS = ("bond_path", "longest_chain")
 
 
 def load_tier_b(name: str, raw_dir: str = RAW_DIR):
