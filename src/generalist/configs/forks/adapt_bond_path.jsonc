@@ -1,0 +1,40 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // An `adapt` fork, on the smoke run's parent. D6's third fork mode.
+  //
+  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/smoke_graph/checkpoint-200 \
+  //     --mode adapt --fork-config src/generalist/configs/forks/adapt_bond_path.jsonc \
+  //     --config src/generalist/configs/000_smoke.jsonc
+  //
+  // WHAT IT MEASURES. Steps-to-target on one held-out task, run twice from
+  // identical configs: once from the parent checkpoint and once from base
+  // Llama. The difference between the two is the adaptation claim — "the
+  // generalist gets there faster than the backbone does" — and it is only a
+  // claim about adaptation if the parent never trained on the task, which is
+  // why `plan_fork` refuses an adapt on an in-mixture one.
+  //
+  // `mol/bond_path` is the held-out Tier-A task the smoke run built. The target
+  // is deliberately low: this fork exists to exercise the mode end to end on a
+  // 200-step parent, not to produce an adaptation number, and a 200-step parent
+  // scores 0.06 EM on bond_path. A target it can actually cross is what makes
+  // `steps_to_target` return a step rather than null, which is the field the
+  // mode is here to exercise.
+  //
+  // The target names `held_out`, never `test`: D7.4 refuses any selection key
+  // naming the test split, and an adapt target is a selection rule — it decides
+  // when the run has arrived.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "task": "mol/bond_path",
+  "budget_steps": 60,
+  "eval_steps": 20,
+  "starts": ["parent", "base"],
+  "validators": ["held_out"],
+
+  "target": {
+    "metric": "held_out/mol/bond_path/held_out/em_accuracy",
+    "value": 0.1,
+    "direction": "max"
+  }
+}

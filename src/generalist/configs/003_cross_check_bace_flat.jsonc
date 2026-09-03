@@ -1,0 +1,99 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The cross-check, flat arm. The twin of 002; read that file's header first —
+  // everything about what the check is, what band counts as agreement, and what
+  // is matched between the two trainers is stated there once.
+  //
+  // The reference is `molecules/PLAN.md` §8.4.8's closing three-seed BACE flat
+  // row at the settled recipe: 0.8470 / 0.7975 / 0.8228, **mean 0.8224**,
+  // sd 0.0248. An earlier draft of this header quoted `026`'s single seed at
+  // 0.8598; §8.4.5's 2026-09-02 correction retired that as one draw of the flat
+  // arm's own spread, and a one-seed reference cannot define a "within seed
+  // noise" band in the first place.
+  //
+  // Two fields differ from 002 and both are forced:
+  //   * `bias: none`. RunConfig.validate refuses a flat arm carrying a bias,
+  //     because on a single-node graph every structural bias is identically zero
+  //     (Property 2) and a bias string in the record would advertise a
+  //     comparison that is not happening.
+  //   * `tokens_per_step`. A flat BACE example is a SMILES string, not a Levi
+  //     graph, so it is far shorter; the value here is set from the built arm's
+  //     measured mean so that this run takes the same 32 examples a step as its
+  //     graph twin and as the specialist. Matching the token budget instead
+  //     would have silently given the flat arm several times the batch.
+  //
+  // `bias_lr` stays at the graph arm's 1e-2 rather than the specialist's 5e-3.
+  // It reaches no tensor on this arm — there is no bias channel to give a
+  // learning rate to — so the two are the same run, and holding it equal to 002
+  // keeps the pair differing in `arm` alone.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "cross_check_bace_flat",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "inductor_cache": ".inductor_cache/generalist_crosscheck"
+    }
+  },
+
+  "chain": {
+    "chunks": 2,
+    "dependency": "afterany"
+  },
+
+  "arm": "flat",
+  "mixture": "cross_check",
+  "validators": "default",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "none",
+  "max_spd": 32,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "tier_a_cap_per_pass": 2000,
+  "g2s_cap_per_pass": 2000,
+  "held_out_size": 200,
+  "data_seed": 0,
+
+  // 32 examples/step at the built flat arm's measured 60.9 tokens an example
+  // (`tools/tokens_per_step.py`). The graph twin needs 11648 for the same 32,
+  // because a Levi graph with a prefix per node renders to 6x the tokens a
+  // SMILES string does — which is exactly why the budget is matched in examples
+  // here and not in tokens.
+  "tokens_per_step": 1948,
+  "accumulation_steps": 8,
+  "max_steps": 0,
+
+  "lr": 3e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 3e-5,
+  "warmup_steps": 40,
+  "rewarm_steps": 40,
+  "weight_decay": 0.1,
+
+  "save_steps": 250,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 300,
+
+  "seed": 0,
+  "wandb_project": null
+}

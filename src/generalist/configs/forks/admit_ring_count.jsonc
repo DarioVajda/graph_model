@@ -1,0 +1,98 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // An `admit` fork, on the smoke run's parent. D6's second fork mode.
+  //
+  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/smoke_graph/checkpoint-200 \
+  //     --mode admit --fork-config src/generalist/configs/forks/admit_ring_count.jsonc \
+  //     --config src/generalist/configs/000_smoke.jsonc
+  //
+  // WHAT IT MEASURES. A candidate task is added to the parent's mixture at a
+  // stated share, the schedule re-warms, and a fixed budget is trained. Then
+  // `PLAN.md` §5's four-part criterion decides: the held-out suite, the
+  // text-only suite and the existing mixture must not regress, and the
+  // candidate must actually improve — by at least its tolerance, so a task that
+  // moves its own metric by less than the noise bar does not get in on the
+  // strength of the sign of a difference.
+  //
+  // The criterion is written here, before the fork runs, and `check_criterion`
+  // refuses a fork whose criterion is incomplete. That is the point of the
+  // block: once the numbers are in, the temptation to pick the threshold that
+  // gives the answer is real.
+  //
+  // WHY ring_count. A candidate has to be absent from the parent's mixture and
+  // not held out — `registry.resolve` refuses a held-out task outright, so
+  // ClinTox and the two held-out Tier-A families are not candidates however
+  // convenient they look. `mol/ring_count` is a Tier-A generator: cheap to
+  // build, `token`-scored, and untouched by the smoke run.
+  //
+  // WHY baseline_metrics IS FILLED IN. `check_admission` compares the child
+  // against the parent and is honestly undecided without a parent number — it
+  // will not pass a gate against zeros. The four numbers below are the smoke
+  // checkpoint's own, measured by `eval --only-validators in_mixture` under
+  // `configs/004_smoke_probe.jsonc`, at the same `max_samples: 32` the fork
+  // will use, so child and parent are the same measurement twice.
+  //
+  // THIS PARTICULAR FORK IS A PLUMBING EXERCISE, not an admission decision:
+  // `seeds: 1` is below the three §3.4 asks for, and 60 steps decides nothing
+  // about whether ring_count belongs in the trunk. What it establishes is that
+  // the mode runs end to end and that the verdict it writes is the verdict the
+  // criterion implies. The numbers are not to be quoted.
+  //
+  // Tolerances are the campaign's recorded noise bar: 0.013 is the same-config,
+  // different-hardware AUROC floor measured on BACE flat between `026` and
+  // `029`, and the exact-match parts are held to the same figure for want of a
+  // measured one of their own. At `max_samples: 32` an exact-match metric moves
+  // in steps of 1/32 = 0.031, so at this scale the tolerance is finer than the
+  // measurement can resolve and every exact-match part is effectively decided by
+  // the sign of a one-example difference. That is another reason the verdict
+  // here is plumbing: at the campaign's caps (500) the same tolerance sits above
+  // the quantum, which is where it is meant to be used.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "candidate": {"name": "mol/ring_count", "weight": 0.2},
+  "budget_steps": 60,
+  "eval_steps": 30,
+  "rewarm_steps": 20,
+  "validators": ["held_out", "in_mixture"],
+
+  "criterion": {
+    "seeds": 1,
+    "aggregate": "mean",
+    "held_out": {
+      "metric": "held_out/mol/bond_path/held_out/em_accuracy",
+      "rule": "no_regression",
+      "tolerance": 0.013,
+      "direction": "max"
+    },
+    "text_only": {
+      "metric": "in_mixture/mol/g2s/test/validity",
+      "rule": "no_regression",
+      "tolerance": 0.013,
+      "direction": "max"
+    },
+    "in_mixture": {
+      "metric": "in_mixture/mol/bace/test/roc_auc",
+      "rule": "no_regression",
+      "tolerance": 0.013,
+      "direction": "max"
+    },
+    "candidate": {
+      "metric": "in_mixture/mol/ring_count/test/em_accuracy",
+      "rule": "improves",
+      "tolerance": 0.013,
+      "direction": "max"
+    }
+  },
+
+  // The parent's own numbers. The three `in_mixture` keys are the probe eval's
+  // (`checkpoint-200/eval/eval_step200.json`); the held-out key is the milestone
+  // firing the smoke run itself wrote at step 200, which is the same validator at
+  // the same cap and is what the parent scored without any extra GPU time.
+  "baseline_metrics": {
+    "held_out/mol/bond_path/held_out/em_accuracy": 0.0625,
+    "in_mixture/mol/g2s/test/validity": 0.03125,
+    "in_mixture/mol/bace/test/roc_auc": 0.6958333333333333,
+    "in_mixture/mol/ring_count/test/em_accuracy": 0.03125
+  }
+}

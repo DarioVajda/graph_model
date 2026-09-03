@@ -1,0 +1,90 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The smoke run's checkpoint, scored on two tasks it never trained on. No
+  // training happens from this file; it is an `eval`-mode config.
+  //
+  //   src/generalist/tools/run_cli.sh data_prep --only mol/ring_count,mol/chebi20 \
+  //     --config src/generalist/configs/004_smoke_probe.jsonc
+  //   GPU=1 src/generalist/tools/run_cli.sh eval --only-validators in_mixture \
+  //     --checkpoint src/generalist/results/runs/smoke_graph/checkpoint-200 \
+  //     --config src/generalist/configs/004_smoke_probe.jsonc
+  //
+  // T10 left two pieces of the harness unexercised against a real model, and
+  // this config reaches both in one scoring pass — see `smoke_probe` in
+  // `config.py` for which and why. In short: ChEBI is the campaign's only
+  // `text` task, so the caption scorer had never seen a model's output; and an
+  // `admit` fork is undecided without the parent's number for its candidate, so
+  // `mol/ring_count` is scored here to become that number.
+  //
+  // Every field below the mixture line is the smoke config's, unchanged and
+  // deliberately so: the adapter fields decide the build directory, so matching
+  // them means this reads the smoke run's own artifacts and adds two tasks to
+  // them rather than rebuilding six. `name` differs so the eval record lands
+  // under its own run directory instead of inside the smoke run's.
+  //
+  // `validators: smoke` for the sample caps; the scoring pass is narrowed to
+  // `in_mixture` on the command line. `max_steps` and the schedule fields are
+  // inert in `eval` mode and are kept at the smoke values so the config hash
+  // difference is confined to the mixture.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "smoke_probe",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200",
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      "inductor_cache": ".inductor_cache/generalist_smoke"
+    }
+  },
+
+  "arm": "graph",
+  "mixture": "smoke_probe",
+  "validators": "smoke",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "spd+magnetic",
+  "max_spd": 32,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "tier_a_cap_per_pass": 2000,
+  "g2s_cap_per_pass": 2000,
+  "held_out_size": 200,
+  "data_seed": 0,
+
+  "tokens_per_step": 8192,
+  "accumulation_steps": 4,
+  "max_steps": 200,
+  "min_examples_per": 0,
+
+  "lr": 3e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 3e-5,
+  "warmup_steps": 20,
+  "rewarm_steps": 20,
+  "weight_decay": 0.1,
+
+  "save_steps": 50,
+  "save_total_limit": 4,
+  "logging_steps": 1,
+  "milestone_steps": 100,
+
+  "seed": 0,
+  "wandb_project": null
+}

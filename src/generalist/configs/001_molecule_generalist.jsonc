@@ -1,0 +1,112 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // Arm 2 of the molecules plan: one 1B model over every molecule task.
+  // MOLECULE_GENERALIST.md §2 (the mixture) and §7 (the recipe).
+  //
+  //   python3 -m src.generalist validate  --config src/generalist/configs/001_molecule_generalist.jsonc
+  //   python3 -m src.generalist data_prep --config src/generalist/configs/001_molecule_generalist.jsonc
+  //   src/generalist/tools/chain.sh       src/generalist/configs/001_molecule_generalist.jsonc
+  //
+  // Gated on the two checklist items at the top of MOLECULE_GENERALIST.md: the
+  // tuned three-seed arm-1 re-run, and the T10 smoke run. Nothing here should be
+  // submitted before both have reported — `lr`, `tokens_per_step` and
+  // `in_mixture`'s cost are all values the smoke run settles.
+  //
+  // The flat twin is the same file with "arm": "flat" and "bias": "none";
+  // RunConfig.validate refuses a flat arm carrying a bias, because on a
+  // single-node graph every structural bias is identically zero (Property 2) and
+  // a bias string in the record would advertise a comparison that is not
+  // happening. Three seeds x two arms is the whole of the compute (§7).
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "molecule_generalist_graph_s0",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200",
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      // Shared across the chain's chunks: every chunk compiles the same flex
+      // kernels, and that work is CPU-bound and byte-identical between them
+      // (project-ddp-flex-bucketing). Used only if the directory exists, so a
+      // fresh clone falls back to a per-job cache and just compiles.
+      "inductor_cache": ".inductor_cache/generalist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // The chain script reads this block; the sweep runner ignores it.
+  "chain": {
+    "chunks": 6,
+    "dependency": "afterany"
+  },
+
+  // ── what the run is ─────────────────────────────────────────────────────────
+  "arm": "graph",
+  "mixture": "molecule_generalist",   // §2, computed from its own rule in config.py
+  "validators": "default",
+
+  // ── model and bias (§7) ─────────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "spd+magnetic",
+  // Pending the clamp sweep (molecules/PLAN.md §8.4.3, §9). The Levi transform
+  // doubles every distance, so 32 clamps the far half of about a quarter of
+  // molecules; the per-example error-vs-diameter measurement decides it, not a
+  // round number.
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,                       // the r32 axis is closed (§8.4.5)
+  "lora_dropout": 0.05,               // the molecules value, so arm 1 and arm 2 match
+
+  // ── data (§1, §3, §5, §6) ───────────────────────────────────────────────────
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",              // routed by the question alone
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  // ── mixture and schedule (§2, §7) ───────────────────────────────────────────
+  // Settled off the T10 smoke rather than picked: 8192 tokens/step measured
+  // 1.17 s/it at a 42.5 GB peak on one B200, so 16384 is about 2.3 s/it at
+  // ~85 GB — a few dozen examples a step, which is the range the specialist runs
+  // sit in at batch 4 x accum 8, with headroom for a long caption batch.
+  "tokens_per_step": 16384,
+  "accumulation_steps": 8,
+  "loss_norm": "per_example",         // §2: captions would otherwise be the gradient
+  "max_steps": 0,                     // 0 = the §2 budget rule sets the horizon
+  "lr": 3e-4,                         // provisional at r16; the three-seed re-run settles it
+  "bias_lr": 1e-2,
+  "lr_min": 3e-5,                     // §7: the anneal decays to lr/10
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  // ── checkpointing and evaluation ────────────────────────────────────────────
+  // save_steps is what a chunk boundary costs when Slurm kills a job mid-chunk:
+  // the chain resumes from the last COMPLETE checkpoint, so at most 500 steps of
+  // work is lost per killed chunk.
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,            // held_out + base_exact cadence during training
+
+  "seed": 0,
+  "wandb_project": null
+}

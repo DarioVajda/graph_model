@@ -1,0 +1,41 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The `anneal` fork that closes a cross-check trunk. D6's first fork mode.
+  //
+  //   GPU=1 INDUCTOR_CACHE=.inductor_cache/generalist_crosscheck \
+  //   src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/cross_check_bace_flat/checkpoint-1510 \
+  //     --mode anneal \
+  //     --fork-config src/generalist/configs/forks/anneal_cross_check.jsonc \
+  //     --config src/generalist/configs/003_cross_check_bace_flat.jsonc
+  //
+  // One file for both arms. The two trunks differ in `tokens_per_step` and so in
+  // step count, but they train the same corpus for the same 40 passes and stop
+  // within a handful of examples of the same place, so the allowance below
+  // covers either.
+  //
+  // WHAT IT PRODUCES. The reportable number. The trunk runs WSD's stable phase
+  // at a flat LR and its last checkpoint is mid-schedule by construction; the
+  // specialist it is being compared against decays to lr/10 over its last
+  // epochs, so the comparable model is the one this fork writes, not the one the
+  // trunk stops at. `min_factor` is left to the run config's `lr_min`.
+  //
+  // WHY `passes` IS RAISED. A corpus hands out `passes x train_size` examples in
+  // total, and the trunk's budget rule — the largest budget under which no
+  // corpus overruns — spends the whole 40-pass allowance to size its own step
+  // count. The flat trunk ends at 48314 examples of 48320 and the graph trunk at
+  // 48306, so an anneal appended to either has single digits to train on. 45
+  // covers the decay (~151 steps at ~32 examples/step is four more epochs) with
+  // the endpoint step's margin to spare; the model still sees 40 flat epochs and
+  // ~4 decaying, which is the split the run configs describe.
+  //
+  // This is the shape every trunk-then-anneal pair will need, arm 2 included:
+  // the trunk's `passes` sizes the run, the fork's `passes` pays for the tail.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // The validator set is the run config's, as it is for every fork: `mode_fork`
+  // builds it from `--config`. Only `eval_steps` is a fork-level choice, and it
+  // is here so the decay is scored on its way down rather than only at the end.
+  "passes": {"mol/bace": 45},
+  "eval_steps": 50
+}

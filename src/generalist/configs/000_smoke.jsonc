@@ -1,0 +1,106 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The plumbing smoke run (DESIGN.md §T10). 1B, three maximally different
+  // tasks, 200 steps, on one GPU.
+  //
+  //   python3 -m src.generalist validate  --config src/generalist/configs/000_smoke.jsonc
+  //   python3 -m src.generalist data_prep --config src/generalist/configs/000_smoke.jsonc
+  //   python3 -m src.generalist train     --config src/generalist/configs/000_smoke.jsonc
+  //   python3 -m src.generalist resume    --from latest --config src/generalist/configs/000_smoke.jsonc
+  //   python3 -m src.generalist fork      --from <ckpt> --mode anneal --config src/generalist/configs/000_smoke.jsonc
+  //
+  // What it is for, in the order T10 lists: the per-task gradient share tracks
+  // the configured weight, no task is at zero, a resume mid-run is bit-exact, one
+  // anneal fork produces a reportable model, and every validator ran. It is also
+  // where the three numbers DESIGN.md §10 leaves open get measured —
+  // `tokens_per_step` from the s/it, `decay_steps` from whether the annealed
+  // model has settled, and what an `in_mixture` firing actually costs.
+  //
+  // The three tasks are chosen to be maximally different rather than
+  // representative: `mol/bace` is a yes/no corpus scored by the logit margin,
+  // `mol/ring_size` is a token-exact generator, `mol/g2s` is a generative SMILES
+  // task. Between them they exercise both metric families, both pass
+  // disciplines and both scoring paths (teacher-forced and generative).
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "smoke_graph",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200",
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      // Shared across the chain's chunks. Without it every chunk recompiles the
+      // same flex kernels from scratch: a resumed chunk of this run spent eight
+      // of its twelve minutes compiling and trained for four, which measures the
+      // compiler rather than the harness. Separate from the trunk's cache
+      // because the two differ in `max_spd` and in sequence shapes, and a chunk
+      // that misses is only slower, never wrong.
+      "inductor_cache": ".inductor_cache/generalist_smoke"
+    }
+  },
+
+  "chain": {
+    "chunks": 2,
+    "dependency": "afterany"
+  },
+
+  "arm": "graph",
+  "mixture": "smoke",
+  "validators": "smoke",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "spd+magnetic",
+  "max_spd": 32,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  // Small enough that data_prep is minutes rather than an hour, large enough
+  // that a 200-step run does not exhaust a generator pass and stop measuring the
+  // thing it is there to measure.
+  "tier_a_cap_per_pass": 2000,
+  "g2s_cap_per_pass": 2000,
+  "held_out_size": 200,
+  "data_seed": 0,
+
+  "tokens_per_step": 8192,
+  "accumulation_steps": 4,
+  // A step count, not the budget rule: over 200 steps the finite sources' pass
+  // caps are not what is being tested, and the §2 budget would be the whole run
+  // rather than a warm-up. `min_examples_per: 0` disables D2.2's floor for the
+  // same reason — over 200 steps a task that would train on nothing over 1000 is
+  // not the bug that check is looking for.
+  "max_steps": 200,
+  "min_examples_per": 0,
+
+  "lr": 3e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 3e-5,
+  "warmup_steps": 20,
+  "rewarm_steps": 20,
+  "weight_decay": 0.1,
+
+  // Every 50 steps, so a mid-run resume has a checkpoint to come back to and the
+  // 200-step run ends on one.
+  "save_steps": 50,
+  "save_total_limit": 4,
+  "logging_steps": 1,
+  "milestone_steps": 100,
+
+  "seed": 0,
+  "wandb_project": null
+}

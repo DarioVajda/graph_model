@@ -1,0 +1,141 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The cross-check, graph arm (MOLECULE_GENERALIST.md checklist; DESIGN.md §8).
+  //
+  //   python3 -m src.generalist validate  --config src/generalist/configs/002_cross_check_bace_graph.jsonc
+  //   python3 -m src.generalist data_prep --config src/generalist/configs/002_cross_check_bace_graph.jsonc
+  //   src/generalist/tools/chain.sh       src/generalist/configs/002_cross_check_bace_graph.jsonc
+  //   python3 -m src.generalist fork --from <ckpt> --mode anneal --config <this>
+  //
+  // ONE SPECIALIST CELL, THROUGH THIS HARNESS. BACE seed 0 as a single-task
+  // mixture, at the recipe `026_lr3e4_lora_screen` ran it: `rich_levi`,
+  // `question_node on`, `max_spd` 32, `lora_r` 16, `lr` 3e-4, `bias_lr` 1e-2,
+  // 40 epochs. That cell reported **test AUROC 0.8220** as seed 0, and this run
+  // has to land in the same band. Until it does, arm 2 minus arm 1 is a
+  // difference between two trainers, not transfer, and no amount of arm-2
+  // compute fixes that.
+  //
+  // WHAT "THE SAME BAND" IS, measured rather than asserted. `molecules/PLAN.md`
+  // §8.4.8 closed BACE at three seeds on the settled recipe: graph
+  // 0.8220 / 0.8313 / 0.8074, mean **0.8202**, sd 0.0120; flat
+  // 0.8470 / 0.7975 / 0.8228, mean **0.8224**, sd 0.0248. Those are the bands.
+  // A single harness seed landing inside its arm's three-seed range is agreement;
+  // landing outside it by more than a seed-sd is a trainer difference. One seed
+  // against three cannot do better than that, which is the honest limit of this
+  // check and the reason it is a gate rather than a result.
+  //
+  // WHAT IS MATCHED, and it is nearly everything that matters:
+  //   * the split, checked key by key rather than argued from the code
+  //     (`tools/compare_bace_split.py`). Val and test are the *same* 151 and 152
+  //     molecules on both sides, with nothing in either that the other lacks and
+  //     no molecule crossing between splits. Train is 1178 keys against the
+  //     specialist's 1180: §3's cross-source partition gives two BACE molecules
+  //     to a source with a higher claim. Two molecules in 1210 is the only data
+  //     difference between this run and `026`, and it is on the side that does
+  //     not decide the readout.
+  //   * the budget. `passes: 40` over 1208 training molecules is 48320 examples,
+  //     which is the specialist's 40 epochs.
+  //   * examples per step. The specialist ran batch 4 x accum 8 = 32. BACE's
+  //     graph arm means 363.4 tokens an example, so 11648 tokens a step is the
+  //     same 32, and the run is the same ~1510 optimizer steps.
+  //   * lr, bias_lr, lora_r, lora_dropout, encoding, question_node, max_spd,
+  //     magnetic dims, weight_decay, seed.
+  //
+  // WHAT IS NOT, and is disclosed rather than hidden: the schedule. The
+  // specialist runs `cosine_with_min_lr` with one epoch of warmup over the whole
+  // 40; this harness runs WSD — warmup, stable, and then an anneal fork that
+  // decays to `lr_min`. That difference is not a defect to be removed, it is the
+  // recipe arm 2 will actually use, so the number to compare is the **fork's**
+  // end-of-leg AUROC and not the stable leg's. The anneal adds ~10% on top of
+  // the 40 epochs; the specialist spends its 40 decaying, this spends 40 flat
+  // and 4 decaying.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "cross_check_bace_graph",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      // BACE graph peaked at 43-68 GB host on the specialist side and the smoke
+      // peaked at 42.5 GB device; 128G is comfortable. The HIV cells are the
+      // only ones anywhere near a limit and this is not one of them.
+      "mem": "128G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh",
+      // Shared with the flat twin and with the fork: same model, same kernels.
+      "inductor_cache": ".inductor_cache/generalist_crosscheck"
+    }
+  },
+
+  "chain": {
+    "chunks": 2,
+    "dependency": "afterany"
+  },
+
+  "arm": "graph",
+  "mixture": "cross_check",
+  // `default`'s `in_mixture` cap is the expensive knob on the trunk mixture,
+  // where a firing generates 3.3k captions and 1k SMILES strings. Here the whole
+  // mixture is one `yesno` corpus with a 152-row test split: every firing is
+  // teacher-forced over fewer rows than the cap, so the cap never binds and the
+  // cost question the smoke left open does not arise on this run.
+  "validators": "default",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "spd+magnetic",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  // BACE is the only task in the mixture, so the Tier-A and graph-to-SMILES
+  // caps never bind. They are set anyway because `data_prep` reads them, and a
+  // build whose parameters differ from the smoke's would rebuild the world.
+  "tier_a_cap_per_pass": 2000,
+  "g2s_cap_per_pass": 2000,
+  "held_out_size": 200,
+  "data_seed": 0,
+
+  // 32 examples a step at BACE-graph's 363.4 mean tokens, matching the
+  // specialist's batch 4 x accum 8. See the header.
+  "tokens_per_step": 11648,
+  "accumulation_steps": 8,
+  // 0: the budget rule sets the horizon, and `passes: 40` in the mixture is what
+  // makes that horizon the specialist's 40 epochs. This is the first config
+  // where the budget rule is the point rather than something a smoke overrides.
+  "max_steps": 0,
+
+  "lr": 3e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 3e-5,
+  // The specialist warms up for one epoch (38 steps). Rounded to 40 here; the
+  // difference is under a step of the specialist's own schedule.
+  "warmup_steps": 40,
+  "rewarm_steps": 40,
+  "weight_decay": 0.1,
+
+  "save_steps": 250,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  // Five milestones over ~1510 steps. `held_out` and `base_exact` fire here;
+  // neither is the cross-check's readout, but a held-out curve on a single-task
+  // run is the cheapest look at whether the harness transfers at all.
+  "milestone_steps": 300,
+
+  "seed": 0,
+  "wandb_project": null
+}
