@@ -53,9 +53,15 @@ Every sweep is reproducible from `configs/`, one file per sweep, numbered contig
 | `022_m3b_hiv_prep` | 4 | builds the **four** HIV artifacts (flat + three encodings) so `025` hits a warm cache. **Supersedes `012`**, which predates the encoding axis and asked for two | 8.4 |
 | `023_encodings_seed1` | 8 | seed 1 of `021`'s screen, one job / eight runs in sequence. The power calculation that justifies the extra seeds is in its header and in §8.4 | 8.4 |
 | `024_encodings_seed2` | 8 | seed 2, identical to `023` but for the seed | 8.4 |
-| `025_m3b_hiv_encodings` | 12 | ✅ **M3b — HIV, four arms, 3 seeds, 10 epochs.** 12/12 COMPLETED. `rich_atom_only` beats flat on **all three seeds** (+0.0159 ± 0.0042) — the only consistent-sign win in the campaign. **Supersedes `013`** | **8.4.3** |
-| `026_lr3e4_lora_screen` | 12 | 🔄 **the lr 3e-4 screen** — 3 arms × BACE/BBBP × `lora_r` {16, 32}, one seed. Replaces an abandoned `lr` × `bias_lr` grid whose ceiling was on the wrong side of the optimum | **8.4.4** |
-| `027_lr3e4_lora_screen_hiv` | 6 | 🔄 the same screen on HIV, 10 epochs, `eval_steps` 200 | **8.4.4** |
+| `025_m3b_hiv_encodings` | 12 | ✅ **M3b — HIV, four arms, 3 seeds, 10 epochs.** 12/12 COMPLETED. `rich_atom_only` beats flat on **all three seeds** (+0.0159 ± 0.0042) — the only consistent-sign win in the campaign, **at `lr` 3e-5 and with the encoding §8.4.4 later retired**. The closing sweep does not reproduce it: `rich_levi` at the tuned rate leads HIV by +0.0075 on 2/3 seeds with the last-checkpoint sign flipped (§8.4.8). **Supersedes `013`** | **8.4.3**, 8.4.8 |
+| `026_lr3e4_lora_screen` | 12 | ✅ **the lr 3e-4 screen** — 3 arms × BACE/BBBP × `lora_r` {16, 32}, one seed. Replaces an abandoned `lr` × `bias_lr` grid whose ceiling was on the wrong side of the optimum. **Also supplies the closing sweep's graph seed 0 on BACE and BBBP**, which already sat at the settled recipe | **8.4.5** |
+| `027_lr3e4_lora_screen_hiv` | 6 | ✅ the same screen on HIV, 10 epochs, `eval_steps` 200. 3e-4 is wrong for HIV on both arms; the graph arm shows a val→test inversion here | **8.4.7** |
+| `028_hiv_lr1e4_r16` | 4 | ✅ HIV at `lr` 1e-4, `lora_r` 16 — the third rate, which settles HIV for both arms. `rich_levi` 0.7839 vs `rich_atom_only` 0.6731 retires §8.4.3's encoding tie. **Supplies the closing sweep's graph seed 0 on HIV** | **8.4.7** |
+| `029_tier_b_closing_bace_bbbp` | 12 | ✅ closing sweep, BACE + BBBP, both arms, 3 seeds. **Supplies the flat arm** for those two datasets; its graph rows ran at `max_spd` 64 and are ablation, not headline | **8.4.8**, 8.4.9 |
+| `030_tier_b_closing_hiv_flat` | 3 | ✅ closing sweep, HIV flat, 3 seeds. Its seed 0 reproduced `028`'s **bitwise**, which is the proof `max_spd` is inert on the flat arm | **8.4.8**, 8.4.9 |
+| `031_tier_b_closing_hiv_graph` | 3 | ⚠️ **1/3 — seeds 0 and 2 OOM-killed** at ~6 h, 134.16 GB against a 128G limit. Superseded as headline by `033`; n=1 leaves HIV with no clamp-ablation leg. 11.8 GPU-h lost to a memory request never checked against a measured peak | 8.4.9 |
+| `032_tier_b_closing` | 18 | 📄 **not run** — the canonical config that reproduces all eighteen closing cells in one file, at the settled recipe | **8.4.6** |
+| `033_tier_b_closing_graph_spd32` | 6 | ✅ **6/6 — the graph arm at `max_spd` 32**, seeds 1 and 2 on all three datasets, after the 64 fiat was reversed. Seed 0 comes from `026`/`028`. **Completes the closing table at 18/18** | **8.4.6**, **8.4.8** |
 
 `014` **supersedes `008` + `009`**, which measured the same families on contaminated splits
 (§3.2.10). It also folds the two files back into one: with `bias_lr` carried on the arm bundle,
@@ -334,7 +340,7 @@ BLEU-4. All use 3D or large-scale molecular pretraining we do not have.
 |---|---|---|
 | **A1** | Tier A: graph arm ≥ +15 points over the SMILES flat twin on `ring_membership`, `ring_size`, `bond_path`. | **Still not met on the named families, but closer on clean splits** (§3.2.5, `014`): `ring_size` +12.9, `ring_membership` +4.1. `bond_path` is held out (§4.1) and cannot be measured. Note `longest_chain` clears the bar at **+16.0** — the threshold is achievable, it is the *named* families that are ceiling-bound: the graph arm is at 0.978–1.000 on both, so the gap is capped by flat's headroom, not by the graph channel. |
 | **A2** | Tier A: graph arm **wins** `stereo_potential`; on `stereo_assigned`, chance under `stereo_tags: off`, high under `on`. | **First half PASSES on a properly molecule-disjoint measurement (2026-09-01, `014`):** `stereo_potential` graph 0.767 vs flat 0.724, **+0.043 (+2.2σ)** ✅ — up from +0.025 on the contaminated splits. **Second half is now UNMEASURABLE on this pool:** `stereo_assigned`'s test split collapsed to a single answer (§3.2.10.1), so both arms score 1.000 and the off/on contrast has no signal to carry. The 2026-08-31 `011` result (0.9928 with the parity tag → 0.8152 without) stands as the only measurement of it, on the old pool and old splits. **Re-running the off/on contrast requires a pool where the family is not degenerate** — `bace,bbbp,tox21,lipo`, now **measured** at 10 classes / base 0.732 on its test split, against 1 class / 1.000 on `014`'s (§9). `016_leakage_detector_restore` is written against it and pre-registers the pass line at 0.774; until it runs, A2's second half is *unverified on clean data*, not passed. |
-| **B1** | Tier B: graph arm beats **our own flat twin** by ≥ 1 sd on ≥ 2 of the primary 3 classification sets. **This is the real result.** | **FAILS on 2 of 2 measured (§2.6, `001`).** BACE −0.017 (−1.0 sd), BBBP −0.033 (−2.5 sd) — the graph arm *loses* to flat on both, so B1 cannot be met even if HIV wins. Not a budget or scoring artifact (§8.2, §2.6). **§3.2.5 pre-registered this outcome.** HIV (M3b) still to run for the record. |
+| **B1** | Tier B: graph arm beats **our own flat twin** by ≥ 1 sd on ≥ 2 of the primary 3 classification sets. **This is the real result.** | **FAILS, 0 of 3, at the settled recipe — final (§8.4.8, 2026-09-03).** Three seeds per cell, matched `lr`, `max_spd` 32: BACE −0.0022, BBBP −0.0101, HIV +0.0075. The graph arm leads only on HIV and by well under that set's seed-sd of 0.0130. Pooled over 9 paired seeds the difference is **−0.0016, 95% CI [−0.023, +0.020]**, graph winning 4/9 seeds — the arms are indistinguishable. **§3.2.5 pre-registered this outcome** and it has survived a scoring fix, a split fix, an encoding change, a rank screen, a learning-rate correction and a clamp reversal. *Caveat on the gate itself:* "≥ 1 sd on ≥ 2 of 3" asks for a margin near 0.013–0.025 from a three-seed design whose per-dataset resolution is 0.077, so B1 was never attainable as written (§8.4.8). |
 | **B2** | Tier B: within 3 AUROC of InstructMol-G on BACE/BBBP/HIV at 1B vs 7B. Aspirational, not a gate. | **Met on both measured sets, by both arms.** Graph 81.8 / 67.2 and flat 83.6 / 70.5 against 84.3 / 68.6; our flat *exceeds* the BBBP row. §2.6 |
 | **B3** | Tier B: beat the Llama-2-7B-chat LoRA row (74.8 / 65.6 / 62.3) at 1B. If we do not, the flat twin will not either, and the domain is telling us the molecules are being read badly — check M1's round-trip test before blaming the architecture. | **PASSES on both measured sets** (§2.6). Flat 83.6 / 70.5 and graph 81.8 / 67.2, both above 74.8 / 65.6 at 1/7 the parameters. The molecules are being read fine; B1's failure is not a plumbing failure. |
 | **P1** | §6: flat twin AUROC spread across randomized SMILES ≥ 2 points; GTLM spread < 0.1 (bounded by Property 1's 2.77e-5). | Pending M6 |
@@ -345,6 +351,14 @@ BLEU-4. All use 3D or large-scale molecular pretraining we do not have.
 BACE + BBBP, three arms, three seeds, `lr 3e-5 / bias_lr 5e-3 / lora_r 16`, 40 epochs (BACE ~1480
 steps, BBBP ~2040). Test ROC-AUC, mean ± sd over seeds; the sd is **seed-to-seed training
 variance**, since `scaffold_split` is deterministic and all three seeds share one split.
+
+> **Read this section at `lr` 3e-5 and nowhere else.** §8.4.4 established that 3e-5 is below the
+> useful range for Tier B, and the closing sweep re-measures gate B1 at the tuned per-(task, arm)
+> rates on all three datasets — **§8.4.8 carries the numbers that supersede this table.** What is
+> below stays as the first Tier-B measurement and as the record of §3.2.5's pre-registered
+> prediction; it is not the current answer on B1. The seed-sd quoted here is also rate-specific and
+> should not be carried forward as a noise gate — at the tuned rates it is 2–3× larger on BACE and
+> BBBP and 3× smaller on HIV (§8.4.8).
 
 | set | our **flat** | our **graph** (`spd+magnetic`) | our **graph** (`bias: none`) |
 |---|---:|---:|---:|
@@ -1123,10 +1137,21 @@ Three consequences:
 
 ### 3.4 Everything else follows D3
 
-`question_node: on` (§3.2.3 — `"isolated"` is rejected here, not aliased), `k_hop = 0`,
-`prompt_style: chat` with instruct weights, LoRA dropout 0.15, RCM ordering on, `max_spd = 32`
-(§3.2.2), and from §3.2.7 onward **`lr = 3e-5`, `bias_lr = 5e-3`, `lora_r = 16`**. Flex for the
-graph arm, eager for the controls (§3.1.2).
+`question_node: on` (§3.2.3 — `"isolated"` is rejected here, not aliased), `k_hop = 0`, LoRA dropout
+0.15, RCM ordering on, `max_spd = 32` (§3.2.2), and from §3.2.7 onward `bias_lr = 5e-3` and
+`lora_r = 16`. Flex for the graph arm, eager for the controls (§3.1.2).
+
+**The base model is `meta-llama/Llama-3.2-1B` — raw pretrained weights, not the instruct variant**
+(`config.py:22`, and the `model_name` recorded on every molecules run confirms it). An earlier version
+of this line claimed `prompt_style: chat` with instruct weights; that was wrong twice over, since the
+molecules experiment has no `prompt_style` field to set. Instruct weights are used only in KGQA. This
+matters for reading §2.5's baseline comparisons: InstructMol and the other LLM baselines start from
+instruction-tuned checkpoints and we do not, which is a handicap we carry deliberately — the structural
+bias is the object of study and an instruct base would confound what the prefix nodes contribute.
+
+**The learning rate is no longer 3e-5.** §8.4.4 found every Tier-B number to that point was measured
+below the useful range, and §8.4.6 settles it per (task, arm): 3e-4 on BACE and BBBP, 1e-4 on HIV,
+matched across arms on all three. Tier-A numbers stand at 3e-5 as measured.
 
 The question node carries the task instruction **and the endpoint name** — that is what makes a
 multi-endpoint set one model rather than 39 heads, and it is the GTLM-natural choice: one example
@@ -1870,6 +1895,153 @@ concordance figure should not be read as licensing this use.
 worth three seeds; the BACE conclusion (flat ahead, gap widened) is the more robust of the two
 because it runs with the +3.1σ flat improvement rather than against it.
 
+> **RESOLVED 2026-09-02, and the fragility warning above was right: the BBBP win did not survive.**
+> Three seeds at the settled recipe put the flat arm's BBBP range at 0.6983–0.7403, which **contains**
+> the 0.7306 quoted here — the +0.0298 margin was one seed of the flat arm's own spread, not a win.
+> The paired three-seed comparison is in §8.4.8 and is the number that counts. Two things this section
+> got right are worth keeping: the selection-gain diagnostic identified the fragile cell correctly
+> before the seeds were run, and the last-checkpoint sign flip predicted the direction the extra seeds
+> moved in. The lesson is that a **one-seed margin smaller than its own selection gain is not a
+> finding**, and this section should be read as the screen it was rather than as a result.
+>
+> The BACE conclusion here also needs a correction, in the opposite direction: §8.4.4's claim that
+> tuning gains the flat arm +0.033 on BACE rested on the same single seed (0.8598 against 0.8268).
+> At three seeds the tuned flat mean is 0.8224 — **−0.004**, not +0.033. The tuning gain on BACE is
+> not there. What survives is that 3e-4 is not *worse*, which is a much weaker statement than §8.4.4
+> makes, and the per-arm rate rule in §8.4.6 was settled on evidence this thin throughout.
+
+### 8.4.6 THE CLOSING SWEEP — rules fixed before the last screen cell landed (2026-09-02)
+
+The specialist campaign closes with **one measurement sweep**, not more exploration. Everything
+below was written while `028`'s graph `rich_levi` HIV cell was still running, so none of it can have
+been chosen after seeing the result it applies to. That is the whole point of writing it here.
+
+**1 — ENCODING: `rich_levi`, and this is already determined.** The pre-registered tie-break (§3.2,
+2026-08-29) is `rich_levi`. Standing head-to-head at r16: BACE 0.8220 vs 0.7986 and BBBP 0.7306 vs
+0.7032 both favour `rich_levi`; HIV at 3e-4 favours `rich_atom_only`, 0.6927 vs 0.6754. So BACE and
+BBBP agree and HIV dissents. The pending cell cannot change the outcome — if it favours `rich_levi`
+the choice is unanimous, and if it favours `rich_atom_only` the two-against-one disagreement fires
+the tie-break to the same place. **The disagreement is recorded, not re-run.**
+
+**2 — LEARNING RATE: chosen per `(task, arm)`, under a declared rule.** An earlier draft of this
+section settled on one global rate. That was wrong — it forces a single compromise on three datasets
+whose optima demonstrably differ, and it throws away the fairest form of the comparison, which is
+both arms tuned to their own best. The rule is:
+
+> Each `(task, arm)` gets the rate best supported for **that arm**. Where val and test disagree, the
+> tie goes to whichever rate is better for the **flat** arm.
+
+**The second clause is selection on test, it is applied against our own interest, and it is declared
+rather than hidden.** It fires exactly once, on BACE/flat:
+
+| BACE flat | best val | test ROC-AUC |
+|---|---:|---:|
+| `lr` 3e-5 | **0.7497** | 0.8268 *(3 seeds)* |
+| `lr` 3e-4 | 0.7341 | **0.8598** *(1 seed)* |
+
+Selecting per-arm on val would give flat 3e-5 (0.8268) against the graph arm's 3e-4 (0.8220) and
+convert a comfortable loss into a near-tie — **a win manufactured by handing the baseline a rate we
+have direct evidence is worse for it.** The override takes 3e-4. This is not an exception invented
+for the occasion: §8.4.5 independently found that BACE val cannot make *within-arm* choices — it
+mis-ranks `lora_r` at a 0.049 test cost — even though it ranks *across* arms at 83%.
+
+Nowhere else does the rule bite. BACE graph (val 0.7096 > 0.6981, test 0.8220 > 0.8208) and BBBP
+graph (val 0.9746 > 0.9602, test 0.7306 > 0.6847) have val and test agreeing on 3e-4. BBBP flat
+splits 0.0009 on test and 0.0014 on val between the two candidates, inside a seed-sd of 0.0105 either
+way, so matching it to 3e-4 costs the baseline nothing measurable and buys a matched comparison. HIV
+flat is 1e-4 on both criteria at once (val 0.8240 and test 0.7485, both best).
+
+| task | arm | `lr` | basis |
+|---|---|---:|---|
+| bace | flat | 3e-4 | val says 3e-5, test says 3e-4 — **override, against us** |
+| bace | graph | 3e-4 | val and test agree |
+| bbbp | flat | 3e-4 | 0.0009 apart on test — noise; matched to graph at no cost |
+| bbbp | graph | 3e-4 | val and test agree |
+| hiv | flat | 1e-4 | val-best and test-best |
+| hiv | graph | *held* | 3e-5 → 0.7483, 3e-4 → 0.6754, 1e-4 pending `028` |
+
+**3e-5 is not a candidate for either arm on BACE or BBBP.** It is the rate §8.4.4 shows handicaps the
+flat arm on BACE, and keeping it would favour our own arm. That elimination is expensive — three-seed
+flat baselines already exist at 3e-5 on all three datasets, so keeping it would have made this sweep
+nearly free — and it is made anyway.
+
+**BACE and BBBP therefore run both arms at 3e-4**, matched on every axis. HIV is the only dataset
+where the rates diverge by arm, and that divergence is the per-arm tuning working as intended, not an
+asymmetry smuggled in.
+
+**The BACE evidence for this direction is weaker than §8.4.4 makes it look, and that is recorded
+here.** §8.4.4's `lr` 1e-5 and 1e-4 rows (0.7821 and 0.8594) came from the abandoned grid whose
+records that same section says were **discarded**. They survive only as quoted numbers: there is no
+`runs.jsonl` row, no eval curve and no per-example file behind either. The *direction* is
+independently corroborated — `026` measures BACE/flat at 0.8598 at 3e-4 against the three-seed 0.8268
+at 3e-5 — but the specific 1e-4 row is not reproducible from this repository and should not be cited
+as if it were. Any future write-up quotes `026`, not that table.
+
+**3 — `max_spd`: 32, the value the whole campaign has used.** The clamp ceiling was measured first,
+from `026`'s per-example reports, and it is small:
+
+| | molecules touching clamp | mean fraction of **pairs** clamped | max Levi diameter | above 64 |
+|---|---:|---:|---:|---:|
+| bace `rich_levi` | 53.3% | **2.56%** | 82 | 0.66% |
+| bbbp `rich_levi` | 24.5% | **1.20%** | 72 | 0.49% |
+| bace `rich_atom_only` | 0.7% | 0.045% | 41 | 0 |
+| bbbp `rich_atom_only` | 0.5% | 0.006% | 36 | 0 |
+
+**§8.4.3 argues the mechanism from the wrong column.** It cites "53% of BACE molecules touch the
+clamp", but the bias is a per-*pair* lookup (`bias.py:112`), so the governing quantity is 2.56%. The
+direction of that argument survives — `rich_atom_only` really does escape the clamp 57× more
+thoroughly — but the magnitude was overstated and §8.4.3 should be read with this correction.
+
+That small ceiling was first read as licence to raise it: 64 costs only a `64 × num_heads` bias table
+instead of `32 × num_heads`, so the permissive value was taken by fiat and the planned clamp sweep
+cancelled. **That was a mistake, and reversing it is the last correction the specialist campaign
+makes.** Not because 64 measured badly, but because it was a change with no case behind it: sweeps
+`001` through `028` — 26 of them, Tier A and Tier B alike — all ran at 32, and moving the closing
+sweep alone to 64 made the campaign's headline numbers the only ones in the project not directly
+comparable with §8.4.3, §8.4.4, §8.4.5 or the Tier-A specialists. A knob is not free just because its
+parameter count is. **32 is the setting, `033` re-runs the graph arm at it, and the recipe is once
+again continuous with everything the project has measured.**
+
+*Consequence for reuse:* seed 0 already exists at the settled recipe and `max_spd` 32 on all three
+tasks — BACE and BBBP in `026`, HIV in `028` — so `033` runs only seeds 1 and 2, six cells. Flat
+cells need nothing: the flat arm instantiates no SPD bias table at all (`009`'s run-record proof), so
+`max_spd` is inert there and `029`/`030`'s flat rows are already the max_spd-32 flat rows. §8.4.9
+records the 64 runs as the ablation they turned out to be.
+
+**4 — `lora_r` 16 and `bias_lr` 1e-2.** The rank axis is closed by §8.4.5. `bias_lr` takes the value
+the screen actually ran at the settled rate, so the closing sweep measures a recipe that was
+screened rather than a novel combination.
+
+**What this sweep can and cannot claim.** `lr` and `bias_lr` moved together between the 3e-5
+baselines and every tuned cell, so **"tuning changed the graph arm by X" stays confounded** and is
+not claimed. What *is* clean is the sweep's primary comparison: graph against flat at matched `lr`,
+matched budget, matched split, matched seeds and one selection rule, with `bias_lr` the single
+declared asymmetry that has no flat equivalent. That is the number the campaign closes on.
+
+**The stated limitations, and they are limitations of the grid, not of the sweep.** Two candidates
+were ever measured on BACE and BBBP (3e-5, 3e-4) and three on HIV (3e-5, 1e-4, 3e-4). Nothing in this
+campaign locates a *peak* — 3e-4 is the largest rate tried on BACE/BBBP and the flat arm was still
+gaining there, so the optimum may sit above it for both arms. Each per-arm choice above rests on one
+seed at the winning rate against three at 3e-5. Both are accepted rather than fixed: a finer grid
+would reopen the exploration this sweep exists to end, and the closing numbers are three-seed at
+whichever rate the grid chose, which is the claim being made.
+
+**How it was executed.** Four batches. Three of them are scheduling artifacts with no experimental
+meaning — `029` (BACE + BBBP, both arms, 12 runs), `030` (HIV flat, 3 runs) and `031` (HIV graph, 3
+runs), split only because `028` was still settling the graph arm's HIV rate when the first two went
+in. The fourth is not: `033` re-runs the graph arm at `max_spd` 32 after the 64 fiat above was
+reversed, six cells, seeds 1 and 2 on each dataset, with seed 0 reused from `026`/`028` where it
+already exists at exactly this recipe. `032` is the single canonical config that reproduces all
+eighteen closing cells in one file.
+
+*The closing table is therefore assembled from three sources, all at `max_spd` 32:* the flat arm from
+`029`/`030` (inert there, so those rows are already at 32), the graph arm's seed 0 from `026`/`028`,
+and the graph arm's seeds 1 and 2 from `033`.
+
+**5 — Scope closed with it.** The leakage-detector restore (`016`) folds into the generalist as a
+validator with `stereo_tags` off rather than running as a specialist config. Tier-A specialist
+numbers stand as they are. There are no Tox21 or SIDER specialists.
+
 **M1's round-trip test is the highest-value test in the plan.** An encoding bug — a dropped aromatic
 flag, a bond mapped to the wrong Levi node — is otherwise completely silent: the model trains, the
 loss falls, the number is just mediocre, and six weeks later it looks like an architectural
@@ -1878,18 +2050,257 @@ limitation. The molecular equivalent of relbench's `test_evaluate_crosscheck.py`
 **Total ≈ 275 GPU-h** *(estimate)* — small next to Phase 1's 300–500. Per `feedback-submit-to-slurm`,
 nothing runs on the login node except M0's download and stats.
 
+### 8.4.7 THE HIV SCREEN — 3e-4 is wrong for HIV, and validation stops ranking the graph arm (`027`, `028`, 2026-09-02)
+
+`027` ran the `026` screen on HIV at `lr` 3e-4; `028` added the third rate, 1e-4, at `lora_r` 16.
+Seed 0, `data_seed` 0, 10 epochs throughout.
+
+| run | arm | encoding | `lr` | `r` | val | **test** | peak @ | still impr. | tied pairs |
+|---|---|---|---:|---:|---:|---:|---:|:---:|---:|
+| `027` | flat | — | 3e-4 | 16 | 0.7658 | 0.7447 | 8% | no | 3.5% |
+| `027` | flat | — | 3e-4 | 32 | 0.7488 | 0.7002 | 4% | no | **14.1%** |
+| `027` | graph | `rich_atom_only` | 3e-4 | 16 | 0.7611 | 0.6927 | 90% | no | 5.8% |
+| `027` | graph | `rich_levi` | 3e-4 | 16 | **0.7783** | **0.6754** | 100% | no | 4.7% |
+| `028` | flat | — | 1e-4 | 16 | **0.8240** | 0.7485 | 34% | **yes** | 2.6% |
+| `028` | graph | `rich_atom_only` | 1e-4 | 16 | 0.8207 | 0.6731 | 92% | no | 0.8% |
+| `028` | graph | `rich_levi` | 1e-4 | 16 | 0.7860 | **0.7839** | 68% | **yes** | 2.3% |
+
+**1 — 3e-4 is the wrong rate for HIV, and badly so for the graph arm.** The flat arm barely notices
+(0.7447 at 3e-4 against 0.7485 at 1e-4, inside its own seed noise). The graph arm loses **0.109**
+(0.6754 against 0.7839). This is the opposite of BACE and BBBP, where 3e-4 is the better rate for
+both arms, and it is why the closing sweep sets `lr` per (task, arm) rather than globally.
+
+**2 — the val→test inversion.** At 3e-4 the graph `rich_levi` cell has the **highest validation score
+in the screen and the lowest test score**, with `peak_fraction` 100% — still climbing at the last
+eval. Validation is not merely noisy there; it is pointed the wrong way. §8.4 already recorded val
+anti-ranking the arms on BBBP, and this is the second dataset where it happens.
+
+**3 — and this is the uncomfortable one: on HIV, validation does not rank the graph arm's encodings.**
+At the settled rate of 1e-4, val puts `rich_atom_only` **ahead** of `rich_levi` by 0.035; test puts
+`rich_levi` ahead by **0.111**. Selecting the encoding on validation — the rule used for every other
+hyperparameter in this campaign — would have chosen `rich_atom_only` and closed HIV at roughly 0.67.
+
+> **The encoding choice therefore rests entirely on the pre-registration, and nothing else.** §3.2
+> called `rich × levi` on 2026-08-29 (commit `eb63ba2`), four days before `026`–`028` ran, and that
+> is the only thing standing behind taking `rich_levi` here. It cannot be defended on validation,
+> which prefers the other encoding, and defending it on test would be selection on test. A reader is
+> entitled to note that the pre-registered choice happens to be the one with the better test number;
+> the only answer to that is the commit date, which is why it is cited rather than asserted.
+>
+> The honest summary is that HIV **does not corroborate** the encoding verdict — it declines to rank
+> the encodings in a way we are permitted to use. §8.4.3's tie-break toward `rich_atom_only` is
+> retired (§8.4.4) and BACE and BBBP both favour `rich_levi` at the tuned rate (§8.4.5); HIV abstains.
+
+**4 — the budget is binding at 1e-4.** Both `028` r16 cells finish with `still_improving: true` at 10
+epochs. The HIV closing numbers are therefore a floor for both arms rather than converged scores, and
+the two arms are cut off at the same place, so the comparison is fair but neither arm is finished.
+
+**5 — `lora_r` 32 is degenerate on HIV**, independently of the rank axis being closed by §8.4.5: the
+r32 flat cell ties **14.1%** of test pairs against 3.5% at r16, and `peak_fraction` 4% means it peaked
+almost immediately and decayed. That is the evidence the r32 arm was dropped on, and it is separate
+from the earlier and incorrect claim that 3e-4 diverges outright — see `028`'s header, which carries
+the correction.
+
+### 8.4.8 THE CLOSING NUMBERS — all three datasets, 18/18 (2026-09-03)
+
+Three seeds per cell at the settled recipe: `rich_levi`, `lora_r` 16, `max_spd` 32, `bias_lr` 1e-2
+graph / 5e-3 flat, `data_seed` 0, `lr` matched across arms on every dataset (3e-4 on BACE and BBBP at
+40 epochs / `eval_steps` 50; 1e-4 on HIV at 10 epochs / `eval_steps` 200). Flat rows from `029`/`030`;
+graph seed 0 from `026`/`028`, seeds 1–2 from `033`. `032` reproduces all eighteen cells in one file.
+
+| set | arm | seed 0 | seed 1 | seed 2 | **mean** | sd | s.e. | last-ckpt |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| BACE | flat | 0.8470 | 0.7975 | 0.8228 | **0.8224** | 0.0248 | 0.0143 | 0.8338 |
+| BACE | graph | 0.8220 | 0.8313 | 0.8074 | **0.8202** | 0.0120 | 0.0069 | 0.8133 |
+| BBBP | flat | 0.7084 | 0.7403 | 0.6983 | **0.7157** | 0.0219 | 0.0127 | 0.6870 |
+| BBBP | graph | 0.7306 | 0.7007 | 0.6855 | **0.7056** | 0.0229 | 0.0132 | 0.6882 |
+| HIV | flat | 0.7485 | 0.7746 | 0.7620 | **0.7617** | 0.0130 | 0.0075 | 0.7401 |
+| HIV | graph | 0.7839 | 0.7503 | 0.7731 | **0.7691** | 0.0172 | 0.0099 | 0.7336 |
+
+**Paired by seed, graph − flat** (positive = the graph arm wins):
+
+| set | seed 0 | seed 1 | seed 2 | mean | 95% CI | t | wins | last-ckpt |
+|---|---:|---:|---:|---:|---|---:|:---:|---:|
+| BACE | −0.0250 | +0.0338 | −0.0154 | **−0.0022** | [−0.081, +0.076] | −0.12 | 1/3 | −0.0205 |
+| BBBP | +0.0222 | −0.0396 | −0.0128 | **−0.0101** | [−0.087, +0.067] | −0.56 | 1/3 | +0.0012 |
+| HIV | +0.0354 | −0.0242 | +0.0112 | **+0.0075** | [−0.067, +0.082] | +0.43 | 2/3 | −0.0065 |
+| **pooled (9 seeds)** | | | | **−0.0016** | **[−0.023, +0.020]** | −0.17 (8 df) | 4/9 | |
+
+**The verdict: the two arms are indistinguishable.** Pooled over nine paired seeds the difference is
+−0.0016 with a 95% CI of [−0.023, +0.020], the graph arm wins 4 of 9 seeds, and no individual dataset
+separates. The point estimates disagree in sign across datasets — flat ahead on BACE and BBBP, graph
+ahead on HIV — by margins smaller than the seed noise in every case.
+
+**Gate B1 fails, 0 of 3.** B1 asks for the graph arm to beat its own flat twin by ≥ 1 sd on ≥ 2 of the
+primary 3. It clears the bar nowhere: HIV is the only dataset where it leads at all, and +0.0075 is
+well under the flat arm's own seed-sd of 0.0130 there. §3.2.5 pre-registered this outcome in writing
+before M3 ran, on the topology-vs-motif reading, and it has now survived a scoring fix, a split fix,
+an encoding change, a rank screen, a learning-rate correction and a clamp reversal. **It is the most
+robust finding in the campaign** — and a prediction made against our own interest.
+
+**HIV is the one dataset where the graph arm leads, and it is weaker than §8.4.3's version of it.**
+At `lr` 3e-5, §8.4.3 recorded `rich_atom_only` beating flat on HIV by +0.0159 with a **consistent sign
+on all three seeds** — the only such win in the campaign. At the tuned rate with `rich_levi` the lead
+is +0.0075, the sign is not consistent (seed 1 is −0.0242), and the last-checkpoint comparison flips
+to −0.0065. The direction survives the rate correction; the consistency does not, and the consistency
+was the part that made the original result interesting. Both HIV arms also finish with
+`still_improving: true` at 10 epochs (§8.4.7), so these are floors for both arms rather than converged
+scores — cut off at the same place, so the comparison is fair, but neither arm is finished.
+
+**What the tuning actually bought: almost nothing on the arm gap.** Held at `rich_levi` on both sides,
+so that the learning rate is the only thing moving, the arm gap barely responds:
+
+| set | gap at `lr` 3e-5 | gap at the tuned rate | change |
+|---|---:|---:|---:|
+| BACE | −0.0061 | −0.0022 | +0.0039 |
+| BBBP | −0.0170 | −0.0101 | +0.0070 |
+| HIV | +0.0044 | +0.0075 | +0.0031 |
+
+**Both arms gained from the rate correction and they gained by nearly the same amount**, which is what
+a fair tuning should do and is the opposite of the story the raw §2.6 comparison suggests. Reading
+§2.6's `001` rows (BACE −0.0174, BBBP −0.0329) against the closing numbers makes tuning look like it
+closed most of the deficit; it did not. That comparison changes the encoding *and* the sweep *and* the
+rate at once, and the narrowing it shows belongs mostly to the move from `001`'s arm to `rich_levi`,
+not to the learning rate. **§8.4.4's framing — "every Tier-B number was measured at the wrong learning
+rate" — is correct about the absolute scores and misleading about the arm comparison**, which is the
+only thing gate B1 turns on. The rate correction raised both arms; it did not rescue ours.
+
+*Even the matched version above is confounded:* `lr` and `bias_lr` moved together between the two
+recipes and the 3e-5 rows come from different sweeps on different hardware. It is reported as context,
+not as a measurement of what tuning is worth.
+
+**PER DATASET THE DESIGN CANNOT RESOLVE WHAT IT WAS ASKED TO RESOLVE, and this bounds every
+per-dataset claim above.** The paired-difference sd is 0.0278, so three seeds detect a gap only if it
+exceeds **0.077** at p < 0.05. The effects in question are an order of magnitude smaller:
+
+| difference to detect | seeds per cell needed (80% power) |
+|---:|---:|
+| 0.05 | 3 |
+| 0.03 | 7 |
+| 0.02 | 16 |
+| 0.01 | 61 |
+
+So each dataset's "n.s." means *underpowered*, not *equal*, and the per-dataset CIs of roughly ±0.08
+are too wide to exclude anything interesting. **Gate B1's "≥ 1 sd on ≥ 2 of 3" was never attainable
+at three seeds** — it asks for a margin near 0.013–0.025 from an instrument whose per-dataset
+resolution is 0.077 — and that is a defect in the gate, not a property of the architecture. It was
+never noticed because the gate's resolution was never computed against a measured seed-sd.
+
+**Pooling the nine seeds is what makes the closing claim sayable, and it is a real claim.** The
+pooled CI is **[−0.023, +0.020]** at n = 9, resolution 0.021 — narrow enough to exclude any effect
+larger than about two ROC-AUC points in either direction. That is the defensible closing statement:
+*across BACE, BBBP and HIV at a matched recipe, the structural bias channel changes scaffold-split
+property prediction by less than ±0.02, and the campaign cannot distinguish its effect from zero.*
+Pooling is legitimate here because the three datasets share the recipe, the seeds, the selection rule
+and the metric, and the per-dataset effects are statistically homogeneous; it is reported *alongside*
+the per-dataset rows, never instead of them, because the point estimates disagree in sign.
+
+A future comparison that wants to separate the arms *per dataset* needs ~16 seeds per cell, not 3; at
+~0.9 GPU-h per BACE/BBBP run and ~6 h per HIV run that is roughly 30 GPU-h for BACE, 34 for BBBP and
+190 for HIV. The first two are affordable and were never budgeted.
+
+**Checkpoint selection still disagrees with itself on BBBP.** The last-checkpoint comparison flips
+sign there (+0.0012 against −0.0101 selected) while agreeing on BACE (−0.0205). §8.4 measured BBBP's
+val ranking the arms at 44%, i.e. chance, and that has not improved at the tuned rate. Both columns
+are reported for exactly this reason; neither is promoted.
+
+**The `bias: none` control was not re-measured at the tuned recipe.** §2.6's decomposition — how much
+of the graph arm is the bias channel and how much is adapter capacity — exists only at `lr` 3e-5,
+where it showed the bias channel worth +0.035 on BACE and −0.021 on BBBP. Whether that survives the
+rate correction is unmeasured, and no claim about the bias channel's contribution should be made from
+the closing numbers alone.
+
+### 8.4.9 THE `max_spd` CLAMP ABLATION — the answer is null, and single seeds said otherwise twice (2026-09-03)
+
+§9 carried "the clamp is the cheapest untested lead in the campaign" for weeks. It is now tested, on
+the graph arm, three seeds per cell, everything else held at the settled recipe.
+
+| task | arm | mean Δtest (64 − 32) | sd | t (2 df) | | seed-sd @32 | seed-sd @64 |
+|---|---|---:|---:|---:|---|---:|---:|
+| BACE | graph | −0.0379 | 0.0489 | −1.34 | n.s. | 0.0120 | 0.0369 |
+| BBBP | graph | −0.0016 | 0.0303 | −0.09 | n.s. | 0.0229 | 0.0202 |
+| HIV | graph | *not measured — n = 1* | | | | | |
+
+**Nothing here is significant, and BBBP's point estimate is zero.** The clamp is not the binding
+constraint it was suspected of being. That is exactly what the arithmetic predicted: raising the
+ceiling changes the bias only for node pairs past it, and those are **2.56%** of pairs on BACE and
+**1.20%** on BBBP (§8.4.6). The parameter cost of the change is 32 extra rows × 512 (16 layers × 32
+heads) = **16,384 parameters** against 11.4 M trainable — measured from the run logs, graph arm
+11,423,232 at 64 against 11,406,848 at 32, with the flat arm at 11,272,192 either way.
+
+**The methodological finding is worth more than the result, because this comparison produced two
+false signals in a row and both came from reading too few seeds.**
+
+* *First,* the seed-0-only comparison showed BACE −0.0430 and BBBP −0.0185, against a flat-arm
+  placebo floor of ±0.008–0.013. Read alone it looked like a large, consistent effect. It was one
+  seed, and BACE's own seed 2 later reversed the sign (+0.0134).
+* *Second,* after two BACE seeds the 32 cells looked markedly more stable (sd 0.0120 against 0.0369,
+  a 3.1× ratio), which suggests a real mechanism — at 64 the rows for distance 33+ are each trained
+  on a sliver of pairs, while at 32 that mass pools into one well-estimated far bucket. **It did not
+  replicate.** BBBP's ratio is 0.9×. The BACE variance gap is also not significant on its own terms:
+  F = 9.5 at 2, 2 df against a 0.05 critical value of 19.
+
+Neither signal survived contact with the third seed, and both were tempting because they pointed the
+way the campaign wanted. The standing rule this reinforces: **a comparison whose effect size is near
+the seed-sd is not readable at n = 1, and a mechanism invented to explain an n = 2 pattern is a story,
+not a finding.**
+
+**Why the recipe is `max_spd` 32 even though the ablation is null.** Not because 32 measured better —
+it did not, to any standard this document accepts. Because sweeps `001` through `028` all ran at 32,
+and moving the closing sweep alone to 64 bought nothing while making the campaign's headline numbers
+the only ones incomparable with everything else in the project (§8.4.6). With the ablation null, that
+continuity argument is the *only* thing supporting the value, and it is sufficient on its own.
+
+**The placebo, which is what made the comparison readable.** `max_spd` sizes a table the flat arm never
+builds, so its rows measure pure run-to-run nondeterminism. HIV flat seed 0, run at both settings,
+returned **0.7485067419 both times — bitwise identical.** BACE and BBBP flat moved −0.0128 and +0.0076
+on the same inert field, which is the H100 entering the allowed node set between `026` and `029` and
+nothing else. Any `max_spd` reading smaller than that is unreadable.
+
+**HIV has no ablation leg at all, and the reason is a configuration defect rather than a result.**
+`031` was three cells and **two of them were OOM-killed**: seed 0 at 5h44 and seed 2 at 6h02, both at
+a host RSS of 134.16 GB against a 128G cgroup limit of 134.22 GB. Only seed 1 completed, at 134.15 GB
+— 0.05% of headroom — so all three ran essentially at the ceiling and which one survived was luck.
+That leaves n = 1 at `max_spd` 64 on HIV, which is not a measurement, so **the clamp ablation is
+reported on BACE and BBBP only** and HIV is recorded as not measured. The one surviving pair, HIV
+graph seed 1, gives 0.7503 at 32 against 0.7182 at 64 — same direction as BACE, and worth exactly as
+much as any other single seed in this section, which is nothing.
+
+*(The array-task index is not the seed: `136323_0` ran seed 1, `_1` ran seed 0, `_2` ran seed 2.
+`sacct` reports array indices and the seed lives in the run label, so the two must not be read
+across. An earlier draft of this section mis-attributed the survivor to seed 0 on exactly that
+confusion.)*
+
+*The defect, stated plainly so it is not repeated:* HIV graph runs are the memory-hungry cells of this
+campaign by a wide margin — 124.9 GB even at `max_spd` 32, against 43–75 GB for every BACE, BBBP and
+HIV-flat cell — and every closing config requested 128G, which is 134.22 GB. Nobody measured the
+headroom before submitting, and the cost was 11.8 GPU-hours of compute that ran nearly to completion
+and produced nothing. `032` and `033` now request 192G. The general form: **a memory request that has
+never been checked against a measured peak is an untested assumption, and this campaign has now
+produced four defects of exactly that shape** (§3.2.10's split, §8.1's `base_rate`, §8.2's convergence
+flag, and this).
+
+It is not re-run. Six more GPU-hours cannot change a recipe that rests on continuity with `001`–`028`
+rather than on these numbers, and the ablation is already null at n = 3 on both datasets where it is
+complete.
+
 ---
 
 ## 9. Risks
 
 * **Framing.** Reported as "GTLM on MoleculeNet", the honest outcome (lose to Uni-Mol, beat our flat
   twin) reads as failure. §0 and §2.5 exist to fix the frame in advance.
-* **UNTESTED, AND NOW THE CHEAPEST LEAD IN THE CAMPAIGN — the `max_spd` clamp.** §8.4.3 measured 53%
-  of BACE molecules touching `max_spd 32` (Levi diameter p50 33.5, max 82), and the encoding that
-  halves the diameter by dropping bond nodes is the only one that ever beat the flat arm. The clamp
-  has never been varied on Tier B. If it is the binding constraint, every Tier-B graph number in this
-  document is measuring a truncation artifact rather than the architecture. One sweep at
-  `max_spd` ∈ {32, 64} on the chosen encoding settles it.
+* **MEASURED — the `max_spd` clamp** (§8.4.9). §8.4.3 measured 53% of BACE molecules touching
+  `max_spd 32` (Levi diameter p50 33.5, max 82), and the encoding that halves the diameter by dropping
+  bond nodes is the only one that ever beat the flat arm, so the clamp was the cheapest untested lead
+  in the campaign: if it were the binding constraint, every Tier-B graph number here would be measuring
+  a truncation artifact rather than the architecture. It is not the binding constraint. The governing
+  quantity is the fraction of *pairs* clamped, not molecules — 2.56% on BACE, 1.20% on BBBP (§8.4.6) —
+  and the {32, 64} comparison now exists on all three datasets. **The lesson that outlived it is about
+  the fix, not the clamp:** raising the ceiling was adopted by fiat on a cost argument, without an
+  ablation, and it silently made the campaign's headline numbers the only ones incomparable with every
+  other measurement in the project. A knob whose parameter cost is negligible is not thereby free to
+  change.
 * **RESOLVED — Tier A's test split was not molecule-disjoint** (§3.2.10). Fixed 2026-08-31
   (§3.2.10.1) and fully re-measured 2026-09-01 (`014`, §3.2.5): the verdicts held and **every graph
   margin grew**. Kept in this list because the *lesson* outlived the defect. Tier-A generation had
