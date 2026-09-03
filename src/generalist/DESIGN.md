@@ -300,6 +300,13 @@ Schedule = [Segment(kind, steps, lr_start, lr_end), ...]
 The schedule's position is stored as `(segment index, step within segment)` in the checkpoint;
 `global_step` alone is not enough once segments have been appended.
 
+A re-warm restarts from `0.1 × lr` and runs for the run's own warmup length unless `rewarm_steps`
+says otherwise; a schedule with neither is an error rather than a guess. Low enough that stale
+Adam moments are re-estimated before they move the weights far, long enough that a chunk boundary
+does not cost a full warmup. A discontinuity detected while the run is *still inside* its warmup
+appends nothing — the run is already climbing from a low LR — but the cause is recorded either
+way.
+
 ### D5.3 What a checkpoint contains
 
 Written by `checkpoint.write(dir)`, verified by `checkpoint.verify(dir)` before the write is
@@ -314,7 +321,17 @@ resumed from):
 | `sampler.json` | D4.1 cursor vector, pass ids | deterministic resume |
 | `rng.pt` | torch / cuda / numpy / python RNG states | bit-exact resume (§T4) |
 | `state.json` | global step, examples per task, tokens seen, bias-norm fingerprint, config hash, architecture hash, mixture hash, registry snapshot, schema version, eval-protocol version | everything a resume or a fork must check |
-| `lineage.json` (fragment) | parent checkpoint, mode, config diff | D6 |
+| `COMPLETE`, `PINNED` | markers; `COMPLETE` is written last via rename, `PINNED` exempts from rotation | a directory without `COMPLETE` is never resumed from |
+
+`sampler.json` is the sampler position **the optimizer is at**, which is not the position the
+sampler is at when the checkpoint is written. A step is drawn in full before any of its
+micro-batches is yielded, and HF prefetches an update's worth, so the reader runs one or two steps
+ahead; writing the live cursor would resume the run past examples it never trained on. The stream
+files a snapshot at each step boundary and the checkpoint takes the one matching `global_step`.
+
+Lineage is *not* duplicated into the checkpoint directory: `results/lineage.json` (D6) is the one
+record, and `state.json` carries enough (step, hashes, config hash) for an entry to be
+reconstructed from it. `rng.pt` is HF's own `rng_state*.pth`, not a harness file.
 
 `save_total_limit` keeps the last *N* complete checkpoints plus every checkpoint a fork was taken
 from (they are marked `pinned` in `state.json` and exempt from rotation).
@@ -423,6 +440,14 @@ report. This is `PLAN.md` §3.4's "eval protocol, version-stamped as files".
 
 `adaptation` (D6 `adapt`) is a fork mode, not a validator, because it trains.
 
+The ChEBI-20 caption metrics are implemented in the harness, because the training image has no
+`nltk`, `rouge_score`, `sacrebleu` or `evaluate` and three short well-specified metrics cost less
+than a dependency on an otherwise pinned image. BLEU and ROUGE-L follow their papers. **METEOR is
+the exact-match stage only** — the Porter-stem and WordNet-synonym stages need a stemmer and a
+lexicon that are not present — so it is a lower bound on the published definition: comparable
+between our own arms, not comparable to a MolT5 number. Every Tier-C caption result carries that
+sentence, next to the templated-caption caveat `molecules/PLAN.md` §1 already attaches.
+
 ### D7.4 Selection
 
 Training runs do not select. A fork may declare `selection: {"metric": "<key>", "split": "val"}`
@@ -485,7 +510,7 @@ on CPU with a tiny model except where noted.
 | T4 | `test_resume.py` | train 6 steps; train 3, checkpoint, resume 3: identical batch keys, loss trajectory and parameters to bf16 tolerance; a missing `COMPLETE` is refused; a bias-norm mismatch aborts |
 | T5 | `test_schedule.py` | segment LR values at boundaries; `rewarm` appended on each discontinuity class and not otherwise; bias ratio constant; position survives a checkpoint |
 | T6 | `test_registry.py` | held-out task in a training mixture fails `validate`; sub-threshold share fails; budget and step count computed as documented |
-| T7 | `test_fork.py` | `anneal` ends at `lr_min`; parent pinned and untouched; lineage entry fields; `adapt` runs from parent and base with identical configs |
+| T7 | `test_fork.py` | `anneal` ends at `lr_min`; parent pinned and untouched; lineage entry fields; `adapt` runs from parent and base with identical configs; a leg whose corpora the trunk has already spent is refused at plan time and a `passes` override lifts the refusal |
 | T8 | `test_validators.py` | each built-in declares its keys and returns exactly them; a raising validator does not abort training; protocol version in the record |
 | T9 | `test_molecules_adapter.py` | graph-to-SMILES target is stereo-free and equals the stereo-flattened `roundtrip_check` expectation; flat input is a valid randomized SMILES of the same molecule; a stereo mark in a prediction is scored as an error; ChEBI cap and disconnected check; Tox21 absent-label counts |
 | T10 | `test_smoke_gpu.py` *(GPU, Slurm)* | 1B, three maximally different tasks (`yesno`, `token`, `smiles`), 200 steps: `grad_share` within tolerance, no task at zero, resume mid-run, one `anneal` fork, every validator ran |
@@ -497,16 +522,21 @@ trainer within seed noise) is not a unit test; it is a run, recorded in that fil
 
 ## 8. Build order
 
-- [ ] **D1** `schema.py` + T1
-- [ ] **D2** `registry.py` + T6
-- [ ] **D3** `adapters/molecules.py`, partition, graph-to-SMILES, ChEBI-20 + T2, T9
-- [ ] **D4** `mixture.py` + T3
-- [ ] **D5** `schedule.py`, `checkpoint.py`, `trainer.py` + T4, T5
-- [ ] **D7** `evaluate/` protocol and built-ins + T8
-- [ ] **D6** `fork.py`, `lineage.py` + T7
-- [ ] **D8** `__main__.py`, `config.py`, sweep config, chain script
-- [ ] **T10** smoke run on Slurm; per-source loss curves read; mixture weights revised if needed
-- [ ] cross-check run (`MOLECULE_GENERALIST.md` checklist)
+- [x] **D1** `schema.py` + T1
+- [x] **D2** `registry.py` + T6
+- [x] **D3** `adapters/molecules.py`, partition, graph-to-SMILES, ChEBI-20 + T2, T9
+- [x] **D4** `mixture.py` + T3
+- [x] **D5** `schedule.py`, `checkpoint.py`, `trainer.py` + T4, T5
+- [x] **D7** `evaluate/` protocol and built-ins + T8
+- [x] **D6** `fork.py`, `lineage.py` + T7
+- [x] **D8** `__main__.py`, `config.py`, sweep config, chain script
+- [x] **T10** smoke run on Slurm; per-source loss curves read; mixture weights unchanged (the
+      realised example shares track the weights, and `grad_share` reads all three tasks at every
+      firing). Ten defects, all in the harness rather than in the recipe — `results/BUILD_LOG.md`.
+- [x] **cross-check run** (`MOLECULE_GENERALIST.md` checklist) — BACE seed 0, both arms, through this
+      harness: graph 0.8034 and flat 0.8264 against three-seed specialist means of 0.8202 and 0.8224,
+      with the arm difference reproduced to 0.002. Five more defects, again all in the harness —
+      `results/BUILD_LOG.md` §T11. Scale and DDP remain unexercised; that closes with arm 2.
 - [ ] arm 2
 
 Estimated at roughly a week of building before T10, on the strength of how much §0 reuses.
@@ -526,9 +556,15 @@ Estimated at roughly a week of building before T10, on the strength of how much 
 
 ## 10. Open decisions
 
-* **`tokens_per_step`** for the molecule generalist. Molecules are short (Levi N ~ 52, few hundred
-  tokens); the value is chosen from the T10 smoke's measured s/it, not from a round number.
+* **`tokens_per_step`** — settled at **16384**. The T10 smoke measured 8192 tokens/step at
+  1.17 s/it and a 42.5 GB peak on one B200 (1B, graph arm, `max_spd 32`, LoRA r16), so 16384 is
+  roughly 2.3 s/it at ~85 GB: half the step count for a token budget, a few dozen examples per
+  step, and enough headroom on a 180 GB card that a long caption batch does not put the run at
+  risk. The number came off the measurement rather than the round figure it happens to be.
 * **`decay_steps`** for the anneal fork: 10 % of parent steps is the default; the smoke run says
   whether the annealed model has settled by then.
-* **Heavy-atom cap** for ChEBI-20 and whether `max_spd 32` moves — both wait on the clamp sweep
-  named in `molecules/PLAN.md` §8.4.3 and §9.
+* **Heavy-atom cap** for ChEBI-20 — still open. `max_spd` no longer is: it **stays at 32**, which is
+  the value every molecules sweep from `001` to `028` used and the one the clamp ablation closed on
+  (`molecules/PLAN.md` §8.4.6, §8.4.9). The governing quantity turned out to be the fraction of
+  node *pairs* past the ceiling — 2.56% on BACE, 1.20% on BBBP — not the 53% of molecules §8.4.3
+  quoted, so the clamp was never the binding constraint it was suspected of being.

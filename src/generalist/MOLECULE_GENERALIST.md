@@ -40,9 +40,15 @@ code than any single graph-QA domain — and it costs a few percent of what the 
       bit-exact).
 - [ ] **Build.** Molecules adapter, the partition, graph-to-SMILES generator, ChEBI-20 loader,
       the isomeric round-trip test.
-- [ ] **Cross-check.** One specialist cell (BACE, both arms, one seed) trained *through the
-      generalist harness* as a single-task mixture reproduces the molecules-trainer number within
-      seed noise. Until this passes, arm 2 minus arm 1 is a trainer difference, not transfer.
+- [x] **Cross-check.** ✅ **2026-09-03** (`002` / `003` + `forks/anneal_cross_check.jsonc`). BACE
+      seed 0 as a single-task mixture, both arms, 40 passes then a 151-step anneal. End-of-anneal
+      test ROC-AUC: **graph 0.8034, flat 0.8264**, against §8.4.8's three-seed specialist rows
+      (graph mean 0.8202 sd 0.0120; flat mean 0.8224 sd 0.0248). Flat lands +0.16 sd from its mean;
+      graph lands 1.4 sd low, just outside the three-seed range and inside seed noise — the thinner
+      of the two margins, recorded as such. **The arm difference, which is what arm 2 reports,
+      reproduces to 0.002**: harness −0.0230 against the specialist's seed-0 paired −0.0250. Splits
+      verified molecule for molecule, budgets and examples-per-step matched to `026`. Full write-up,
+      the five defects it found and the Property-1 measurement in `results/BUILD_LOG.md` §T11.
 - [ ] **Arm 2.** Three seeds × two arms, the mixture in §2, WSD stable phase, one anneal fork at
       the end.
 - [ ] **Read-out.** Arm 2 − arm 1 per (dataset, seed), paired; held-out zero-shot; adaptation
@@ -151,6 +157,12 @@ from the raw CSVs and asserts pairwise disjointness of the role sets (`DESIGN.md
 Two Tier-A holdouts is the number. A third starts costing training coverage for a declaration
 made after seeing results, which is worth less than the two made before.
 
+The adaptation runs are three held-out tasks × two starting points (the generalist and base
+Llama) × **three seeds** — eighteen short runs, and three is the seed count every other claim in
+this campaign is quoted at. Steps-to-target is a first-crossing statistic and noisier than an
+end-of-run score, so a single seed would not separate a real gap from where the curve happened to
+cross.
+
 Few-shot means *few-example fine-tuning* (the adaptation curve), not in-context examples. Several
 molecule graphs in one prompt is not something the prefix-node layout is built for, and the
 in-context anchor in the Tier-B table (Vicuna-13B, 4-shot) sits at chance anyway.
@@ -206,8 +218,9 @@ captioning: a model that can write a molecule's structure is better placed to de
 
 **Recipe.** Both arms at `lora_r 16` (the r32 axis is closed, §8.4.5), `lora_dropout 0.05`
 (the molecules value, so arm 1 and arm 2 match; the trunk's D3 value of 0.15 is not used here),
-`bias_lr 1e-2` on the graph arm, `weight_decay 0.1`, `max_spd 32` pending the clamp sweep. The
-learning rate is whatever the three-seed re-run settles; `3e-4` at r16 is the provisional value.
+`bias_lr 1e-2` on the graph arm, `weight_decay 0.1`, `max_spd 32` — settled, and settled at the value
+this document already carried (`molecules/PLAN.md` §8.4.6, ablation §8.4.9). The learning rate is
+whatever the three-seed re-run settles; `3e-4` at r16 is the provisional value.
 Schedule: WSD — short warmup, constant stable phase for the §2 budget, one anneal fork at the end
 that decays to `lr/10` over ~10 % of the stable steps. The annealed checkpoint is the reportable
 model. There is **no test-set selection and no best-val selection on the generalist**: Tier-B val
