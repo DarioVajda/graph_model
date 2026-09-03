@@ -1,0 +1,9 @@
+CID	SMILES	description
+12699	CN(C(=O)N)N=O	The molecule is a member of the class of N-nitrosoureas that is urea in which one of the nitrogens is substituted by methyl and nitroso groups.
+31155	CC1=CC=CC=C1CC#N	The molecule is a nitrile that is acetonitrile where one of the methyl hydrogens is substituted by a 2-methylphenyl group.
+11954133	C1=CC(=C2C3=C(C(=C(C=C3)Cl)Cl)OC2=C1)O	The molecule is a member of the class of dibenzofurans substituted by a hydroxy group and by two chloro groups.
+12620	CCCCCCCCCCCCCCCCCCCCCCO	The molecule is a long-chain primary fatty alcohol that is docosane substituted by a hydroxy group at position 1.
+24645	O.O.O.O.O.O.[Cl-].[Cl-].[Ni+2]	The molecule is a hydrate of nickel chloride containing nickel, chloride and water moieties in the ratio 1:2:6.
+900001	C1=CC=C(C=	The molecule is a deliberately unparseable SMILES, here so the parse counter has something to count.
+900002	CCO
+18276	[HH]	The molecule is dihydrogen, an elemental molecule consisting of two hydrogens joined by a single bond.

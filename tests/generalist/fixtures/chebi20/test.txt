@@ -1,0 +1,4 @@
+CID	SMILES	description
+16236	CCO	The molecule is a primary alcohol that is ethane in which one hydrogen has been replaced by a hydroxy group.
+27732	CN1C=NC2=C1C(=O)N(C)C(=O)N2C	The molecule is a trimethylxanthine that is a purine alkaloid and a central nervous system stimulant.
+17368	OC(=O)CC(O)(CC(O)=O)C(O)=O	The molecule is a tricarboxylic acid that is the key intermediate of the citric acid cycle.

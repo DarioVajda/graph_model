@@ -1,0 +1,4 @@
+CID	SMILES	description
+16842	C(=O)O	The molecule is the simplest carboxylic acid, the parent of the formate series.
+17790	CO	The molecule is the simplest aliphatic alcohol, a primary alcohol that is methane bearing a hydroxy group.
+15343	CC=O	The molecule is an aldehyde that is ethane in which one methyl hydrogen has been replaced by an oxo group.
