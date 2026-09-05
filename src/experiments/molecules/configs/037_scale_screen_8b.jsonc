@@ -1,0 +1,102 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 037 — SCALE LADDER, STEP 3 of 4: the learning-rate screen on Llama-3.1-8B.
+  // Seventeen cells, one seed. Its output is the `lr` row of `039`'s recipe.
+  // Structurally identical to `036`; only the bracket and the hardware move.
+  //
+  // Everything in `036`'s header applies here unchanged — why a screen rather
+  // than an inherited rate (§3.2.7, §8.4.4), why HIV gets its own bracket
+  // (§8.4.7's 0.109 AUROC), the 3-epoch HIV proxy and its disclosure, the
+  // `bias_lr` cell, and §8.4.6's selection rule with ties breaking toward the
+  // flat arm. Read it first; only the differences are recorded below.
+  //
+  // THE BRACKET, AND WHY IT IS WIDER THAN THE RULE THAT CENTRED IT. Over
+  // 1.24B -> 8.03B the two standard rules diverge here in a way they did not at
+  // 3B: width-based muP (2048 -> 4096) says divide by 2, giving 1.5e-4, while
+  // 1/sqrt(params) says divide by 2.55, and rounding that up gives divide by 3:
+  //
+  //     BACE, BBBP    centre 1e-4     bracket {3.3e-5, 1e-4, 3e-4}
+  //     HIV           centre 3.3e-5   bracket {3.3e-5, 1e-4}
+  //
+  // The centre is the more aggressive of the two rules; muP's 1.5e-4 sits
+  // between the centre and the top of the bracket, so the grid brackets both
+  // predictions rather than assuming either. If the top of the bracket wins,
+  // that is 1B's own rate surviving unscaled to 8B, which would be a real result
+  // about this workload and should be reported rather than smoothed over.
+  //
+  // HARDWARE, AND THE ONE THING THAT MIGHT CHANGE IT. B200/B300 only. The 8B
+  // graph cells are predicted at ~90-120 GB of GPU memory (`035`'s header shows
+  // the arithmetic), and the upper half of that band does not fit an 80 GB H100.
+  // `035` is what decides this: if it reports peaks under ~70 GB, H100 can be
+  // added back and the screen finishes sooner; if it reports OOM, the lever is
+  // `gradient_checkpointing: true` applied to BOTH arms, never one.
+  //
+  // COST at 4.2x the 1B measured runtimes: BACE 17.6 GPU-h, BBBP 19.8, HIV 23.4.
+  // About 61 GPU-h, longest cell ~7.8 h (HIV graph at 3 epochs).
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/037_scale_screen_8b.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "037_scale_screen_8b",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 17,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "192G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+
+  "cell": [
+    // ── BACE, 40 epochs — three rates, both arms ─────────────────────────────
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 3.3e-5, "bias_lr": 1e-2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4,   "bias_lr": 1e-2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 3e-4,   "bias_lr": 1e-2, "num_epochs": 40, "eval_steps": 50 },
+    // the bias_lr bracket — centre rate, the only cell where bias_lr moves
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4,   "bias_lr": 3e-3, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 3.3e-5, "bias_lr": 5e-3, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 1e-4,   "bias_lr": 5e-3, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 3e-4,   "bias_lr": 5e-3, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── BBBP, 40 epochs ──────────────────────────────────────────────────────
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 3.3e-5, "bias_lr": 1e-2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4,   "bias_lr": 1e-2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 3e-4,   "bias_lr": 1e-2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 3.3e-5, "bias_lr": 5e-3, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 1e-4,   "bias_lr": 5e-3, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 3e-4,   "bias_lr": 5e-3, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── HIV, 3 epochs — a truncated proxy, see `036`'s header ────────────────
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 3.3e-5, "bias_lr": 1e-2, "num_epochs": 3, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4,   "bias_lr": 1e-2, "num_epochs": 3, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 3.3e-5, "bias_lr": 5e-3, "num_epochs": 3, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 1e-4,   "bias_lr": 5e-3, "num_epochs": 3, "eval_steps": 200 }
+  ],
+
+  "encoding": "rich_levi",
+  "seed": 0,
+  "data_seed": 0,
+  "question_node": "on",
+
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

@@ -1,0 +1,125 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 039 — SCALE LADDER, STEP 4 of 4: the closing sweep on Llama-3.1-8B.
+  // `038` with the backbone, the rates and the hardware changed. Eighteen cells,
+  // 3 datasets x 2 arms x 3 seeds.
+  //
+  // ⚠️ THE LEARNING RATES BELOW ARE PLACEHOLDERS — `037`'s bracket centres, not
+  // a measurement. Run `037` first and overwrite every `lr` from its result, per
+  // §8.4.6's rule. At this scale the mistake costs 152 GPU-h.
+  //
+  // `038`'s header carries the design: what the ladder measures, why §0 predicts
+  // no flip on molecules, what moves between legs and what must not, why the
+  // epoch budget is deliberately NOT re-tuned, and the power table that says
+  // three seeds resolve only gaps above 0.077 per dataset. All of it applies
+  // here unchanged. Only the three things below differ.
+  //
+  // ── HARDWARE: B200/B300 ONLY, AND THE HIV CELLS ARE WHY ──────────────────
+  //
+  // At 1B, HIV graph peaks at 57.8 GB of GPU memory — the next-largest cell in
+  // the campaign is 21 GB. At 8B the weights add ~14 GB in bf16 and the
+  // activations roughly double in width and double in depth, while the bias
+  // tensors barely move (heads are 32 at both ends). The prediction is ~90-120 GB
+  // and the upper half of that does not fit an 80 GB H100, so H100 is out of the
+  // `gpus` list until `035` says otherwise. If `035` reports an OOM rather than a
+  // peak, the lever is `gradient_checkpointing: true` — applied to BOTH arms, or
+  // the comparison acquires an uncontrolled difference in exactly the place it is
+  // trying to measure one.
+  //
+  // ── TIME: 36 HOURS, WHICH IS NOT A TYPO ──────────────────────────────────
+  //
+  // The HIV graph cells are projected at ~26 h each (4.2x the 1B measured 6.2 h).
+  // `frida` allows 7 days, so this is admissible; `032`'s 12 h limit would kill
+  // them at 46% complete, having produced nothing — the same shape of loss as
+  // §8.4.9's 11.8 GPU-h, arrived at from the other direction.
+  //
+  // DDP IS NOT THE OBVIOUS FIX. Two GPUs would halve the latency of one cell and
+  // buy nothing in throughput: the sweep has eighteen independent runs to spend
+  // cards on, which `granularity: per_config` already does. It would also need
+  // `accumulation_steps` halved to hold the effective batch at 32 — the runner
+  // does not rewrite it (`sweep/README.md`) — and every rank re-compiles the same
+  // flex kernels, which is measured to erase the gain outright unless the
+  // inductor cache is primed first. Single GPU, long limit, prime the cache.
+  //
+  // ── COST ─────────────────────────────────────────────────────────────────
+  //
+  // At 4.2x the 1B measured runtimes (BACE 1.6 h flat / 3.2 h graph, BBBP 2.1 /
+  // 4.5, HIV 13.0 / 26.0): 152 GPU-h, of which HIV is 117. That is 77% of the
+  // sweep in one dataset, so every cost decision here is really a decision about
+  // HIV.
+  //
+  // The 4.2x itself is an extrapolation, not a measurement: it comes from fitting
+  // t ~ params^0.76 to a Gemma-3 GTLM ladder (GPU-s/step 4.86 -> 14.14 -> 30.14
+  // over 1.0 -> 3.88 -> 11.77 B). Two corrections point opposite ways and roughly
+  // cancel — our ladder's per-layer bias cost grows more slowly than that one's
+  // (layers x heads goes 512 -> 672 -> 1024 here against 104 -> 272 -> 768
+  // there), while LoRA still backprops full depth so the backbone term is
+  // undiminished. `035` replaces the whole estimate with a number.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/039_scale_ladder_8b.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "039_scale_ladder_8b",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 18,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "192G",
+      "time": "36:00:00",
+      "inductor_cache": "/shared/workspace/povejmo/graph_model/.inductor_cache/molecules_8b",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+
+  "arm_recipe": [
+    // ── BACE — PLACEHOLDER lr 1e-4, overwrite from `037` ─────────────────────
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4, "bias_lr": 1e-2, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4, "bias_lr": 1e-2, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4, "bias_lr": 1e-2, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 1e-4, "bias_lr": 5e-3, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 1e-4, "bias_lr": 5e-3, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 1e-4, "bias_lr": 5e-3, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── BBBP — PLACEHOLDER lr 1e-4, overwrite from `037` ─────────────────────
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4, "bias_lr": 1e-2, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4, "bias_lr": 1e-2, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 1e-4, "bias_lr": 1e-2, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 1e-4, "bias_lr": 5e-3, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 1e-4, "bias_lr": 5e-3, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 1e-4, "bias_lr": 5e-3, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── HIV — PLACEHOLDER lr 3.3e-5, overwrite from `037` ────────────────────
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 3.3e-5, "bias_lr": 1e-2, "seed": 0, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 3.3e-5, "bias_lr": 1e-2, "seed": 1, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 3.3e-5, "bias_lr": 1e-2, "seed": 2, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 3.3e-5, "bias_lr": 5e-3, "seed": 0, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 3.3e-5, "bias_lr": 5e-3, "seed": 1, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 3.3e-5, "bias_lr": 5e-3, "seed": 2, "num_epochs": 10, "eval_steps": 200 }
+  ],
+
+  "encoding": "rich_levi",
+  "data_seed": 0,
+  "question_node": "on",
+
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

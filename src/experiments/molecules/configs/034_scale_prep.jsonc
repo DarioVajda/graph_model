@@ -1,0 +1,82 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 034 — SCALE LADDER, STEP 1 of 4: build the Tier-B artifacts for 3B and 8B.
+  // No training. Twelve builds: 2 backbones x 3 datasets x 2 arms.
+  //
+  // WHY THE ARTIFACTS ARE PER-BACKBONE AT ALL. `dataset_path` puts `model_name`
+  // in the cache key (`dataset.py:292`) because the artifact holds tokenised
+  // text. Llama-3.2-1B, Llama-3.2-3B and Llama-3.1-8B share one tokenizer, so
+  // these twelve builds are expected to be content-identical to the 1B ones
+  // already on disk — but the key does not know that, and a symlink that
+  // silently asserts it is exactly the kind of untested plumbing §9 says this
+  // campaign's defects live in. Rebuild. It is twenty minutes and ~4 GB.
+  //
+  // MEASURED COST, from `022` (job 135756) at 1B: HIV flat 2m56s at 39.2 GB RSS,
+  // HIV graph `rich_levi` 13m10s at 30.0 GB. BACE and BBBP are 27x smaller. So
+  // `96G` is ~2.5x the measured peak and `02:00:00` is ~9x the longest build —
+  // both sized against a measurement rather than a habit (§8.4.9).
+  //
+  // DISK: ~1.9 GB per backbone (HIV graph is 1.7 GB of it), ~3.9 GB for both.
+  //
+  // PREREQUISITE — FETCH THE WEIGHTS FIRST. Neither backbone is in the HF cache;
+  // only Llama-3.2-1B is. These prep jobs pull the tokenizer only, so they will
+  // succeed and leave the first *training* job to download 16 GB inside its own
+  // allocation, with seventeen array siblings racing it. Fetch once, from a
+  // login shell, before submitting anything past this config:
+  //
+  //   ./hf_login.sh
+  //   hf download meta-llama/Llama-3.2-3B
+  //   hf download meta-llama/Llama-3.1-8B
+  //
+  // Both repos are gated; the account must already be approved for them.
+  //
+  // HARDWARE. The broad `gpus` list is `022`'s trick and the reasoning is
+  // unchanged: node weights are inverted (A100 1121k < H100 1144k < B200 1166k <
+  // B300 1177k) and Slurm takes the lowest, so a wide list lands this on the
+  // slowest free card. That is the right outcome for a CPU/RAM build, and every
+  // fast card it declines to take is one the screens can have.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/034_scale_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "034_scale_prep",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["L4", "A100", "H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 8,
+      "mem": "96G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "model_name": ["meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.1-8B"],
+
+  // `bias` does not affect the artifact — both features are always computed, so
+  // one `.gtds` serves every bias arm (`dataset.py:338`) — but `arm` and
+  // `encoding` both do, and `validate()` rejects a flat arm carrying a bias.
+  "task_arm": [
+    { "task": "bace", "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "encoding": "rich_levi" },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi" }
+  ],
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+  "max_spd": 32
+}

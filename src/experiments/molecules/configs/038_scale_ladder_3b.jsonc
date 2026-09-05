@@ -1,0 +1,162 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 038 — SCALE LADDER, STEP 4 of 4: the closing sweep on Llama-3.2-3B.
+  // `032` verbatim with one field changed — eighteen cells, 3 datasets x 2 arms
+  // x 3 seeds, at the recipe `036` settles.
+  //
+  // ⚠️ THE LEARNING RATES BELOW ARE PLACEHOLDERS. They are `036`'s bracket
+  // centres, written so this file is a complete and runnable object rather than
+  // a stub — they are NOT a measurement. Run `036` first and overwrite every
+  // `lr` in this file from its result, per §8.4.6's rule. Submitting this config
+  // without doing so reproduces §8.4.4 — the campaign's most expensive mistake,
+  // made twice — at a scale where it costs 76 GPU-h instead of 30.
+  //
+  // ── WHAT THIS MEASURES ───────────────────────────────────────────────────
+  //
+  // The ladder's quantity is the graph − flat gap **as a function of backbone
+  // scale**, not the win at any one size. §8.4.8's pooled result at 1B is
+  // −0.0016, CI [−0.023, +0.020]: the two arms are indistinguishable. §10.1's
+  // hypothesis is that this is a capacity threshold rather than a verdict, on
+  // the observation that the same comparison changed sign with backbone scale in
+  // a separate experiment. Three points (1B, 3B, 8B) on a matched recipe is a
+  // curve; a single win at one size is an anecdote.
+  //
+  // §0 PREDICTS THE FLIP SHOULD NOT HAPPEN HERE, and that prediction is the
+  // reason this is worth running. The headline mechanism is preserving node
+  // text, and an atom is `C` — scaling the backbone does not create node text.
+  // So a flip on *molecules* would mean the structural channel pays off through
+  // some route other than text preservation, which is a more interesting finding
+  // than the flip itself and must be reported as such rather than folded into
+  // the thesis. If it does not flip, that is a real bound: the mechanism does
+  // not rescue itself with scale in a domain where nodes carry no text.
+  //
+  // ── WHAT MOVES BETWEEN LEGS OF THE LADDER, AND WHAT MUST NOT ─────────────
+  //
+  // Moves:   `model_name`, and `lr` / `bias_lr` as re-screened per scale.
+  // Frozen:  encoding `rich_levi`, `lora_r` 16, `lora_dropout` 0.05, `max_spd`
+  //          32, `question_node` on, `data_seed` 0, batch 4 x accum 8, seeds
+  //          0/1/2, and the epoch budget.
+  //
+  // THE BUDGET IS DELIBERATELY NOT RE-TUNED, which is the one place this config
+  // departs from "re-screen everything". 40 epochs on BACE/BBBP and 10 on HIV
+  // are 1B's budgets and they stay, because the ladder compares *gaps across
+  // scales* and a per-scale budget would put a second uncontrolled axis under
+  // that comparison. The cost is known and must be disclosed: HIV at 1B finished
+  // `still_improving` on both arms at 1e-4 (§8.4.7), so HIV's numbers are floors
+  // cut off at the same place — and a lower rate at 3B makes that *more* true,
+  // not less. If the budget is ever raised it moves for both arms at all three
+  // scales at once, including a 1B re-run, or the ladder stops being a ladder.
+  //
+  // `lora_dropout` is 0.05 here because 0.05 is what produced §8.4.8: no
+  // molecules config has ever set the field, so every run took `config.py`'s
+  // default. It is written out explicitly in this file so the next reader does
+  // not have to know that.
+  //
+  // ── POWER, WHICH THIS CAMPAIGN GOT WRONG ONCE ────────────────────────────
+  //
+  // Three seeds resolve only gaps above 0.077 per dataset; the paired-difference
+  // sd at 1B is 0.0278 (§8.4.8). Gate B1 asked for a 0.013-0.025 margin from a
+  // design that could never deliver it, and nobody noticed because the gate's
+  // resolution was never computed against a measured seed-sd. Do not repeat it:
+  //
+  //     difference to detect   seeds per cell (80% power)
+  //     0.05                   3
+  //     0.03                   7
+  //     0.02                   16
+  //
+  // Three seeds is what this config runs, and three seeds is enough for exactly
+  // one thing — measuring the paired sd AT THIS SCALE and pooling the nine into
+  // one contrast with a resolution near 0.021, as §8.4.8 does. It is not enough
+  // to call a per-dataset winner. Extend the seed count only where the pooled
+  // sign actually moves, and size that extension from the sd measured here
+  // rather than the one inherited from 1B.
+  //
+  // ── OPERATIONAL ──────────────────────────────────────────────────────────
+  //
+  // COST at 2.1x the 1B measured runtimes (BACE 0.8 h flat / 1.6 h graph, BBBP
+  // 1.1 / 2.2, HIV 6.5 / 13.0): 76 GPU-h, of which HIV is 59. Longest cell 13 h,
+  // hence `-t 24:00:00` — `032`'s 12 h limit would kill the HIV graph cells just
+  // past halfway.
+  //
+  // MEMORY. 192G host, from 1B's measured 124.9 GB peak on HIV graph plus
+  // headroom, pending `035`. GPU is the open question: HIV graph is predicted at
+  // ~75-90 GB, which is why H100 stays in the `gpus` list here and is dropped in
+  // `039`. `035` decides it. §8.4.9 is what happens when it is not checked.
+  //
+  // `inductor_cache` names a directory that does not exist yet, which is the
+  // opt-in: the runner uses it only if it is already there, and otherwise every
+  // job compiles into its own. Create it after one cell has run to prime it, and
+  // the other seventeen skip ~90 min of identical Triton codegen each
+  // (`sweep/README.md`, and the same finding under DDP). Leaving it absent is
+  // correct and costs only time.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/038_scale_ladder_3b.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "038_scale_ladder_3b",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 18,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "192G",
+      "time": "24:00:00",
+      "inductor_cache": "/shared/workspace/povejmo/graph_model/.inductor_cache/molecules_3b",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "model_name": "meta-llama/Llama-3.2-3B",
+
+  // One bundle, eighteen rows — `task`, `lr`, `seed` and the budget travel
+  // together rather than as independent axes whose product would include
+  // combinations that were never run.
+  "arm_recipe": [
+    // ── BACE — PLACEHOLDER lr 1.5e-4, overwrite from `036` ───────────────────
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1.5e-4, "bias_lr": 1e-2, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1.5e-4, "bias_lr": 1e-2, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "lr": 1.5e-4, "bias_lr": 1e-2, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 1.5e-4, "bias_lr": 5e-3, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 1.5e-4, "bias_lr": 5e-3, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bace", "arm": "flat",  "bias": "none",         "lr": 1.5e-4, "bias_lr": 5e-3, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── BBBP — PLACEHOLDER lr 1.5e-4, overwrite from `036` ───────────────────
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 1.5e-4, "bias_lr": 1e-2, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 1.5e-4, "bias_lr": 1e-2, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "graph", "bias": "spd+magnetic", "lr": 1.5e-4, "bias_lr": 1e-2, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 1.5e-4, "bias_lr": 5e-3, "seed": 0, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 1.5e-4, "bias_lr": 5e-3, "seed": 1, "num_epochs": 40, "eval_steps": 50 },
+    { "task": "bbbp", "arm": "flat",  "bias": "none",         "lr": 1.5e-4, "bias_lr": 5e-3, "seed": 2, "num_epochs": 40, "eval_steps": 50 },
+
+    // ── HIV — PLACEHOLDER lr 5e-5, overwrite from `036` ──────────────────────
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 5e-5, "bias_lr": 1e-2, "seed": 0, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 5e-5, "bias_lr": 1e-2, "seed": 1, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "lr": 5e-5, "bias_lr": 1e-2, "seed": 2, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 5e-5, "bias_lr": 5e-3, "seed": 0, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 5e-5, "bias_lr": 5e-3, "seed": 1, "num_epochs": 10, "eval_steps": 200 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "lr": 5e-5, "bias_lr": 5e-3, "seed": 2, "num_epochs": 10, "eval_steps": 200 }
+  ],
+
+  "encoding": "rich_levi",
+  "data_seed": 0,
+  "question_node": "on",
+
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

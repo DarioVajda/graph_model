@@ -1,0 +1,101 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 035 — SCALE LADDER, STEP 2 of 4: the smoke. Six 60-step runs whose only
+  // outputs that matter are `peak_gb`, host RSS and wall-clock per step.
+  //
+  // WHY THIS EXISTS AT ALL. Two of the four defects in §9 are here in one place:
+  // "smoke a new path before committing a sweep to it" (lesson 4) and "`--mem`
+  // never checked against a measured peak", which cost 11.8 GPU-h of
+  // nearly-complete HIV runs in `031`. Nothing in this repo has ever run GTLM on
+  // a 3B or 8B backbone. The memory arithmetic below is a *prediction*, and the
+  // whole point of this config is to replace it with a measurement before ~260
+  // GPU-h are committed.
+  //
+  // WHAT IS PREDICTED, so the smoke can falsify it. At 1B, HIV graph peaks at
+  // 57.8 GB GPU (`028` seed 0) and 124.9 GB host RSS; everything else sits at
+  // 21 GB / 43-75 GB. Going up the ladder:
+  //
+  //   * the bias tensors `(B,H,N,N)` and `(B,H,L,L)` are head-count-bound, and
+  //     heads go 32 -> 24 -> 32, so they barely move — the 3B leg is the one
+  //     place they get *smaller*;
+  //   * weights add ~+4 GB at 3B and ~+14 GB at 8B in bf16;
+  //   * activations scale with width (2048 -> 3072 -> 4096) and depth
+  //     (16 -> 28 -> 32 layers).
+  //
+  // So HIV graph is predicted at ~75-90 GB on 3B and ~90-120 GB on 8B. If the
+  // upper end is real, the 8B ladder cannot use H100 (80 GB) and
+  // `gradient_checkpointing` becomes the lever rather than a preference. Host
+  // RSS is dataset-side and should not move from 124.9 GB at all — if it does,
+  // something is wrong that has nothing to do with the backbone.
+  //
+  // THE THREE CELLS PER BACKBONE are the extremes, not a sample: HIV graph is
+  // the memory ceiling and the longest run in the campaign, HIV flat is the
+  // cheapest per step at the same sequence count, and BACE graph is the shape
+  // every short cell has. Two more cells would tell us nothing the interpolation
+  // does not.
+  //
+  // NO EXAMPLE CAP, deliberately. `max_train_examples` / `max_eval_examples` are
+  // in the artifact cache key (`dataset.py:274`), so capping would build a
+  // *second* 1.7 GB HIV artifact to measure the first one's memory. `max_steps`
+  // cuts the training instead and leaves the eval at full size, which is what we
+  // want measured anyway. Expect most of each cell's wall clock to be the final
+  // test pass over 4112 HIV molecules, not the 60 training steps — read
+  // `step_ms_mean` for the per-step number and `train_runtime_s / n_steps` only
+  // as a sanity check on it.
+  //
+  // These runs are throwaway. Their scores are meaningless at 60 steps and no
+  // number from this sweep enters any table.
+  //
+  // HARDWARE. B200/B300 only, and 256G of host RAM, because the job of a smoke
+  // is to *not* be the thing that dies. Once it has reported real peaks, the
+  // screens and ladders get sized from them.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/035_scale_smoke.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "035_scale_smoke",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "256G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "model_name": ["meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.1-8B"],
+
+  "cell": [
+    { "task": "hiv",  "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 1e-2 },
+    { "task": "hiv",  "arm": "flat",  "bias": "none",         "encoding": "rich_levi", "lr": 1e-4, "bias_lr": 5e-3 },
+    { "task": "bace", "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi", "lr": 3e-4, "bias_lr": 1e-2 }
+  ],
+
+  "max_steps": 60,
+  "eval_steps": 30,
+  "num_epochs": 1,
+
+  "seed": 0,
+  "data_seed": 0,
+  "question_node": "on",
+
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}
