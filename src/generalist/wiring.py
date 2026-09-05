@@ -41,10 +41,38 @@ from .registry import Registry, is_held_out, resolve
 #: Splits a validator reads without declaring them in a ``splits`` attribute.
 #: These mirror the ``option("split", "test")`` defaults in `evaluate/builtin.py`;
 #: a validator that takes an explicit ``split`` option overrides them.
-DEFAULT_VALIDATOR_SPLIT = {"perm_spread": "test", "per_example": "test"}
+DEFAULT_VALIDATOR_SPLIT = {"perm_spread": "test", "per_example": "test",
+                           "leakage": "test"}
 
 #: Splits that can be loaded for an in-mixture task.
 MIXTURE_SPLITS = ("val", "test")
+
+#: ``torch._dynamo``'s recompile cap on the flex path, raised from the model
+#: default of 32.
+#:
+#: Every distinct ``(B, L, N)`` compiles its own flex kernel, and past the cap
+#: dynamo does not error — it drops the frame to eager, where `flex_attention`
+#: "materializes the full scores matrix" instead of fusing. `src/models/README.md`
+#: says to keep the shape count "comfortably below it (≈16)", and training does:
+#: one bucket ladder, a fixed micro-batch, a handful of pairs. **Evaluation does
+#: not, and that is the case the default was never sized for.** A milestone
+#: firing sweeps sixteen tasks across two splits, and their length profiles have
+#: nothing in common — a yes/no BACE row and a ChEBI caption sit at opposite ends
+#: of the `len_buckets` ladder — so eval alone walks through more distinct shapes
+#: than the whole of training.
+#:
+#: The 2026-09-05 shakedown is the measurement: `[0/32] torch._dynamo hit
+#: config.recompile_limit (32)` at the step-100 validators, and that block then
+#: ran over an hour against 1.55 s/step of training. Eager is not merely slow
+#: here, it is the memory profile the token budget in `evaluate/scorers.py` was
+#: written to avoid, since the unfused path allocates the full ``(B, H, L, L)``.
+#:
+#: 128 is kgqa's value (`experiments/kgqa/train.py`). The cost of a cap that is
+#: too high is bounded — L, N and now B are all bucketed, so the shape space is
+#: finite and each new member is a one-time autotune that inductor caches on disk
+#: and every cell of a campaign shares. The cost of one that is too low is a
+#: silent order-of-magnitude regression, which is what this one bought.
+FLEX_CACHE_SIZE_LIMIT = 128
 
 
 class WiringError(RuntimeError):
@@ -288,6 +316,7 @@ def build_run(config: RunConfig, *, output_dir=None, mixture=None, schedule=None
     from ..experiments.expressiveness.training.dispatch import (
         build_collator, build_model, select_active_params,
     )
+    from ..experiments.expressiveness.training.instrumentation import StepMemCallback
     from .evaluate import build_validators
     from .lineage import Lineage
     from .mixture import MixtureSampler
@@ -319,6 +348,13 @@ def build_run(config: RunConfig, *, output_dir=None, mixture=None, schedule=None
     model, tokenizer = build_model(
         config.impl, config.model_name, config.model_bias_config(),
         config.k_hop, config.k_hop_directed, device, config.flex_compile_mode)
+    # Set after construction rather than through `bias_params`: this is a
+    # property of how many shapes the *harness* touches, not of the model being
+    # trained, and it must not travel into the bias config that the config hash
+    # and a resumed checkpoint agree on. The model only ever raises dynamo's
+    # limit from here, never lowers it.
+    model.config.flex_cache_size_limit = max(
+        getattr(model.config, "flex_cache_size_limit", 0), FLEX_CACHE_SIZE_LIMIT)
     model = select_active_params(model, active_params=list(ACTIVE_PARAMS),
                                  lora=config.lora_config())
     pad_token_id = (tokenizer.pad_token_id if tokenizer.pad_token_id is not None
@@ -367,7 +403,21 @@ def build_run(config: RunConfig, *, output_dir=None, mixture=None, schedule=None
         save_safetensors=True,
     )
 
+    # Host RAM, traced. The molecules campaign lost 11.8 GPU-h to an OOM whose
+    # cause was only found once someone measured host memory during a run
+    # (`molecules/PLAN.md` §8.4.9) — every host number before that was a
+    # post-mortem `sacct` MaxRSS. The leak that produced it cannot occur here:
+    # it is a per-`Trainer.evaluate` loader shard, and this trainer runs no HF
+    # evaluation loop (`eval_strategy="no"`) at `dataloader_num_workers=0`. What
+    # is unmeasured here instead is the resident payload of a *mixture* — every
+    # source's graphs at once, two passes live per generator — which is strictly
+    # larger than the one corpus any specialist run held, and which is what the
+    # `--mem` request has to be sized against. So the trace is on by default and
+    # the peak lands in the run record; the first chunk of arm 2 replaces the
+    # estimate with its own number.
     trainer_callbacks = list(callbacks)
+    trainer_callbacks.append(StepMemCallback(
+        trace_path=os.path.join(output_dir, "host_mem.jsonl")))
     trainer = GeneralistTrainer(
         model=model, args=args, train_dataset=None, eval_dataset=None,
         data_collator=collator,
@@ -411,6 +461,7 @@ def validator_config(run: Run) -> dict:
     config = {
         builtin.ACTIVE_PARAMS: list(ACTIVE_PARAMS),
         builtin.MAX_SPD: run.config.max_spd,
+        builtin.MAX_LENGTH: run.config.max_length,
         # The graph biases are all row-constant on the single-node text graphs
         # `base_exact` uses, so Property 2 holds and the check is meaningful.
         builtin.UNCONDITIONAL_FORWARD: False,

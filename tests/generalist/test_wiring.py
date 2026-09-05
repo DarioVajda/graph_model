@@ -207,7 +207,7 @@ def test_validator_config_carries_the_grad_share_closure_only_with_a_trainer(
     trainer = (SimpleNamespace(per_task_loss_fn=lambda: (lambda task: None),
                                per_task_batch_counts=dict)
                if has_trainer else None)
-    config = SimpleNamespace(max_spd=32, to_dict=lambda: {})
+    config = SimpleNamespace(max_spd=32, max_length=512, to_dict=lambda: {})
     out = wiring.validator_config(SimpleNamespace(config=config, trainer=trainer))
     assert (builtin.GRAD_SHARE_LOSS_FN in out) is has_trainer
     assert (builtin.GRAD_SHARE_COUNTS_FN in out) is has_trainer

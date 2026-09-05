@@ -57,9 +57,21 @@ __all__ = [
 #: end-of-run and milestone firings use.
 DEFAULT_MAX_SAMPLES = None
 
-#: Micro-batch for the teacher-forced paths. Small because eval batches are not
-#: bucketed and a mixed-length batch pads to its longest member.
+#: Row cap for the teacher-forced paths. It is an upper bound, not the batch
+#: size: `DEFAULT_BATCH_TOKENS` is what actually closes a batch.
 DEFAULT_BATCH_SIZE = 8
+
+#: Padded-token budget for one teacher-forced micro-batch, which is the quantity
+#: that has to be bounded rather than the row count. A batch costs
+#: ``rows x longest_row`` positions and the logits tensor is that times the
+#: vocabulary, so a fixed row count prices a batch by its *mean* length while the
+#: allocator is charged its *maximum*. The 2026-09-04 shakedown lost `in_mixture`
+#: to exactly that: one long molecule pushed the block-aligned pad to 8192, and
+#: `(8, 8192, 128256)` in fp32 is 32 GiB — the allocation in the OOM, to the byte.
+#: 8192 positions is ~4 GB of fp32 logits, so a single row that long is still
+#: affordable and eight ordinary ones still batch together. D4.4 makes this same
+#: argument for the training batch; the eval path had not inherited it.
+DEFAULT_BATCH_TOKENS = 8192
 
 
 def eval_indices(n_total: int, max_samples):
@@ -119,6 +131,68 @@ def _batches(indices, size):
         yield indices[start:start + size]
 
 
+def row_length(item) -> int:
+    """Padded positions one example occupies, before block alignment.
+
+    ``input_ids`` is a list of per-node token lists on the graph arm and a single
+    list on the flat arm; both are the same question — how many positions does
+    this row put in the packed sequence.
+    """
+    ids = item.get("input_ids") if hasattr(item, "get") else None
+    if not ids:
+        return 0
+    first = ids[0]
+    if isinstance(first, (list, tuple)):
+        return sum(len(node) for node in ids)
+    return len(ids)
+
+
+def token_batches(source, indices, max_rows: int = DEFAULT_BATCH_SIZE,
+                  budget: int = DEFAULT_BATCH_TOKENS):
+    """Group ``indices`` so that ``rows x longest_row`` stays under ``budget``.
+
+    ``max_rows`` remains an upper bound, so a split of uniformly short rows
+    batches exactly as it did before. A single row over budget is yielded alone
+    rather than dropped — refusing to score the largest molecules would be a
+    silent change to what the metric covers, which is worse than one expensive
+    batch.
+
+    Order is preserved. The scorers read each row under its own label mask and
+    `_pad_stack` already handles blocks of different widths, so how rows are
+    grouped cannot move a number.
+
+    **Row counts come out on a power-of-two ladder**, so a greedy group of seven
+    is emitted as ``4 + 2 + 1``. The batch dimension is a compile guard exactly
+    like ``L`` and ``N``: `GraphCollatorV2` buckets those two precisely so the
+    flex kernel sees few distinct shapes, and a budget that closes a batch
+    wherever the tokens happen to run out would hand back the variety that
+    bucketing was there to remove. Splitting *down* rather than padding *up* is
+    what keeps the budget a budget — padding five rows to eight would put
+    ``rows x longest`` back over the ceiling this function exists to hold.
+    """
+    def emit(rows):
+        # Largest power of two first, so the common full batch stays one launch.
+        start = 0
+        while start < len(rows):
+            take = 1 << (len(rows) - start).bit_length() - 1
+            yield rows[start:start + take]
+            start += take
+
+    batch, longest = [], 0
+    for index in indices:
+        length = max(1, row_length(source[index]))
+        candidate = max(longest, length)
+        if batch and (len(batch) + 1 > max_rows
+                      or (len(batch) + 1) * candidate > budget):
+            yield from emit(batch)
+            batch, longest = [index], length
+            continue
+        batch.append(index)
+        longest = candidate
+    if batch:
+        yield from emit(batch)
+
+
 def _to_device(batch, device):
     import torch
 
@@ -128,7 +202,8 @@ def _to_device(batch, device):
 
 
 def teacher_forced(model, collator, source, indices, device=None,
-                   batch_size: int = DEFAULT_BATCH_SIZE, preprocess=None):
+                   batch_size: int = DEFAULT_BATCH_SIZE, preprocess=None,
+                   batch_tokens: int = DEFAULT_BATCH_TOKENS):
     """Run the forward pass over ``indices`` and return ``(predictions, labels)``.
 
     ``preprocess(logits, labels)`` is HF's ``preprocess_logits_for_metrics`` — the
@@ -152,7 +227,7 @@ def teacher_forced(model, collator, source, indices, device=None,
 
     preds, labels = [], []
     with torch.no_grad():
-        for chunk in _batches(list(indices), batch_size):
+        for chunk in token_batches(source, list(indices), batch_size, batch_tokens):
             items = [{k: v for k, v in source[i].items() if k != SIDECAR_KEY}
                      for i in chunk]
             batch = _to_device(collator(items), device)
@@ -186,7 +261,8 @@ def _pad_stack(arrays, pad):
 
 
 def margin_array(model, tokenizer, collator, source, indices, device=None,
-                 batch_size: int = DEFAULT_BATCH_SIZE):
+                 batch_size: int = DEFAULT_BATCH_SIZE,
+                 batch_tokens: int = DEFAULT_BATCH_TOKENS):
     """The ``(N, 3)`` ``(logit_yes, logit_no, true_token_id)`` readout, in order.
 
     Exactly what `molecules/evaluate.py`'s preprocessor produces inside the
@@ -200,7 +276,8 @@ def margin_array(model, tokenizer, collator, source, indices, device=None,
     yes_id, no_id = answer_token_ids(tokenizer)
     preds, _labels = teacher_forced(
         model, collator, source, indices, device=device, batch_size=batch_size,
-        preprocess=make_margin_preprocessor(yes_id, no_id))
+        preprocess=make_margin_preprocessor(yes_id, no_id),
+        batch_tokens=batch_tokens)
     return preds, yes_id
 
 
@@ -284,7 +361,8 @@ ENDPOINT_PREFIX = "endpoint:"
 def score_source(model, tokenizer, collator, source, spec, device=None,
                  max_samples=DEFAULT_MAX_SAMPLES,
                  batch_size: int = DEFAULT_BATCH_SIZE,
-                 per_endpoint: bool = True) -> dict:
+                 per_endpoint: bool = True,
+                 batch_tokens: int = DEFAULT_BATCH_TOKENS) -> dict:
     """Score one built ``(task, split, arm)`` and return its metrics.
 
     Keys are metric leaves, except the per-endpoint breakdown which is
@@ -298,10 +376,11 @@ def score_source(model, tokenizer, collator, source, spec, device=None,
     indices = eval_indices(n_total, max_samples) if n_total else []
 
     if kind == "token":
-        return _score_token(model, collator, source, indices, device, batch_size)
+        return _score_token(model, collator, source, indices, device, batch_size,
+                            batch_tokens)
     if kind == "yesno":
         return _score_yesno(model, tokenizer, collator, source, indices, device,
-                            batch_size, per_endpoint)
+                            batch_size, per_endpoint, batch_tokens)
     predictions, targets = generate_predictions(
         model, tokenizer, collator, source, indices,
         max_new_tokens=spec.max_new_tokens or 64, device=device)
@@ -314,27 +393,29 @@ def score_source(model, tokenizer, collator, source, spec, device=None,
     return dict(caption_metrics(predictions, targets))
 
 
-def _score_token(model, collator, source, indices, device, batch_size) -> dict:
+def _score_token(model, collator, source, indices, device, batch_size,
+                 batch_tokens=DEFAULT_BATCH_TOKENS) -> dict:
     from ...utils import make_compute_metrics, shift_logits_for_metrics
 
     if not len(indices):
         return {"em_accuracy": 0.0, "n": 0}
     preds, labels = teacher_forced(
         model, collator, source, indices, device=device, batch_size=batch_size,
-        preprocess=shift_logits_for_metrics)
+        preprocess=shift_logits_for_metrics, batch_tokens=batch_tokens)
     out = make_compute_metrics()((preds.astype("int64"), labels.astype("int64")))
     return {"em_accuracy": float(out["em_accuracy"]), "n": len(indices)}
 
 
 def _score_yesno(model, tokenizer, collator, source, indices, device, batch_size,
-                 per_endpoint) -> dict:
+                 per_endpoint, batch_tokens=DEFAULT_BATCH_TOKENS) -> dict:
     from ...experiments.molecules.evaluate import make_margin_metrics
 
     if not len(indices):
         return {k: (0 if k == "n" else float("nan")) for k in METRIC_KEYS["yesno"]}
 
     preds, yes_id = margin_array(model, tokenizer, collator, source, indices,
-                                 device=device, batch_size=batch_size)
+                                 device=device, batch_size=batch_size,
+                                 batch_tokens=batch_tokens)
     compute = make_margin_metrics(yes_id)
     out = {k: float(v) for k, v in compute((preds,)).items()}
     out["n"] = len(indices)

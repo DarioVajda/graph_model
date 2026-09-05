@@ -1,5 +1,5 @@
 """
-D7.3 — the eight validators the first build ships with.
+D7.3 — the validators the first build ships with.
 
 ============  ==============================================================
 `in_mixture`  per task, on the splits its spec declares: the metric for its
@@ -11,6 +11,8 @@ D7.3 — the eight validators the first build ships with.
 `base_exact`  adapters off, logits equal to the base model's (Property 2)
 `perm_spread` the flat twin's AUROC spread over randomized SMILES; the graph
               arm's over node relabelings, which must be ~0
+`leakage`     the negative control — `stereo_assigned` with the parity
+              channel closed, read against the split's own base rate
 `throughput`  wall-clock s/it, peak GB, tokens/s
 `per_example` the molecules per-example error / geometry report
 ============  ==============================================================
@@ -33,9 +35,9 @@ from . import BaseValidator, EvalError, EvalNeedsError, register
 
 __all__ = [
     "ACTIVE_PARAMS", "GRAD_SHARE_COUNTS_FN", "GRAD_SHARE_LOSS_FN",
-    "GRAD_SHARE_TASKS", "MAX_SPD",
+    "GRAD_SHARE_TASKS", "LEAKAGE_TASK", "MAX_LENGTH", "MAX_SPD",
     "UNCONDITIONAL_FORWARD", "BaseExact", "BiasNorm", "GradShare", "HeldOut",
-    "InMixture", "PerExample", "PermSpread", "Throughput",
+    "InMixture", "Leakage", "PerExample", "PermSpread", "Throughput",
 ]
 
 # ── the ctx.config keys the built-ins read ───────────────────────────────────
@@ -59,6 +61,11 @@ GRAD_SHARE_COUNTS_FN = "grad_share_counts_fn"
 GRAD_SHARE_TASKS = "grad_share_tasks"
 #: The SPD clamp, for the geometry columns of the per-example report.
 MAX_SPD = "max_spd"
+#: Per-node truncation length, for a validator that re-renders an item it has
+#: re-written. Read from the run rather than defaulted, so a run at a different
+#: length does not have its re-written rows truncated somewhere else than its
+#: built ones.
+MAX_LENGTH = "max_length"
 #: Set by a run whose forward pass is altered whatever the adapter context —
 #: D4 arm B/C, or a bias family that is not row-constant on a single-node graph.
 #: `base_exact` reports itself inapplicable rather than reporting a failure.
@@ -134,16 +141,18 @@ class _ScoringValidator(BaseValidator):
                 for k in METRIC_KEYS[spec.answer_kind]}
 
     def run(self, ctx) -> dict:
-        from .scorers import DEFAULT_BATCH_SIZE, score_source
+        from .scorers import DEFAULT_BATCH_SIZE, DEFAULT_BATCH_TOKENS, score_source
 
         max_samples = self.option("max_samples")
         batch_size = int(self.option("batch_size", DEFAULT_BATCH_SIZE))
+        batch_tokens = int(self.option("batch_tokens", DEFAULT_BATCH_TOKENS))
         out = {}
         for task, split, source, spec in self.targets(ctx):
             scored = score_source(
                 ctx.model, ctx.tokenizer, ctx.collator, source, spec,
                 device=ctx.device, max_samples=max_samples, batch_size=batch_size,
-                per_endpoint=bool(self.option("per_endpoint", True)))
+                per_endpoint=bool(self.option("per_endpoint", True)),
+                batch_tokens=batch_tokens)
             for key, value in scored.items():
                 out[f"{task}/{split}/{key}"] = value
         return out
@@ -934,18 +943,31 @@ class Throughput(BaseValidator):
     The first firing has nothing to measure against and reports ``nan``; that is
     also true after a resume, since the instrument's state lives in the process
     and not in the checkpoint.
+
+    **Host RAM is reported beside the GPU peak, because it is the one that kills
+    runs here.** `molecules/PLAN.md` §8.4.9 lost 11.8 GPU-h to a host OOM, and the
+    reason it took two months to explain is that nothing in this repo measured
+    host memory during a run — every number was a post-mortem ``sacct`` MaxRSS,
+    which on this cluster is the cgroup peak. ``host_peak_gb`` is that same
+    quantity, live, so a ``--mem`` request can be read off a run instead of
+    estimated from one. ``host_anon_gb`` is beside it because only the anonymous
+    half is unreclaimable: a cgroup total dominated by page cache is not pressure,
+    and reading the total alone is how 43 GB of reclaimable file cache gets
+    mistaken for a memory requirement.
     """
 
     name = "throughput"
     cadence = "steps:50"
-    protocol_version = "1"
+    protocol_version = "2"
 
     def __init__(self, cadence=None, **options):
         super().__init__(cadence, **options)
         self._last = None                     # (monotonic seconds, step)
+        self._host = None
 
     def keys(self, ctx=None) -> set:
-        return {"s_per_it", "tokens_per_s", "peak_gb", "steps_measured", "wall_s"}
+        return {"s_per_it", "tokens_per_s", "peak_gb", "steps_measured", "wall_s",
+                "host_gb", "host_peak_gb", "host_anon_gb", "host_limit_gb"}
 
     def run(self, ctx) -> dict:
         import time
@@ -972,7 +994,25 @@ class Throughput(BaseValidator):
                         else nan)
         return {"s_per_it": float(s_per_it), "tokens_per_s": float(tokens_per_s),
                 "peak_gb": float(peak), "steps_measured": steps,
-                "wall_s": float(wall)}
+                "wall_s": float(wall), **self._host_gb()}
+
+    def _host_gb(self) -> dict:
+        """Cgroup usage, peak, anon and limit — ``nan`` wherever the kernel is silent."""
+        from ...experiments.expressiveness.training.instrumentation import HostMemProbe
+
+        nan = float("nan")
+        if self._host is None:
+            self._host = HostMemProbe()
+        if not self._host.available:
+            return {"host_gb": nan, "host_peak_gb": nan, "host_anon_gb": nan,
+                    "host_limit_gb": nan}
+        stat = self._host.cgroup_stat_gb()
+        return {
+            "host_gb": float(self._host.cgroup_gb("current") or nan),
+            "host_peak_gb": float(self._host.cgroup_gb("peak") or nan),
+            "host_anon_gb": float(stat.get("cg_anon_gb", nan)),
+            "host_limit_gb": float(self._host.cgroup_gb("limit") or nan),
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1063,6 +1103,273 @@ class PerExample(BaseValidator):
                     out[f"{task}/{key}"] = (float("nan") if value is None
                                             else float(value))
         return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# leakage — the negative control the suite lost
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The family the detector runs on. `stereo_assigned` asks how many stereocentres
+#: have a *defined* configuration, and that answer lives in the parity tag and
+#: nowhere else in a plain atom-bond graph (`molecules/PLAN.md` §1) — which is
+#: what makes it the one task whose input channel can be closed cleanly and the
+#: score read against a floor.
+LEAKAGE_TASK = "mol/stereo_assigned"
+
+
+def _parity_pairs() -> set:
+    """The two-word phrases `data.atom_text` and `data.bond_text` append.
+
+    Read off the renderer's own tables rather than spelled out here. A word added
+    to either table has to reach the stripper, and a stripper that quietly misses
+    one reports "at chance" while the channel is still open — which is the one
+    failure of this instrument that looks like a pass.
+    """
+    from ...experiments.molecules.data import _BOND_STEREO_WORDS, _CHIRAL_WORDS
+
+    return ({("chiral", word) for word in _CHIRAL_WORDS.values()} |
+            {("stereo", word) for word in _BOND_STEREO_WORDS.values()})
+
+
+def _without_pairs(text: str, pairs: set) -> str:
+    """Drop each two-word phrase from space-joined node text.
+
+    Word-level rather than a substring replace: ``atom_text`` joins its parts
+    with single spaces, so a phrase is always two whole words, and matching on
+    substrings would make ``chiral cw`` a candidate inside ``chiral ccw``.
+    """
+    words = text.split(" ")
+    out, i = [], 0
+    while i < len(words):
+        if i + 1 < len(words) and (words[i], words[i + 1]) in pairs:
+            i += 2
+            continue
+        out.append(words[i])
+        i += 1
+    return " ".join(out)
+
+
+def _restereo_item(item, arm, keep_stereo, tokenizer, pairs, max_length):
+    """One item with the stereo channel open or closed. ``(item, changed)``.
+
+    **Graph arm.** The parity words come out of every node's text except the
+    prompt node's, which carries the question and no molecule. Keeping them is
+    the item exactly as built, so the tagged view costs nothing.
+
+    **Flat arm.** ``stereo_tags`` is not a flat-arm knob — `flat_serialize` never
+    consulted it, which is why `016` ran no flat ``off`` cell — so the channel is
+    closed by re-serialising the molecule without stereochemistry. Both views are
+    then re-serialised canonically, the tagged one included: canonicalisation is
+    itself a re-writing that moves the flat arm's score (that is `perm_spread`'s
+    whole finding), so comparing a canonical stripped string against the built
+    string would confound the two changes. The consequence is that this
+    validator's tagged number is its own baseline and is *not* the number
+    `in_mixture` reports for the same split.
+    """
+    from ..schema import SIDECAR_KEY, Example, render
+
+    side = item.get(SIDECAR_KEY) or {}
+    prompt_node = int(item["prompt_node"])
+
+    if arm == "graph":
+        if keep_stereo:
+            return item, 0
+        texts = list(item["text"])
+        new_texts = [t if n == prompt_node else _without_pairs(t, pairs)
+                     for n, t in enumerate(texts)]
+        changed = int(any(a != b for a, b in zip(texts, new_texts)))
+        if not changed:
+            return item, 0
+    else:
+        from rdkit import Chem, RDLogger
+
+        RDLogger.DisableLog("rdApp.*")
+        text = item["text"][prompt_node]
+        start = text.find(SMILES_MARKER)
+        if start < 0:
+            raise EvalError(
+                f"leakage: the flat prompt {text[:60]!r} carries no "
+                f"{SMILES_MARKER!r}; there is no SMILES to re-write")
+        start += len(SMILES_MARKER)
+        end = text.find("\n", start)
+        mol = Chem.MolFromSmiles(text[start:end])
+        if mol is None:
+            raise EvalError(
+                f"leakage: the flat prompt's SMILES {text[start:end]!r} does not "
+                "parse, so its stereochemistry cannot be removed")
+        with_stereo = Chem.MolToSmiles(mol, isomericSmiles=True)
+        without = Chem.MolToSmiles(mol, isomericSmiles=False)
+        changed = int(with_stereo != without)
+        written = with_stereo if keep_stereo else without
+        new_text = text[:start] + written + text[end:]
+        new_texts = [new_text if n == prompt_node else t
+                     for n, t in enumerate(item["text"])]
+
+    out = dict(item)
+    out["text"] = new_texts
+    stub = Example(task=side.get("task", "_"), domain=side.get("domain", "_"),
+                   split=side.get("split", "test"), arm=arm,
+                   graph={"text": new_texts, "prompt_node": prompt_node,
+                          "num_nodes": len(new_texts)},
+                   question=side.get("question", "_"),
+                   answer=side.get("answer", ""),
+                   answer_kind=side.get("answer_kind", "token"),
+                   key=side.get("key", "_"))
+    rendered = render(stub, tokenizer, max_length=max_length)
+    out["input_ids"] = [list(ids) for ids in rendered.input_ids]
+    out["labels"] = _as_labels(item.get("labels"), rendered.labels)
+    return out, changed
+
+
+class _StereoSource:
+    """One view of a split, with the stereo channel open or closed.
+
+    Counts the rows it actually re-wrote (``changed``) as a set of indices rather
+    than a running total, so a row fetched twice cannot inflate it. That count is
+    what makes the "at chance" reading falsifiable: on a split with any non-zero
+    answer some molecule carries an assigned centre, so a strip that changed
+    nothing has failed to find the channel rather than found it closed.
+    """
+
+    def __init__(self, source, arm, keep_stereo, tokenizer, indices, pairs,
+                 max_length):
+        self._source = source
+        self._arm = arm
+        self._keep = bool(keep_stereo)
+        self._tokenizer = tokenizer
+        self._indices = list(indices)
+        self._pairs = pairs
+        self._max_length = int(max_length)
+        self.changed = set()
+        self.task = getattr(source, "task", "?")
+        self.split = getattr(source, "split", "?")
+        self.arm = arm
+        self.pass_id = getattr(source, "pass_id", 0)
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, i: int) -> dict:
+        item, changed = _restereo_item(
+            self._source[self._indices[i]], self._arm, self._keep,
+            self._tokenizer, self._pairs, self._max_length)
+        if changed:
+            self.changed.add(i)
+        return item
+
+
+@register
+class Leakage(BaseValidator):
+    """The negative control: `stereo_assigned` with the parity channel closed.
+
+    §1 designates this family as the suite's leakage detector — strip the parity
+    tag and the answer becomes unknowable, so anything materially above the base
+    rate is information arriving by a route the experiment did not intend. It is
+    what caught the split defect of `molecules/PLAN.md` §3.2.10, where up to 73.6 %
+    of test examples were exact duplicates of training items, and the suite has had
+    no working version of it since `014`'s pool made the family single-answer.
+
+    **This is not `016`, and the difference matters when reading the number.**
+    `016` trains a second model with ``stereo_tags: off`` and compares two runs;
+    this closes the channel at *evaluation* on the one model the run trains, which
+    costs two scoring passes instead of a training run. The two catch the same
+    thing — a memorised molecule is answered from memory whether or not its parity
+    words are present, so contamination keeps the stripped score high — but they
+    are not the same measurement, and a model trained with the tags on can also
+    lose accuracy simply because its input moved. That asymmetry is in the safe
+    direction: it can only push the stripped score *down*, toward the floor, so a
+    stripped score above the line is still evidence and a stripped score at the
+    line is weaker evidence of cleanliness than `016`'s would be.
+
+    **The floor is measured, never assumed.** `base` is the majority-class share
+    of the rows actually scored, `sigma` its sampling error at that n, and the
+    verdict is ``stripped <= base + sigmas * sigma``. `016` pre-registered 0.774
+    against a 0.732 base on the `bace,bbbp,tox21,lipo` pool; the generalist draws
+    from the whole train-role partition, so the base rate is a different number and
+    is computed here rather than inherited — a score without its own floor is what
+    §9's defect table already has one entry for.
+
+    **A single-answer split reports `void`, not a pass.** That is the `014` state:
+    the family scores 1.000 in both arms and the off/on contrast has nothing to sit
+    on. Reporting it as a pass would retire the detector exactly when it has
+    stopped working.
+    """
+
+    name = "leakage"
+    cadence = "milestone"
+    needs = frozenset({"model", "tokenizer", "collator", "eval_sets", "registry"})
+    protocol_version = "1"
+
+    def keys(self, ctx=None) -> set:
+        return {"tagged", "stripped", "gap", "base", "sigma", "line", "passed",
+                "void", "n", "n_stripped"}
+
+    def run(self, ctx) -> dict:
+        from collections import Counter
+
+        from ..schema import SIDECAR_KEY
+        from .scorers import eval_indices, score_source
+
+        task = str(self.option("task", LEAKAGE_TASK))
+        split = str(self.option("split", "test"))
+        source = ctx.sources(task).get(split)
+        if source is None or not len(source):
+            # The family is not in this run's mixture — which is a decision the
+            # mixture is entitled to make, and not this validator's to report on.
+            return {}
+
+        spec = _spec(ctx, task)
+        if spec.answer_kind != "token":
+            raise EvalError(
+                f"leakage: {task} is scored as {spec.answer_kind!r}; the detector "
+                "reads an exact-match accuracy against a majority-class floor and "
+                "has no reading for that answer kind")
+
+        arm = ctx.arm or getattr(source, "arm", "flat")
+        indices = eval_indices(len(source), self.option("max_samples", 500))
+        max_length = int((ctx.config or {}).get(MAX_LENGTH, 512))
+        pairs = _parity_pairs()
+
+        answers = [(source[i].get(SIDECAR_KEY) or {}).get("answer")
+                   for i in indices]
+        counts = Counter(answers)
+        n = len(indices)
+        base = max(counts.values()) / n if n else float("nan")
+        void = float(len(counts) <= 1)
+
+        views = {keep: _StereoSource(source, arm, keep, ctx.tokenizer, indices,
+                                     pairs, max_length)
+                 for keep in (True, False)}
+        scored = {keep: score_source(ctx.model, ctx.tokenizer, ctx.collator, view,
+                                     spec, device=ctx.device, max_samples=None,
+                                     batch_size=int(self.option("batch_size", 8)))
+                  for keep, view in views.items()}
+
+        n_stripped = len(views[False].changed)
+        if not void and not n_stripped:
+            raise EvalError(
+                f"leakage: closing the stereo channel changed none of the {n} "
+                f"{task} rows on the {arm} arm, yet the split has "
+                f"{len(counts)} distinct answers — so some molecule carries an "
+                "assigned centre and the strip failed to find it. The verdict "
+                "would read as 'at chance' while the channel was still open.")
+
+        tagged = float(scored[True]["em_accuracy"])
+        stripped = float(scored[False]["em_accuracy"])
+        sigma = (base * (1.0 - base) / n) ** 0.5 if n else float("nan")
+        line = base + float(self.option("sigmas", 3.0)) * sigma
+        return {
+            f"{task}/tagged": tagged,
+            f"{task}/stripped": stripped,
+            f"{task}/gap": tagged - stripped,
+            f"{task}/base": float(base),
+            f"{task}/sigma": float(sigma),
+            f"{task}/line": float(line),
+            f"{task}/passed": float("nan") if void else float(stripped <= line),
+            f"{task}/void": void,
+            f"{task}/n": float(n),
+            f"{task}/n_stripped": float(n_stripped),
+        }
 
 
 class _AnalysisConfig:

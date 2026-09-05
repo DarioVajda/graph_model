@@ -221,7 +221,7 @@ def test_the_readout_backwards_without_retaining_a_graph(trained):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _stub_run(trainer):
-    config = SimpleNamespace(max_spd=8, to_dict=lambda: {})
+    config = SimpleNamespace(max_spd=8, max_length=512, to_dict=lambda: {})
     return SimpleNamespace(config=config, trainer=trainer)
 
 

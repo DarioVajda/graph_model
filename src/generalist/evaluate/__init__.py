@@ -373,6 +373,22 @@ def protocol_versions(validators) -> list:
     return sorted({(v.name, str(v.protocol_version)) for v in validators})
 
 
+def _release_eval_memory() -> None:
+    """Hand a validator's CUDA blocks back to the allocator.
+
+    Called after every validator, success or failure. It is a no-op without
+    torch or without a live CUDA context, and it never raises: this runs on the
+    path whose entire purpose is that measurement cannot lose a run.
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:                                               # noqa: BLE001
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -514,6 +530,16 @@ def run_validators(ctx: EvalContext, validators, event: str = "step",
                 validator.name, version, "error", f"{type(exc).__name__}: {exc}",
                 time.monotonic() - started))
             continue
+        finally:
+            # Without this the contract above is false for the one failure that
+            # matters most. A scoring validator that dies of CUDA OOM leaves its
+            # reserved blocks on the card, and the next training step allocates
+            # into what is left — the 2026-09-04 shakedown lost the run four
+            # steps after `in_mixture` had been caught and skipped, with 8 GB
+            # free on a 178 GB card. Releasing after every validator, not only
+            # after a failing one, because a validator that succeeded has still
+            # just held the largest transient buffers in the run.
+            _release_eval_memory()
 
         metrics.update(namespaced)
         statuses.append(ValidatorStatus(

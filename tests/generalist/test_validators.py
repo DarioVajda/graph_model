@@ -220,12 +220,15 @@ def _multi_endpoint_items(task, split):
 
 TASKS = {
     "mol/ring_count": ("token", "exact_match"),
+    "mol/stereo_assigned": ("token", "exact_match"),    # the leakage detector
     "mol/bace": ("yesno", "roc_auc"),
     "mol/tox21": ("yesno", "roc_auc"),
     "mol/chebi20": ("text", "bleu2"),
     "mol/g2s": ("smiles", "roundtrip_match"),
     "mol/bond_path": ("token", "exact_match"),          # held out (§4)
 }
+
+GENERATORS = ("mol/ring_count", "mol/stereo_assigned", "mol/g2s")
 
 
 @pytest.fixture(scope="module")
@@ -234,7 +237,7 @@ def registry():
     for name, (kind, metric) in TASKS.items():
         reg.register(TaskSpec(
             name=name, domain="molecules", adapter="molecules",
-            kind="generator" if name in ("mol/ring_count", "mol/g2s") else "corpus",
+            kind="generator" if name in GENERATORS else "corpus",
             answer_kind=kind, metric=metric, held_out=(name == "mol/bond_path"),
             weight=1.0, mean_tokens=40.0, train_size=32,
             max_new_tokens=8, build_version="test"))
@@ -250,6 +253,14 @@ def eval_sets():
                 flat_item("mol/ring_count", "test", "token", q_a, "CCO", " 0", "CCO"),
                 flat_item("mol/ring_count", "test", "token", q_a, "c1ccccc1", " 1",
                           "c1ccccc1"),
+            ])},
+        # Two distinct answers and one molecule carrying an assigned centre, so
+        # `leakage` has a non-degenerate split and a channel to close. A fixture
+        # without those two properties would exercise only its `void` branch.
+        "mol/stereo_assigned": {
+            "test": StubSource(STEREO_TASK, "test", "flat", [
+                flat_item(STEREO_TASK, "test", "token", STEREO_Q, CHIRAL, " 1", "a"),
+                flat_item(STEREO_TASK, "test", "token", STEREO_Q, "CCO", " 0", "b"),
             ])},
         "mol/bace": {
             "val": StubSource("mol/bace", "val", "flat", _yesno_items("mol/bace", "val")),
@@ -984,6 +995,152 @@ def test_a_rewritten_flat_prompt_is_the_same_molecule(ctx):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# leakage — the negative control
+# ─────────────────────────────────────────────────────────────────────────────
+
+STEREO_TASK = "mol/stereo_assigned"
+STEREO_Q = ("Question: how many stereocenters in this molecule have a defined "
+            "configuration?")
+#: L-alanine: one assigned tetrahedral centre, so the parity words are present in
+#: the graph arm's node text and `@`/`@@` in the flat arm's SMILES.
+CHIRAL = "C[C@H](N)C(=O)O"
+
+
+def _graph_item(node_texts, prompt_node, answer):
+    """One graph-arm item, as `TextGraphDataset.__getitem__` hands one over."""
+    graph = {"text": list(node_texts), "prompt_node": prompt_node,
+             "num_nodes": len(node_texts)}
+    stub = Example(task=STEREO_TASK, domain="molecules", split="test",
+                   arm="graph", graph=graph, question=STEREO_Q, answer=answer,
+                   answer_kind="token", key="key")
+    rendered = render(stub, TOKENIZER)
+    item = stub.to_item()
+    item["edges"] = [(i, prompt_node) for i in range(len(node_texts))
+                     if i != prompt_node]
+    item["input_ids"] = [list(ids) for ids in rendered.input_ids]
+    item["labels"] = torch.tensor(rendered.labels, dtype=torch.long)
+    return item
+
+
+def _stereo_ctx(ctx, items, arm="flat"):
+    import dataclasses
+
+    reg = Registry()
+    reg.register(TaskSpec(
+        name=STEREO_TASK, domain="molecules", adapter="molecules",
+        kind="generator", answer_kind="token", metric="exact_match",
+        held_out=False, weight=1.0, mean_tokens=40.0, train_size=32,
+        max_new_tokens=8, build_version="test"))
+    return dataclasses.replace(
+        ctx, registry=reg, arm=arm,
+        eval_sets={STEREO_TASK: {"test": StubSource(STEREO_TASK, "test", arm,
+                                                    items)}})
+
+
+def test_leakage_closes_the_parity_channel_and_leaves_the_question_alone():
+    """The molecule's parity words go; the question node is not a molecule."""
+    prompt = f"{STEREO_Q}\nA: 1"
+    item = _graph_item(
+        ["carbon aromatic ring deg3 h1 chiral cw", "double bond in ring stereo E",
+         "nitrogen deg2 h1", prompt], prompt_node=3, answer=" 1")
+    pairs = builtin._parity_pairs()
+
+    kept, unchanged = builtin._restereo_item(
+        item, "graph", True, TOKENIZER, pairs, 512)
+    assert kept is item and unchanged == 0, "the tagged view is the item as built"
+
+    out, changed = builtin._restereo_item(
+        item, "graph", False, TOKENIZER, pairs, 512)
+    assert changed == 1
+    assert out["text"][:3] == ["carbon aromatic ring deg3 h1",
+                               "double bond in ring", "nitrogen deg2 h1"]
+    assert out["text"][3] == prompt, "the question node carries no molecule"
+    # Re-rendered rather than re-used: the stripped nodes are shorter, and the
+    # label convention comes from `schema.render` and not a copy of it.
+    assert out["input_ids"][0] == TOKENIZER.encode(out["text"][0])
+    assert int(out["labels"][-1]) == out["input_ids"][3][-1]
+
+
+def test_leakage_strips_stereo_from_the_flat_prompt_without_changing_the_molecule():
+    """`stereo_tags` is not a flat-arm knob, so the channel closes in the SMILES."""
+    from rdkit import Chem
+
+    item = flat_item(STEREO_TASK, "test", "token", STEREO_Q, CHIRAL, " 1", "key")
+    reader = lambda text: text[text.find(builtin.SMILES_MARKER)
+                               + len(builtin.SMILES_MARKER):text.find("\nA:")]
+
+    kept, _ = builtin._restereo_item(item, "flat", True, TOKENIZER, set(), 512)
+    out, changed = builtin._restereo_item(item, "flat", False, TOKENIZER, set(), 512)
+    assert changed == 1
+
+    tagged_smiles, stripped_smiles = reader(kept["text"][0]), reader(out["text"][0])
+    assert "@" in tagged_smiles and "@" not in stripped_smiles
+    # Both views are canonical, so the pair differs in stereochemistry and in
+    # nothing else — canonicalisation is itself a re-writing the flat arm is not
+    # invariant to, which is `perm_spread`'s finding.
+    assert (Chem.MolToSmiles(Chem.MolFromSmiles(stripped_smiles))
+            == Chem.MolToSmiles(Chem.MolFromSmiles(tagged_smiles),
+                                isomericSmiles=False))
+
+
+def test_leakage_reads_the_stripped_score_against_the_splits_own_base_rate(ctx):
+    """The floor is measured here, not inherited from `016`'s pool."""
+    items = [flat_item(STEREO_TASK, "test", "token", STEREO_Q, CHIRAL, " 1", "a"),
+             flat_item(STEREO_TASK, "test", "token", STEREO_Q, "CCO", " 0", "b"),
+             flat_item(STEREO_TASK, "test", "token", STEREO_Q, "OCC", " 0", "c"),
+             flat_item(STEREO_TASK, "test", "token", STEREO_Q, "c1ccccc1", " 0", "d")]
+    out = ev.get("leakage")(cadence="manual").run(_stereo_ctx(ctx, items))
+
+    assert out[f"{STEREO_TASK}/n"] == 4.0
+    assert out[f"{STEREO_TASK}/void"] == 0.0
+    assert out[f"{STEREO_TASK}/base"] == pytest.approx(0.75)
+    assert out[f"{STEREO_TASK}/sigma"] == pytest.approx(math.sqrt(0.75 * 0.25 / 4))
+    assert out[f"{STEREO_TASK}/line"] == pytest.approx(
+        0.75 + 3 * math.sqrt(0.75 * 0.25 / 4))
+    # One of the four molecules carries an assigned centre, and exactly that one
+    # is the row the strip re-wrote.
+    assert out[f"{STEREO_TASK}/n_stripped"] == 1.0
+    assert out[f"{STEREO_TASK}/gap"] == pytest.approx(
+        out[f"{STEREO_TASK}/tagged"] - out[f"{STEREO_TASK}/stripped"])
+    assert out[f"{STEREO_TASK}/passed"] == float(
+        out[f"{STEREO_TASK}/stripped"] <= out[f"{STEREO_TASK}/line"])
+
+
+def test_leakage_reports_void_rather_than_a_pass_on_a_single_answer_split(ctx):
+    """`014`'s state: one answer, both arms at 1.000, and nothing to read.
+
+    A pass here would retire the detector at exactly the moment it stopped
+    working, which is how the suite came to have no leakage detector at all.
+    """
+    items = [flat_item(STEREO_TASK, "test", "token", STEREO_Q, CHIRAL, " 1", "a"),
+             flat_item(STEREO_TASK, "test", "token", STEREO_Q, "C[C@@H](N)CO",
+                       " 1", "b")]
+    out = ev.get("leakage")(cadence="manual").run(_stereo_ctx(ctx, items))
+
+    assert out[f"{STEREO_TASK}/void"] == 1.0
+    assert math.isnan(out[f"{STEREO_TASK}/passed"])
+    assert out[f"{STEREO_TASK}/base"] == 1.0
+
+
+def test_leakage_fails_when_closing_the_channel_changes_nothing(ctx):
+    """A strip that matched nothing reports "at chance" with the channel open."""
+    items = [flat_item(STEREO_TASK, "test", "token", STEREO_Q, "CCO", " 0", "a"),
+             flat_item(STEREO_TASK, "test", "token", STEREO_Q, "c1ccccc1", " 1", "b")]
+    with pytest.raises(ev.EvalError) as excinfo:
+        ev.get("leakage")(cadence="manual").run(_stereo_ctx(ctx, items))
+    assert "changed none" in str(excinfo.value)
+
+
+def test_leakage_says_nothing_when_the_family_is_not_in_the_mixture(ctx):
+    """Dropping the family is the mixture's decision, not a validator failure."""
+    import dataclasses
+
+    without = {t: s for t, s in ctx.eval_sets.items() if t != STEREO_TASK}
+    assert ev.get("leakage")(cadence="manual").run(
+        dataclasses.replace(ctx, eval_sets=without)) == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The scorers, on cases computed by hand
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1094,3 +1251,84 @@ def test_the_token_scorer_is_exact_match_over_the_supervised_span(ctx):
     assert out["n"] == 2
     assert 0.0 <= out["em_accuracy"] <= 1.0
     assert set(out) == {"em_accuracy", "n"}
+
+
+# ── the eval batcher: rows x longest, not rows ───────────────────────────────
+
+class _Rows(list):
+    """A split that answers ``source[i]`` with a row of a stated length."""
+
+    def __getitem__(self, index):
+        return {"input_ids": [[0] * list.__getitem__(self, index)]}
+
+
+def test_one_long_row_does_not_drag_a_full_batch_up_with_it():
+    """The shakedown defect, reproduced.
+
+    A fixed row count prices a batch by its mean length while the allocator is
+    charged ``rows x longest``. Eight rows where one is 8192 positions long is
+    65,536 positions — 32 GiB of fp32 logits at a 128k vocabulary, which is
+    exactly what killed `in_mixture` on 2026-09-04.
+    """
+    from src.generalist.evaluate.scorers import token_batches
+
+    source = _Rows([64] * 7 + [8192])
+    groups = list(token_batches(source, list(range(8)), max_rows=8, budget=8192))
+
+    assert [i for g in groups for i in g] == list(range(8)), "rows were lost"
+    for group in groups:
+        longest = max(source[i]["input_ids"][0].__len__() for i in group)
+        assert len(group) * longest <= 8192 or len(group) == 1
+    # The long row ends up alone; the short ones still batch together, so this
+    # costs nothing on a split that has no outlier in it.
+    assert [7] in groups
+    assert max(len(g) for g in groups) > 1
+
+
+def test_uniform_rows_still_batch_at_the_row_cap():
+    """No regression for the ordinary case: short rows batch exactly as before."""
+    from src.generalist.evaluate.scorers import token_batches
+
+    source = _Rows([32] * 20)
+    groups = list(token_batches(source, list(range(20)), max_rows=8, budget=8192))
+    assert [len(g) for g in groups] == [8, 8, 4]
+
+
+def test_a_row_over_budget_is_scored_alone_rather_than_dropped():
+    """Refusing the largest molecules would silently change what the metric covers."""
+    from src.generalist.evaluate.scorers import token_batches
+
+    source = _Rows([99999, 32])
+    groups = list(token_batches(source, [0, 1], max_rows=8, budget=8192))
+    assert groups == [[0], [1]]
+
+
+def test_row_counts_stay_on_a_power_of_two_ladder():
+    """The batch dimension is a compile guard, so it may not take any value.
+
+    `GraphCollatorV2` buckets ``L`` and ``N`` to keep the number of distinct flex
+    shapes small; a token budget that closed a batch wherever the tokens ran out
+    would put that variety straight back on the third axis. Past the cap dynamo
+    does not raise — it drops to the unfused eager path, which is what the
+    2026-09-05 shakedown spent over an hour of validator time in.
+
+    Lengths here are deliberately awkward so the greedy grouping lands on 7, 5
+    and 3 rows rather than on the ladder by luck.
+    """
+    from src.generalist.evaluate.scorers import token_batches
+
+    for lengths, budget in (([1170] * 21, 8192),      # closes at 7 rows
+                            ([1640] * 15, 8192),      # closes at 5 rows
+                            ([2730] * 9, 8192),       # closes at 3 rows
+                            ([32] * 37, 8192)):       # closes at the row cap
+        source = _Rows(lengths)
+        groups = list(token_batches(source, list(range(len(lengths))),
+                                    max_rows=8, budget=budget))
+        assert [i for g in groups for i in g] == list(range(len(lengths))), \
+            "rows were lost or reordered"
+        sizes = {len(g) for g in groups}
+        assert sizes <= {1, 2, 4, 8}, f"off-ladder batch sizes {sorted(sizes)}"
+        for group in groups:
+            longest = max(len(source[i]["input_ids"][0]) for i in group)
+            assert len(group) * longest <= budget or len(group) == 1, \
+                "splitting down must never push a group over the budget"
