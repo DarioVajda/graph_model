@@ -1,0 +1,152 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 005 — the arm-2 shakedown. The last thing between the campaign configs and
+  // the queue, and it exists to replace three estimates with measurements before
+  // six chained runs are committed:
+  //
+  //   1. **s/step at the real recipe.** The only throughput number this campaign
+  //      has is the T10 smoke's 1.17 s/it at 8192 tokens/step, from which the
+  //      graph config's "~2.3 s/it at 16384" is an extrapolation. 2,799 steps is
+  //      1.8 h at 2.3 s and 14 h at 18 s, and those are different campaigns —
+  //      one fits on the idle cards tonight, the other needs the chain it is
+  //      configured for. Nothing distinguishes them without a measurement.
+  //   2. **Host memory, measured rather than argued.** The graph config asks for
+  //      128G on an ~11 GB estimate of the resident payload plus the argument
+  //      that this trainer cannot have `molecules/PLAN.md` §8.4.9's loader leak.
+  //      The argument is sound and it is still an argument; `throughput` now
+  //      reports `host_peak_gb`, `host_anon_gb` and `host_limit_gb` every 25
+  //      steps here.
+  //   3. **What a validator firing costs.** `in_mixture` at `max_samples: 500`
+  //      has never fired — the cross-check ran one corpus and the smoke ran 32
+  //      samples — and at `steps:1000` it would fire twice inside the real run.
+  //      `validators: "shakedown"` is the default set at production sample counts
+  //      on cadences 300 steps reaches, so every generative validator is priced
+  //      at the size it will actually run at.
+  //
+  // TWO RANKS, deliberately. `gpus_per_config: 2` is the only thing here that is
+  // not the campaign recipe, and it is the point: `chain.sh` switches to
+  // `torchrun --nproc_per_node` above 1, the mixture sampler splits a step's
+  // micro-batches `[r::world_size]`, and none of that has run for this harness.
+  // If DDP works the campaign can take the idle cards; if it does not, that is
+  // far better learned in a 300-step probe than in chunk 3 of a chained run.
+  //
+  //   src/generalist/tools/chain.sh src/generalist/configs/probes/005_generalist_shakedown.jsonc
+  //
+  // Everything else is `configs/runs/001_molecule_generalist_graph_s0.jsonc`
+  // unchanged, so the numbers transfer. `max_steps: 300` overrides the §2 budget
+  // rule; `milestone_steps: 100` is what makes the milestone validators fire
+  // three times instead of never.
+  //
+  // WHAT IT REPORTED (2026-09-05, jobs 138437 and 138505):
+  //
+  //   1. **1.53–1.59 s/step at two ranks**, against the "~2.3 s/it" the graph
+  //      config extrapolated — so the campaign fits a single chunk, not the six
+  //      it was configured for. The cold-start cost is the other half of the
+  //      number and is much larger than the step time: step 100 arrived at 39:11
+  //      on a cold inductor cache and at 4:35 on a warm one, so roughly 35
+  //      minutes of the first chunk is autotune. It is per shape, so a campaign
+  //      that shares `inductor_cache` pays it once.
+  //   2. **128G holds.** `host_peak_gb` 97.4 -> 98.8 -> 101.7 against the 128
+  //      limit, `host_anon_gb` flat at 38–40. The leak argument was right: there
+  //      is nothing here that climbs. 192G would have been a workaround for a
+  //      defect this trainer cannot have.
+  //   3. **Validator cost is still not measured**, and the attempt is what found
+  //      the recompile-cap defect: the step-100 block ran over an hour because
+  //      `flex_attention` had fallen back to unfused eager, which is not the
+  //      regime the campaign runs in now that the cap is 128. The number this
+  //      probe was built to produce has to come from the campaign's own first
+  //      `in_mixture` firing.
+  //
+  // DDP works — 100 steps at two ranks, `base_exact` bit-exact under it. The
+  // campaign still runs one card per cell, because six cells on six cards beats
+  // one cell on six and single-card matches arm 1.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "generalist_shakedown_graph",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      // 128G, the value under test. If the run dies here it dies in 300 steps
+      // rather than in hour five of a chunk, which is the whole reason to ask
+      // the question in a probe.
+      "mem": "128G",
+      // 4 h for 300 steps, which is not a workload estimate — it is a window
+      // (`feedback-fit-jobs-to-window`). The unknown is at the end: `per_example`
+      // and `perm_spread` fire uncapped, over the whole test split of sixteen
+      // tasks rather than the smoke's 1,152 rows, and pricing that is part of
+      // what this run is for. A probe killed at its last validator would have
+      // measured everything and recorded nothing.
+      "time": "04:00:00",
+      // The campaign's cache, primed by this run: every rank compiles the same
+      // flex kernels and the compile is CPU-bound and byte-identical, so paying
+      // for it once here makes the first campaign chunk cheaper.
+      "inductor_cache": ".inductor_cache/generalist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arm": "graph",
+  "mixture": "molecule_generalist",
+  "validators": "shakedown",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "spd+magnetic",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "tokens_per_step": 16384,
+  "accumulation_steps": 8,
+  "loss_norm": "per_example",
+  "max_steps": 300,
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  // 50, not 300. At 300 the only checkpoint would be the last step, and the
+  // chunk script's `train || resume --from latest` fallback then has nothing to
+  // resume from — which is how the 2026-09-04 run turned one OOM into a lost
+  // run and a `CheckpointError` on top of it. `save_steps` has to be reachable
+  // inside whatever the chunk actually completes, not inside what it was
+  // budgeted for.
+  "save_steps": 50,
+  "save_total_limit": 2,
+  "logging_steps": 10,
+  "milestone_steps": 100,
+
+  "seed": 0,
+  "wandb_project": null
+}

@@ -1,0 +1,50 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The `anneal` fork that closes an arm-2 trunk. One file for all six cells.
+  //
+  //   GPU=1 INDUCTOR_CACHE=.inductor_cache/generalist \
+  //   src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/molecule_generalist_graph_s0/checkpoint-5599 \
+  //     --mode anneal \
+  //     --fork-config src/generalist/configs/forks/anneal_molecule_generalist.jsonc \
+  //     --config src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
+  //
+  // WHAT IT PRODUCES. The reportable model. The trunk runs WSD's stable phase at
+  // a flat LR, so its last checkpoint is mid-schedule by construction and is not
+  // the thing arm 1 should be differenced against. `min_factor` is left to the
+  // run config's `lr_min`, which is `lr/10` (§7). At the default decay fraction
+  // of 10 % this is 560 steps on a 5,599-step trunk.
+  //
+  // WHY `passes` IS RAISED, and why to 7. A corpus hands out `passes x
+  // train_size` examples in total, and the trunk's budget rule spends the whole
+  // allowance sizing its own step count — `mol/bbbp` ends at exactly its six-pass
+  // cap, which is what makes it the binding task in the first place (§2). An
+  // anneal appended to that has nothing left to draw. 560 decay steps at 56.83
+  // examples/step is 31,825 examples, of which BBBP's 2.35 % share is 746 against
+  // the 1,244 that one more pass buys — so 7 covers the decay on every corpus
+  // with margin, and BBBP, the tightest, still ends ~500 examples inside its cap.
+  //
+  // The trunk's `passes` sizes the run and the fork's `passes` pays for the tail,
+  // which is the same shape `anneal_cross_check.jsonc` uses.
+  //
+  // NOTE — g2s passes. `mol/g2s` is a *generator*, so its passes are files on
+  // disk rather than a re-walk of one corpus, and `load` never generates. Trunk
+  // plus anneal is ~350k examples, of which g2s's 15 % over a 4,000 cap is 14
+  // passes against the trunk's 12. Both arms are built to 14 so this fork is not
+  // blocked on a data build at the moment it is wanted.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "passes": {
+    "mol/bbbp": 7, "mol/bace": 7, "mol/chebi20": 7,
+    "mol/sider": 7, "mol/hiv": 7, "mol/tox21": 7
+  },
+
+  // 280, not the cross-check's 50. `eval_steps` scores the decay on its way down,
+  // and on this campaign a scoring firing is not cheap: `in_mixture` alone ran 65
+  // minutes at `max_samples: 500` on the flat arm, which is why the trunk moved it
+  // to `milestone` (`config.py DEFAULT_VALIDATORS`). At 50 a 560-step decay would
+  // fire eleven times and the anneal would cost more than the run it closes. 280
+  // gives a midpoint and an endpoint, which is enough to see the decay behaving;
+  // the number that matters is scored at the end of the leg regardless.
+  "eval_steps": 280
+}
