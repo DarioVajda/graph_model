@@ -155,6 +155,13 @@ def test_every_config_selects_the_job_array_path():
     throttle. A value BELOW the run count is legitimate (an idle cluster, where a
     large array would claim the whole partition), so this test does not require
     equality — only that the field is present at all.
+
+    `granularity: "single"` is exempt, and not as a concession: it puts every run
+    of the sweep in ONE job, sequentially, so there is no array for
+    `max_concurrent` to select and no second job for it to throttle. `023`/`024`
+    chose that deliberately — eight encoding runs overnight on one card, so the
+    HIV sweep whose latency actually mattered kept the rest. A test that demanded
+    the field there would be demanding a value that does nothing.
     """
     import glob
     import os
@@ -165,13 +172,56 @@ def test_every_config_selects_the_job_array_path():
         os.path.dirname(__file__), "..", "..",
         "src", "experiments", "molecules", "configs", "*.jsonc"))
     assert configs, "no molecules sweep configs found"
-    for path in configs:
+    exempt = []
+    for path in sorted(configs):
         sb = load_config(path).get("execution", {}).get("sbatch", {})
         if not sb:
+            continue
+        if sb.get("granularity") == "single":
+            exempt.append(os.path.basename(path))
             continue
         assert sb.get("max_concurrent"), (
             f"{os.path.basename(path)} does not set max_concurrent, so its runs go "
             "out as independent jobs rather than one array. Set it to the run count.")
+    # The exemption is asserted, not assumed: if `granularity: single` stops being
+    # used the branch above becomes dead and this test quietly narrows.
+    assert exempt, "no `granularity: single` config left — drop the exemption branch"
+
+
+def test_every_config_expands_into_runs_this_experiment_accepts():
+    """Every `.jsonc` in `configs/` must survive expansion AND argparse AND validate().
+
+    The cheapest failure this catches is a misspelled key: the runner renders any
+    key to a flag (`execute.py:101`), so `"lora_rank"` becomes `--lora-rank`, which
+    argparse rejects — but only once a job is already running on an allocated GPU.
+    The 3B/8B ladder (`PLAN.md` §10.1) is the reason this is worth pinning: its
+    longest cell is projected at 26 h, and finding a typo at hour zero of an
+    eighteen-task array is the same shape of loss as §8.4.9's OOM kills.
+
+    It also enforces the flat-arm/bias pairing across every config at once, since
+    `validate()` is what refuses a bias on a single-node graph.
+    """
+    import glob
+    import os
+
+    from sweep.expand import load_and_expand
+
+    configs = sorted(glob.glob(os.path.join(
+        os.path.dirname(__file__), "..", "..",
+        "src", "experiments", "molecules", "configs", "*.jsonc")))
+    assert configs, "no molecules sweep configs found"
+    parser = build_parser()
+    for path in configs:
+        name = os.path.basename(path)
+        _meta, runs = load_and_expand(path)
+        assert runs, f"{name} expands to zero runs"
+        for run in runs:
+            try:
+                config_from_args(parser.parse_args(render_flags(run)))
+            except SystemExit as exc:      # argparse rejected a rendered flag
+                raise AssertionError(
+                    f"{name}: a rendered flag is not accepted by the experiment's "
+                    f"parser ({exc}). Run: {run!r}") from exc
 
 
 def test_node_position_mode_is_unwired_here():
