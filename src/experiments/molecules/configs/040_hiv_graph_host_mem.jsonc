@@ -1,0 +1,127 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 040 — WHY THE HIV GRAPH ARM EATS 125 GB OF HOST RAM. A measurement, not a
+  // result: nothing in this file is meant to produce a score, and the two cells
+  // here must never be quoted next to `033`'s.
+  //
+  // THE INCIDENT (PLAN.md §8.4.9). HIV graph cells peak at ~124.9 GB host RSS
+  // against 43-75 GB for every other cell in the campaign. `031` lost two of three
+  // cells to the OOM killer at 5h44 and 6h02 of a ~6h run, both at 134.16 GB
+  // against the 134.22 GB cgroup limit `--mem 128G` gives; the survivor peaked at
+  // 134.15 GB. All three converged on the same ceiling and which one lived was
+  // luck. Cost: 11.8 GPU-hours of nearly-complete runs that produced nothing.
+  // `032` and `033` were raised to 192G, which is a workaround and not a diagnosis.
+  //
+  // WHAT IS ALREADY KNOWN, AND WHY IT IS NOT ENOUGH. The failure scales on two
+  // axes at once — arm (HIV *flat* finished fine at 128G in `030`) and corpus size
+  // (HIV is 41,119 molecules against BACE's ~1,500). `TextGraphDataset.load`
+  // unpickles the whole NetworkX graph list and `__getitem__` indexes it per item
+  // (`src/utils/text_graph_dataset.py:760`, `:235`), so it can never be dropped,
+  // and each persistent loader worker touches it, which refcounting turns from
+  // copy-on-write into a private copy. HIV's `graphs.pkl` is 185 MB against BACE's
+  // 9.0 MB — the right ratio, nowhere near the right magnitude. The gap has been
+  // attributed to torch.compile / flex shape-buffer growth for two months without
+  // anyone measuring it; the same guess was made and never confirmed on CWQ
+  // (`kgqa/TODO_cwq.md:262`) and on WebQSP+RRWP (`kgqa/README.md:550`). A mechanism
+  // invented to explain a pattern is a story, not a finding (§8.4.9), so this run
+  // exists to make the trace decide instead.
+  //
+  // WHAT THE TRACE SEPARATES. `StepMemCallback` now samples `/proc` and the job's
+  // own cgroup on a stride and writes `results/040_.../host_mem/<run>.jsonl`:
+  //
+  //     flat right after `data_loaded`, then steady   -> the resident corpus and
+  //                                                      the worker fan-out are the
+  //                                                      whole story
+  //     sawtooth around each `evaluate_end`           -> eval-time allocation
+  //     monotonic creep across the run                -> compile cache, flex shape
+  //                                                      buffers, or a leak
+  //
+  // and the cgroup's `anon` / `file` split says whether the peak is memory the
+  // kernel cannot reclaim or page cache from the 1.63 GB memory-mapped Arrow
+  // feature store, which are two completely different fixes.
+  //
+  // THE TWO CELLS ARE THE FAN-OUT MEASUREMENT. `num_workers` 3 is `033`'s recipe;
+  // `num_workers` 0 is the same run with the loader in-process. The difference in
+  // peak host RAM between them IS what the persistent workers cost, measured
+  // rather than argued, and it matters beyond this incident: the generalist
+  // harness forces 0 workers (`src/generalist/trainer.py:413`), so whatever the
+  // fan-out is worth here does not apply there and its budget has to be sized off
+  // the 0-worker number.
+  //
+  // EVERYTHING ELSE IS `033`'s HIV CELL VERBATIM — `rich_levi`, `spd+magnetic`,
+  // `max_spd` 32, `lr` 1e-4, `bias_lr` 1e-2, `lora_r` 16, batch 4 x accum 8,
+  // `question_node` on, `v2-flex` at `max-autotune-no-cudagraphs`, `data_seed` 0.
+  // Reproducing the memory behaviour requires reproducing the recipe; changing it
+  // would measure a different run.
+  //
+  // SHORTENED TO ~1 HOUR, AND ONLY BY `max_steps`. 1000 optimizer steps against
+  // `033`'s 10280, at the measured 1.69 s/step, is ~28 min of training. `eval_steps`
+  // 250 gives four in-training evals, which is enough to see a sawtooth. The SPLITS
+  // ARE NOT CAPPED: val and test stay at 4112 examples each, because the deaths
+  // happened at the END of the run and the tail — the post-training val eval, the
+  // test eval, the per-example report's third full pass over test
+  // (`analysis.py:write_per_example_report`) and the last-checkpoint rescore — is
+  // itself a live suspect. Capping the eval splits would remove the thing being
+  // measured. The tail costs ~6 min at `033`'s measured ~97 s per eval pass.
+  //
+  //   The learning-rate schedule is therefore nonsense here: `warmup_steps` is
+  //   `steps_per_epoch` = 1028, so the whole run is warmup. That is fine and it is
+  //   why no score from this sweep is reportable.
+  //
+  // MEMORY / HARDWARE. 192G so the job cannot die before it has said anything —
+  // measuring a run that gets OOM-killed at 5h44 tells us only what we already
+  // know. B200/B300/H100 by list, which renders as a `GPU_BRD` constraint; FRIDA's
+  // node weights are inverted against speed and a broad list lands on L4s. `ixb6`
+  // stays excluded (see `029`). 03:00:00 is generous: the 0-worker cell collates
+  // in-process and may run well under `033`'s step rate.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/040_hiv_graph_host_mem.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "040_hiv_graph_host_mem",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 1,
+      "exclude": "ixb6",
+      "cpus": 4,
+      "mem": "192G",
+      "time": "03:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "hiv",
+  "seed": 1,
+  "data_seed": 0,
+
+  // The one axis: the loader worker fan-out, on an otherwise identical run.
+  "num_workers": [3, 0],
+
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+
+  "question_node": "on",
+
+  "num_epochs": 10,
+  "max_steps": 1000,
+  "eval_steps": 250,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

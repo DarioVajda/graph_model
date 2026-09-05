@@ -72,6 +72,10 @@ def _save_train_record(cfg, run_name, results, runs_jsonl, sweep_meta=None):
         "lr": cfg.lr, "bias_lr": cfg.bias_lr, "num_epochs": cfg.num_epochs,
         "batch_size": cfg.batch_size, "accumulation_steps": cfg.accumulation_steps,
         "eval_steps": cfg.eval_steps, "max_steps": cfg.max_steps,
+        # Recorded because it is a memory axis, not just a throughput knob: each
+        # persistent loader worker is a fork that touches the resident graph list,
+        # and refcounting turns copy-on-write pages into private ones.
+        "num_workers": cfg.num_workers,
         "flex_compile_mode": cfg.flex_compile_mode,
         "len_buckets": list(cfg.len_buckets) if cfg.len_buckets else None,
         "node_buckets": list(cfg.node_buckets) if cfg.node_buckets else None,
@@ -293,7 +297,21 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
     # the analysis path where it could drift from what the scorer actually used.
     yes_id = answer_token_ids(tokenizer)[0] if cfg.tier() == "B" else None
 
+    # Built BEFORE the dataset loads, not with the trainer, so the host-RAM trace
+    # brackets every stage rather than starting at the first optimizer step. The
+    # three marks below are what separate "the corpus is simply resident" from
+    # "something grows once training starts": HIV's `graphs.pkl` is 185 MB on disk
+    # against BACE's 9.0 MB and unpickled NetworkX expands several-fold, so the
+    # load-time plateau has to be read off directly instead of assumed.
+    # The trace lands beside the run's records, same convention as the per-example
+    # report: `<sweep dir>/host_mem/<run>.jsonl`.
+    host_mem_dir = os.path.join(os.path.dirname(runs_jsonl) or ".", "host_mem")
+    step_mem = StepMemCallback(
+        trace_path=os.path.join(host_mem_dir, f"{internal_run_name}.jsonl"))
+    step_mem.mark("process_start")
+
     train_dataset, val_dataset, test_dataset = load_data(cfg)
+    step_mem.mark("data_loaded")
     for name, ds in (("train", train_dataset), ("val", val_dataset), ("test", test_dataset)):
         print(f"[data] {name}: {len(ds)} examples")
     print(f"[scoring] tier {cfg.tier()} -> selecting on {metric}")
@@ -306,12 +324,14 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
             cfg.k_hop_directed, batch_size=cfg.batch_size,
             num_sample_graphs=cfg.density_sample_graphs,
             num_sample_batches=cfg.density_sample_batches, device=device)
+        step_mem.mark("density_done")
 
     set_seed(cfg.seed)
     model, _ = build_model(cfg.impl, cfg.model_name, cfg.model_bias_config(),
                            cfg.k_hop, cfg.k_hop_directed, device, cfg.flex_compile_mode)
     model = select_active_params(model, active_params=ACTIVE_PARAMS, lora=cfg.lora_config())
     print_trainable_parameters(model)
+    step_mem.mark("model_built")
     bias_norm_init = _bias_init_fingerprint(model)
 
     collator = build_collator(
@@ -332,7 +352,19 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         gradient_accumulation_steps=cfg.accumulation_steps,
         gradient_checkpointing=cfg.gradient_checkpointing,
         dataloader_num_workers=cfg.num_workers,
-        dataloader_persistent_workers=(cfg.num_workers > 0),
+        # Off, and it has to stay off while `eval_strategy` is "steps". The flag
+        # is not per-loader: it applies to the eval loader too, and `evaluate`
+        # calls `accelerator.prepare` on every pass, which builds a *new*
+        # DataLoaderShard each time. The previous shard is dropped without
+        # `_shutdown_workers()`, so each evaluation forks a fresh persistent
+        # worker set and leaks the old one — ~1 GB of unreclaimable anon per
+        # pass on an HIV graph cell, which is what walked `031` into the ceiling
+        # (§8.4.9). Measured on one HIV graph cell: workers=3 leaks to a 60.2 GB
+        # cgroup peak with anon climbing monotonically 3.2 -> 15.7 GB and never
+        # returning, against 50.7 GB / 7.2 GB dead flat at workers=0. The train
+        # loader loses nothing that matters — persistent workers only save a
+        # re-fork at each epoch boundary.
+        dataloader_persistent_workers=False,
         report_to=report_to,
         run_name=internal_run_name,
         learning_rate=cfg.lr,
@@ -346,7 +378,6 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         save_total_limit=2, load_best_model_at_end=True,
     )
 
-    step_mem = StepMemCallback()
     trainer = GraphTrainerV2(
         model=model,
         args=training_args,
@@ -369,8 +400,9 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
     # `still_improving` (see `_convergence`).
     training_curve = _eval_curve(trainer, metric)
     val_metrics = trainer.evaluate(eval_dataset=val_dataset, metric_key_prefix="eval")
+    step_mem.mark("post_train_val_eval_end", trainer.state)
     test_metrics = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
-    perf = step_mem.summary()
+    step_mem.mark("post_train_test_eval_end", trainer.state)
 
     # ORDER MATTERS BELOW. Everything that describes the BEST model is captured
     # first, because `_score_last_checkpoint` loads the final checkpoint into the
@@ -381,10 +413,20 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
     bias_norm_final = _bias_init_fingerprint(model)
     per_example = _per_example(trainer, test_dataset, cfg, internal_run_name, runs_jsonl,
                                yes_id=yes_id)
+    step_mem.mark("per_example_end", trainer.state)
     best_ckpt = trainer.state.best_model_checkpoint
     last_checkpoint = _score_last_checkpoint(
         trainer, test_dataset,
         int(best_ckpt.rsplit("-", 1)[1]) if best_ckpt else None)
+    step_mem.mark("last_checkpoint_end", trainer.state)
+
+    # TAKEN HERE, NOT BEFORE THE TAIL ABOVE. The tail is three more full passes over
+    # the test split — the second `evaluate`, the per-example report and the
+    # last-checkpoint rescore — and it is where the HIV graph runs died: `031` lost
+    # two of three cells to the OOM killer at 5h44 and 6h02 of a ~6h run. A peak
+    # read before it would have excluded the part of the run that kills jobs. The
+    # CUDA peak is a running maximum, so it can only get more complete this way.
+    perf = step_mem.summary()
 
     results = {
         # Tier A's headline is exact match; Tier B's is ROC-AUC. Both are written
@@ -407,6 +449,20 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         "step_ms_median": perf.get("step_ms_median"),
         "peak_gb": perf.get("peak_gb"),
         "n_steps": perf.get("n_steps"),
+        # Host RAM, which is what actually kills these runs — `peak_gb` above is
+        # CUDA only and sat at a comfortable 57.8 GB in the two cells `031` lost.
+        # `host_cgroup_peak_gb` is the kernel's own high-water mark for the job's
+        # cgroup, i.e. the number `--mem` has to clear; the RSS pair splits it into
+        # the trainer process and its dataloader workers. See `host_mem_trace` for
+        # the shape.
+        "host_cgroup_peak_gb": perf.get("host_cgroup_peak_gb"),
+        "host_cgroup_limit_gb": perf.get("host_cgroup_limit_gb"),
+        "host_cgroup_anon_peak_gb": perf.get("host_cgroup_anon_peak_gb"),
+        "host_cgroup_file_peak_gb": perf.get("host_cgroup_file_peak_gb"),
+        "host_rss_self_peak_gb": perf.get("host_rss_self_peak_gb"),
+        "host_rss_tree_peak_gb": perf.get("host_rss_tree_peak_gb"),
+        "host_rss_train_begin_gb": perf.get("host_rss_train_begin_gb"),
+        "host_mem_trace": perf.get("host_mem_trace"),
         "token_sparsity": density.get("token_sparsity_mean") if density else None,
         "block_sparsity": density.get("block_sparsity_mean") if density else None,
         # Null-gate evidence (see `_bias_init_fingerprint`).
@@ -429,6 +485,18 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
           f"(best-val {metric}={results['best_val_score']}) "
           f"runtime={results['train_runtime_s']}s peak={results['peak_gb']}GB "
           f"bias_norm {results['bias_norm_init']:.4g} -> {results['bias_norm_final']:.4g}")
+    def _gb(key):
+        v = results.get(key)
+        return "?" if v is None else format(v, ".2f")
+    limit = results.get("host_cgroup_limit_gb")
+    print(f"[hostmem] cgroup peak={_gb('host_cgroup_peak_gb')}G of "
+          f"{'?' if limit is None else format(limit, '.2f')}G  "
+          f"[anon {_gb('host_cgroup_anon_peak_gb')}G + page cache "
+          f"{_gb('host_cgroup_file_peak_gb')}G]  "
+          f"(trainer RSS {_gb('host_rss_self_peak_gb')}G, tree RSS "
+          f"{_gb('host_rss_tree_peak_gb')}G, at train_begin "
+          f"{_gb('host_rss_train_begin_gb')}G, workers={cfg.num_workers})  "
+          f"trace={results.get('host_mem_trace')}")
     if results.get("degenerate_test_split"):
         print(f"[results] *** DEGENERATE TEST SPLIT: all {sum(results['answer_distribution'].values())} "
               f"test examples answer {list(results['answer_distribution'])[0]!r}. A constant "
