@@ -7,7 +7,7 @@
 # `resume --from latest`, and each waits on its predecessor with
 # `--dependency=afterany`.
 #
-#   src/generalist/tools/chain.sh src/generalist/configs/001_molecule_generalist.jsonc
+#   src/generalist/tools/chain.sh src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
 #   CHUNKS=8 TIME=12:00:00 src/generalist/tools/chain.sh <config.jsonc>
 #   DRY_RUN=1 src/generalist/tools/chain.sh <config.jsonc>     # write, don't submit
 #

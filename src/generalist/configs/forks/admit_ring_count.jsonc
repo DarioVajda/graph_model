@@ -5,7 +5,7 @@
   //   GPU=1 src/generalist/tools/run_cli.sh fork \
   //     --from src/generalist/results/runs/smoke_graph/checkpoint-200 \
   //     --mode admit --fork-config src/generalist/configs/forks/admit_ring_count.jsonc \
-  //     --config src/generalist/configs/000_smoke.jsonc
+  //     --config src/generalist/configs/probes/000_smoke.jsonc
   //
   // WHAT IT MEASURES. A candidate task is added to the parent's mixture at a
   // stated share, the schedule re-warms, and a fixed budget is trained. Then
@@ -30,7 +30,7 @@
   // against the parent and is honestly undecided without a parent number — it
   // will not pass a gate against zeros. The four numbers below are the smoke
   // checkpoint's own, measured by `eval --only-validators in_mixture` under
-  // `configs/004_smoke_probe.jsonc`, at the same `max_samples: 32` the fork
+  // `configs/probes/004_smoke_probe.jsonc`, at the same `max_samples: 32` the fork
   // will use, so child and parent are the same measurement twice.
   //
   // THIS PARTICULAR FORK IS A PLUMBING EXERCISE, not an admission decision:

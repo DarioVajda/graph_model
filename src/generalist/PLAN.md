@@ -65,7 +65,7 @@ src/generalist/
 │   ├── suites.py            # in-mixture / held-out / text-only / flat-twin
 │   ├── adaptation.py        # steps-to-target on a held-out task, trunk vs base
 │   └── report.py
-├── configs/                 # .jsonc for the sweep runner
+├── configs/                 # .jsonc for the sweep runner: runs/, probes/, forks/
 ├── results/                 # runs.jsonl, eval snapshots, lineage.json
 └── analysis/
 ```

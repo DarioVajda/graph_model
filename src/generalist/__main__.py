@@ -2,13 +2,13 @@
 D8.1 — the command line: ``validate``, ``data_prep``, ``train``, ``resume``,
 ``fork``, ``eval``.
 
-    python3 -m src.generalist validate  --config src/generalist/configs/001_molecule_generalist.jsonc
+    python3 -m src.generalist validate  --config src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
     python3 -m src.generalist data_prep --config <cfg>
     python3 -m src.generalist train     --config <cfg>
     python3 -m src.generalist resume    --from latest --config <cfg>
     python3 -m src.generalist fork      --from <ckpt> --mode anneal --config <cfg>
     python3 -m src.generalist eval      --checkpoint <ckpt> --config <cfg>
-    python3 -m src.generalist --init my_run          # write a config under configs/
+    python3 -m src.generalist --init my_run          # write a config under configs/probes/
 
 This file is a dispatcher and nothing else: every mode resolves a
 :class:`~src.generalist.config.RunConfig`, hands it to `wiring.py`, and prints.
@@ -41,7 +41,7 @@ import sys
 from dataclasses import fields
 
 from .config import (
-    CONFIGS_DIR,
+    PROBES_DIR,
     ConfigError,
     RunConfig,
     load_config_file,
@@ -547,7 +547,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(normalise_argv(argv))
 
     if getattr(args, "init", None) is not None:
-        path = write_template(args.init, CONFIGS_DIR)
+        path = write_template(args.init, PROBES_DIR)
         print(f"Wrote {path}\n"
               f"Edit it, then:  python3 -m src.generalist validate --config {path}")
         return 0

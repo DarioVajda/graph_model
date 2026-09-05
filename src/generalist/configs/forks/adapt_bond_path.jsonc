@@ -5,7 +5,7 @@
   //   GPU=1 src/generalist/tools/run_cli.sh fork \
   //     --from src/generalist/results/runs/smoke_graph/checkpoint-200 \
   //     --mode adapt --fork-config src/generalist/configs/forks/adapt_bond_path.jsonc \
-  //     --config src/generalist/configs/000_smoke.jsonc
+  //     --config src/generalist/configs/probes/000_smoke.jsonc
   //
   // WHAT IT MEASURES. Steps-to-target on one held-out task, run twice from
   // identical configs: once from the parent checkpoint and once from base

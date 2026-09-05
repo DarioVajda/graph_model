@@ -58,6 +58,32 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_RESULTS_DIR = os.path.join(_HERE, "results")
 CONFIGS_DIR = os.path.join(_HERE, "configs")
 
+#: The two directories that hold runnable configs, split by what a file is for
+#: rather than how big it is — `configs/README.md` states the rule. `runs/` is
+#: the campaign, reproduced by naming a file; `probes/` is everything that
+#: answered a question once. `forks/` is deliberately not here: a fork overlay
+#: is not a `RunConfig` and does not resolve as one.
+RUNS_DIR = os.path.join(CONFIGS_DIR, "runs")
+PROBES_DIR = os.path.join(CONFIGS_DIR, "probes")
+
+
+def runnable_configs(configs_dir: str = CONFIGS_DIR) -> list:
+    """Every shipped config that is meant to resolve as a ``RunConfig``.
+
+    Discovery rather than a hand-kept list, so a config added to either
+    directory is covered by `test_shipped_configs_validate` without anyone
+    remembering to register it. ``forks/`` is excluded by construction.
+    """
+    out = []
+    for sub in ("runs", "probes"):
+        directory = os.path.join(configs_dir, sub)
+        if not os.path.isdir(directory):
+            continue
+        out.extend(os.path.join(directory, name)
+                   for name in os.listdir(directory)
+                   if name.endswith((".json", ".jsonc")))
+    return sorted(out)
+
 #: Bias tokens whose dataset features the molecules adapter actually produces.
 #: A strict subset of `src/models/bias.py`'s ``BIAS_TYPES``, so checking against
 #: it is the tighter of the two checks — and it needs no torch import, which is
@@ -103,8 +129,29 @@ TIER_A_FAMILIES = (
     "stereo_potential", "stereo_assigned",
 )
 
-#: Finite sources get at most three passes (`MOLECULE_GENERALIST.md` §2).
-CORPUS_PASSES = 3
+#: Finite sources get at most six passes.
+#:
+#: §2 wrote three, and three is what the budget rule turns into a problem: the
+#: budget is ``min over finite corpora of (passes x train_size) / share``, and
+#: within-block weight goes as ``size ** 0.5`` while the cap goes as ``size``, so
+#: ``available / share`` scales as ``size ** 0.5`` and **the smallest corpus
+#: always binds**. At three passes BBBP — 1,244 training molecules, 2.35 % of the
+#: run — set the length of the whole campaign at 2,799 steps, and the large
+#: corpora were nowhere near their own caps: HIV saw 0.52 epochs and Tox21 0.43.
+#: A dataset should not shorten training for every other task merely by being
+#: small.
+#:
+#: Six doubles the budget to 5,599 steps and takes HIV to 1.04 epochs and Tox21
+#: to 0.86, with BBBP at exactly its cap. Raising BBBP alone would not have done
+#: it — BACE simply inherits the binding role at 3.00 epochs and the budget moves
+#: 12 % — so the cap moves for the finite corpora as a set.
+#:
+#: This is a ceiling, not the fix. The right correction is on the sampling side:
+#: down-weight a small corpus so it is drawn less often instead of capping the
+#: run when it runs out. That changes the mixture shares every result so far was
+#: measured under, so it waits for the next campaign rather than landing between
+#: arm 1 and arm 2. Worth doing before the larger generalists.
+CORPUS_PASSES = 6
 
 
 def molecule_generalist_mixture() -> tuple:
@@ -205,26 +252,48 @@ MIXTURES = {
 #: D7.1's list, with two costs settled at config time rather than left at the
 #: library defaults.
 #:
-#: ``in_mixture`` runs on ``steps:1000`` with ``max_samples: 500`` instead of
+#: ``in_mixture`` runs on ``milestone`` with ``max_samples: 500`` instead of
 #: ``steps:500`` over the whole split. Uncapped it generates 3.3k ChEBI captions
 #: and 1k SMILES strings every firing, which on a ~4k-step run is a large
-#: fraction of the run spent measuring it. Both numbers are provisional: the T10
-#: smoke measures what a firing actually costs and they are set from that. The
-#: *reportable* numbers are never these — they come from the anneal fork's
-#: end-of-leg pass and from ``eval`` mode, both of which score the whole split.
+#: fraction of the run spent measuring it. The *reportable* numbers are never
+#: these — they come from the anneal fork's end-of-leg pass and from ``eval``
+#: mode, both of which score the whole split.
+#:
+#: The cadence was ``steps:1000`` and is now ``milestone``, on the measurement
+#: the comment above used to promise. **One firing costs over an hour**: the
+#: arm-2 flat cells stalled at step 1000 for 65 minutes at `max_samples: 500`,
+#: with `AveCPU` tracking wall clock the whole way, so that is work and not a
+#: hang. At `steps:1000` over a 5,599-step run that is five firings — around six
+#: hours of measurement against 1.6 hours of training on the flat arm, and worse
+#: on the graph arm, where every row is 3.5x longer. Generation is what costs:
+#: 500 ChEBI captions at 256 new tokens, on two splits, and sixteen tasks behind
+#: them.
+#:
+#: ``milestone`` puts it on the same two firings as ``held_out``, ``base_exact``
+#: and ``leakage``, so the whole expensive half of the suite fires together and
+#: a run is measured twice rather than five times. What that costs is the
+#: resolution of a *diagnostic* curve — `in_mixture` carries no ``end`` cadence,
+#: so it was never the source of a reported number. What it buys is a campaign
+#: that finishes inside its chunk instead of spilling across three.
 DEFAULT_VALIDATORS = (
-    {"name": "in_mixture", "cadence": "steps:1000", "max_samples": 500},
+    {"name": "in_mixture", "cadence": "milestone", "max_samples": 500},
     {"name": "held_out", "cadence": "milestone", "max_samples": 500},
     {"name": "bias_norm", "cadence": "steps:500"},
     {"name": "grad_share", "cadence": "steps:200"},
     {"name": "base_exact", "cadence": "milestone"},
     {"name": "perm_spread", "cadence": "end"},
+    # Two teacher-forced passes over a capped `stereo_assigned` split, so it costs
+    # about what one `held_out` firing does and runs on the same cadence. It is on
+    # by default because the campaign's most expensive defect (§3.2.10) was found
+    # by this control firing and nothing else, and the suite has been without it
+    # since `014`.
+    {"name": "leakage", "cadence": "milestone", "max_samples": 500},
     {"name": "throughput", "cadence": "steps:50"},
     {"name": "per_example", "cadence": "end"},
 )
 
-#: The smoke set. Same eight validators — T10 asserts that *every* validator ran
-#: — at cadences a 200-step run reaches, and with sample caps that keep the
+#: The smoke set. The same validators — T10 asserts that *every* validator ran —
+#: at cadences a 200-step run reaches, and with sample caps that keep the
 #: generative ones to seconds.
 SMOKE_VALIDATORS = (
     {"name": "in_mixture", "cadence": "steps:100", "max_samples": 32},
@@ -234,6 +303,11 @@ SMOKE_VALIDATORS = (
     {"name": "base_exact", "cadence": "milestone"},
     {"name": "perm_spread", "cadence": "end", "n_molecules": 8,
      "n_permutations": 4},
+    # At 32 rows the verdict is unreadable — the line sits three sampling sigmas
+    # out and sigma is 0.08 there — so what the smoke exercises is the path, not
+    # the reading. The smoke mixture also does not carry `stereo_assigned`, in
+    # which case the validator reports nothing at all, which is the third branch.
+    {"name": "leakage", "cadence": "milestone", "max_samples": 32},
     {"name": "throughput", "cadence": "steps:25"},
     # No cap: `per_example` reports the whole split by construction and refuses
     # a `max_samples`. On the smoke mixture that is 152 bace + 1000 ring_size
@@ -242,9 +316,29 @@ SMOKE_VALIDATORS = (
     {"name": "per_example", "cadence": "end"},
 )
 
+#: The shakedown set: the default validators at **production sample counts**, on
+#: cadences a few-hundred-step run reaches. The smoke set answers "did every
+#: validator run"; this one answers "what does a firing cost", which the smoke
+#: cannot, because a 32-sample generative pass is not a 500-sample one and
+#: `in_mixture` never fires inside a short run at `steps:1000`. That number is
+#: what decides whether the D7 cadences are affordable over a 2,799-step run, and
+#: it is not derivable from anything already measured.
+SHAKEDOWN_VALIDATORS = (
+    {"name": "in_mixture", "cadence": "steps:100", "max_samples": 500},
+    {"name": "held_out", "cadence": "milestone", "max_samples": 500},
+    {"name": "bias_norm", "cadence": "steps:50"},
+    {"name": "grad_share", "cadence": "steps:50"},
+    {"name": "base_exact", "cadence": "milestone"},
+    {"name": "perm_spread", "cadence": "end"},
+    {"name": "leakage", "cadence": "milestone", "max_samples": 500},
+    {"name": "throughput", "cadence": "steps:25"},
+    {"name": "per_example", "cadence": "end"},
+)
+
 VALIDATOR_SETS = {
     "default": DEFAULT_VALIDATORS,
     "smoke": SMOKE_VALIDATORS,
+    "shakedown": SHAKEDOWN_VALIDATORS,
     "none": (),
 }
 
@@ -870,8 +964,13 @@ TEMPLATE = """\
 """
 
 
-def write_template(name: str, configs_dir: str = CONFIGS_DIR) -> str:
-    """``--init <name>``: a sweep config under ``configs/``, as the template does."""
+def write_template(name: str, configs_dir: str = PROBES_DIR) -> str:
+    """``--init <name>``: a sweep config under ``configs/probes/``.
+
+    Probes rather than runs, because a config that does not exist yet has not
+    produced a number anyone quotes; a file earns its way into ``runs/`` by
+    becoming the campaign, and moving it there is a deliberate act.
+    """
     if not (name.endswith(".json") or name.endswith(".jsonc")):
         name += ".jsonc"
     os.makedirs(configs_dir, exist_ok=True)

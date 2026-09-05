@@ -24,7 +24,7 @@ if either is not, the generative metrics for that task are bounded by it.
 
     src/generalist/tools/answer_boundary.py --task mol/g2s --split test
     src/generalist/tools/answer_boundary.py --task mol/chebi20 --split test \\
-        --config src/generalist/configs/004_smoke_probe.jsonc
+        --config src/generalist/configs/probes/004_smoke_probe.jsonc
 """
 
 import argparse
@@ -43,7 +43,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config",
-                        default="src/generalist/configs/000_smoke.jsonc")
+                        default="src/generalist/configs/probes/000_smoke.jsonc")
     parser.add_argument("--task", default="mol/g2s")
     parser.add_argument("--split", default="test")
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)

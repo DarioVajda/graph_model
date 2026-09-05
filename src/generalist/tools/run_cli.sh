@@ -7,7 +7,7 @@
 # code is the command's. Output lands in
 # src/generalist/results/job_logs/<stamp>.out and the tail is echoed here.
 #
-#   src/generalist/tools/run_cli.sh data_prep --config src/generalist/configs/000_smoke.jsonc
+#   src/generalist/tools/run_cli.sh data_prep --config src/generalist/configs/probes/000_smoke.jsonc
 #   GPU=1 src/generalist/tools/run_cli.sh eval --checkpoint <ckpt> --config <cfg>
 #
 # Env overrides: PARTITION (frida), CPUS (16), MEM (64G), TIME (02:00:00),

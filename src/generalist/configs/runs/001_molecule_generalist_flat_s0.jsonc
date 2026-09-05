@@ -1,0 +1,116 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // Arm 2, flat twin, seed 0. The matched control for
+  // `001_molecule_generalist_graph_s0.jsonc` — read that file's header first:
+  // the recipe, why the learning rate is 1e-4, why the memory request is 128G
+  // and why `max_spd` is 32 are stated there once and are not repeated here.
+  //
+  //   src/generalist/tools/chain.sh src/generalist/configs/runs/001_molecule_generalist_flat_s0.jsonc
+  //
+  // Three fields differ from the graph file, and every one of them is forced.
+  //
+  //   * `arm: flat` and `bias: none`. RunConfig.validate refuses a flat arm
+  //     carrying a bias: on a single-node graph every structural bias is
+  //     identically zero (Property 2), so a bias string in the record would
+  //     advertise a comparison that is not happening.
+  //   * `tokens_per_step`. D4.4 sets the batch in tokens so that a mixture of
+  //     very differently-sized tasks costs a roughly constant amount per step —
+  //     the right default, and exactly wrong for an arm comparison. A flat
+  //     example is a SMILES string; a graph example is a Levi graph with a prefix
+  //     per node, and the built mixture measures 288.28 tokens against the flat
+  //     arm's 82.51. Sharing the token budget would hand this arm 3.5x the batch
+  //     and the comparison would stop being a comparison. The value below is the
+  //     one that lands on the graph arm's ~56.83 examples/step
+  //     (`tools/tokens_per_step.py`); `max_steps` then holds both arms to the
+  //     same 5,599 steps, which no token budget alone can do at this horizon.
+  //
+  // `bias_lr` stays at the graph arm's 1e-2. It reaches no tensor on this arm —
+  // there is no bias channel to give a learning rate to — so holding it equal
+  // keeps the pair differing in `arm` alone, which is what the record should say.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "molecule_generalist_flat_s0",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      // Matched to the graph arm rather than sized down. This arm's resident
+      // payload is smaller — no gtds graph tensors — but the request is what the
+      // pair is submitted with, and a difference here buys nothing and would have
+      // to be explained later.
+      "mem": "128G",
+      "time": "12:00:00",
+      "inductor_cache": ".inductor_cache/generalist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 3,
+    "dependency": "afterany"
+  },
+
+  "arm": "flat",
+  "mixture": "molecule_generalist",
+  "validators": "default",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "none",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  // 56.83 examples/step at the built flat arm's measured 82.51 tokens an example.
+  // The graph twin needs 16384 for the same 56.83, because a flat row is 82.51
+  // tokens against the graph row's 288.28 — the arms are matched on examples per
+  // step, which is what a gradient is made of, not on tokens per step.
+  //
+  // 4689 rather than 4690: at `CORPUS_PASSES` 6 no integer lands the flat arm on
+  // the graph arm's 5599 steps (4689 gives 5600, 4690 gives 5598), so `max_steps`
+  // pins the horizon for both arms and this value is chosen on the short side of
+  // it — 5599 steps draws 318,179 examples against a budget of 318,217, where
+  // 4690 would ask for more than the budget holds. The residual difference is
+  // 0.012 % on examples per step, against a step count that now matches exactly.
+  "tokens_per_step": 4689,
+  "accumulation_steps": 8,
+  "loss_norm": "per_example",
+  "max_steps": 5599,
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "seed": 0,
+  "wandb_project": null
+}

@@ -12,7 +12,7 @@ not what a bad model usually looks like — a bad model still emits "the" and
 "molecule" — so it is worth a look rather than a shrug.
 
     GPU=1 src/generalist/tools/show_generations.py --task mol/chebi20 \\
-        --checkpoint <ckpt> --config src/generalist/configs/004_smoke_probe.jsonc
+        --checkpoint <ckpt> --config src/generalist/configs/probes/004_smoke_probe.jsonc
 """
 
 import argparse

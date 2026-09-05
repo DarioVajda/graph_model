@@ -19,8 +19,10 @@ in a log, or — worse — not visible at all.
 * **Every mode's arguments.** A missing ``--from`` must fail at parse time
   naming the flag, not at the first checkpoint read.
 * **The shipped configs pass ``validate``.** They are the files that will
-  actually be submitted; a config in ``configs/`` that does not resolve is a
-  broken run waiting for someone to have GPU time.
+  actually be submitted; a config in ``configs/runs/`` or ``configs/probes/``
+  that does not resolve is a broken run waiting for someone to have GPU time.
+  Discovery is asserted too: a directory split is only worth having if the
+  thing that walks it cannot quietly walk half of it.
 * **A selection key naming ``test`` is refused** wherever it can be written —
   a training run refuses selection at all (D7.4), and a fork's own config is
   checked before the fork writes anything.
@@ -30,6 +32,7 @@ their digests (``build_version``), which is what ``validate`` itself does.
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import shutil
@@ -46,18 +49,18 @@ from src.generalist.config import (
     ConfigError,
     RunConfig,
     load_config_file,
+    runnable_configs,
     shell_assignments,
     write_template,
 )
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-#: The configs that ship in the repo — the ones a run is actually launched from.
-SHIPPED = sorted(
-    os.path.join(CONFIGS_DIR, name)
-    for name in os.listdir(CONFIGS_DIR)
-    if name.endswith((".json", ".jsonc"))
-)
+#: The configs that ship in the repo — the ones a run is actually launched from,
+#: across both `configs/runs/` and `configs/probes/`. Discovered rather than
+#: listed: a config that nobody remembered to register here is exactly the one
+#: that stops resolving unnoticed.
+SHIPPED = runnable_configs()
 
 
 def _config(**overrides) -> RunConfig:
@@ -82,9 +85,25 @@ def _args(argv):
 # validate: resolves the shipped configs, on a login node, without torch
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_discovery_covers_both_directories_and_skips_the_fork_overlays():
+    """The split is only safe if the walk sees all of it and none of ``forks/``.
+
+    A fork overlay is not a ``RunConfig`` — it is a patch applied to one — so a
+    walk that picked it up would fail the whole suite; a walk that missed
+    ``runs/`` would pass it while validating nothing that matters.
+    """
+    assert SHIPPED, "no shipped configs found — the walk lost its directories"
+    parents = {os.path.basename(os.path.dirname(p)) for p in SHIPPED}
+    assert parents == {"runs", "probes"}
+    assert any(os.path.basename(os.path.dirname(p)) == "runs" for p in SHIPPED)
+    forks = os.path.join(CONFIGS_DIR, "forks")
+    assert os.path.isdir(forks), "the fork overlays moved; this test is stale"
+    assert not [p for p in SHIPPED if p.startswith(forks + os.sep)]
+
+
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: os.path.basename(p))
 def test_shipped_configs_validate(path):
-    """Every config in ``configs/`` resolves and passes ``RunConfig.validate``."""
+    """Every runnable shipped config resolves and passes ``RunConfig.validate``."""
     config = RunConfig(**load_config_file(path)).validate()
     assert config.mixture in MIXTURES
     assert config.validators in VALIDATOR_SETS
@@ -92,6 +111,66 @@ def test_shipped_configs_validate(path):
     # carrying a bias would advertise a comparison that is not happening.
     if config.arm == "flat":
         assert config.bias.strip() == "none"
+
+
+def test_the_campaign_cells_differ_only_where_they_are_meant_to():
+    """Six files, one recipe. This is what keeps them from drifting apart.
+
+    There is no config inheritance, so the arm-2 campaign is six complete files
+    that are copies of one another everywhere except the axes it varies: the run
+    name, the seed, and — between arms — `arm`, `bias` and `tokens_per_step`.
+    Any other field that comes to differ is a silent recipe change in one cell of
+    a six-cell comparison, which is precisely the failure that would be read as a
+    seed effect.
+
+    Two fields are on the allowed list and both are allowed for the same reason —
+    they are the knobs that *hold* the recipe equal rather than vary it, and the
+    two arms need different values to arrive at the same place:
+
+    * `tokens_per_step`, because matching the arms in examples requires it to
+      differ — a flat example is ~3.5x shorter (`..._flat_s0.jsonc`).
+    * `accumulation_steps`, because it only sets `micro_batch_tokens` and so
+      changes nothing about which examples a step draws or what gradient it
+      produces (D4.4). The graph arm needs 16 to fit one card; the flat arm has
+      no such problem and 8 keeps its micro-batches from getting pointlessly
+      small.
+
+    Both are still asserted single-valued *within* an arm, which is where a
+    genuine drift between seeds would show up.
+    """
+    cells = {os.path.basename(p): RunConfig(**load_config_file(p))
+             for p in SHIPPED
+             if os.path.basename(p).startswith("001_molecule_generalist_")}
+    assert len(cells) == 6, f"expected six campaign cells, found {sorted(cells)}"
+
+    varies = {"run_name", "seed", "arm", "bias", "tokens_per_step",
+              "accumulation_steps"}
+    reference = next(iter(cells.values()))
+    for name, config in cells.items():
+        for spec in dataclasses.fields(RunConfig):
+            if spec.name in varies:
+                continue
+            assert getattr(config, spec.name) == getattr(reference, spec.name), (
+                f"{name} differs from the campaign recipe in {spec.name!r}")
+
+    seeds = {(c.arm, c.seed) for c in cells.values()}
+    assert seeds == {(a, s) for a in ("graph", "flat") for s in (0, 1, 2)}
+    # Within an arm the token budget is one number; across arms it must not be,
+    # because the arms are matched in examples and a flat example is ~3.5x shorter.
+    for arm in ("graph", "flat"):
+        for field in ("tokens_per_step", "accumulation_steps"):
+            values = {getattr(c, field) for c in cells.values() if c.arm == arm}
+            assert len(values) == 1, f"{arm} cells disagree on {field}: {values}"
+    assert ({c.tokens_per_step for c in cells.values() if c.arm == "graph"} !=
+            {c.tokens_per_step for c in cells.values() if c.arm == "flat"})
+
+    # The arms must still land on the same micro-batch after their two knobs are
+    # combined — that is the quantity the OOM was about, and the only reason
+    # `accumulation_steps` is allowed to differ at all.
+    micro = {c.arm: c.tokens_per_step / c.accumulation_steps for c in cells.values()}
+    assert micro["graph"] == 1024, (
+        f"the graph arm's micro-batch is {micro['graph']} tokens; 2048 is the "
+        "value that OOMed a 178 GB card at step 20")
 
 
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: os.path.basename(p))
@@ -362,7 +441,7 @@ def test_init_writes_a_config_that_validate_then_accepts(tmp_path, capsys):
 
 
 def test_init_is_reachable_from_the_command_line(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "CONFIGS_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "PROBES_DIR", str(tmp_path))
     assert cli.main(["--init", "generated"]) == 0
     assert os.path.exists(tmp_path / "generated.jsonc")
 
@@ -498,10 +577,16 @@ def test_mixture_entries_carry_the_documented_block_shares():
     # §2's "roughly HIV 27 %, Tox21 37 %" of the Tier-B block.
     assert tier_b["mol/hiv"] / 0.40 == pytest.approx(0.27, abs=0.01)
     assert tier_b["mol/tox21"] / 0.40 == pytest.approx(0.37, abs=0.01)
-    # Finite sources are capped at three passes; generators declare none.
+    # Finite sources are capped at six passes; generators declare none. Six and
+    # not §2's original three because the budget rule takes its horizon from the
+    # *smallest* corpus — `available / share` goes as `size ** 0.5` — so at three
+    # BBBP's 1,244 molecules ended the run while HIV was at 0.52 epochs.
     passes = {e["name"]: e.get("passes")
               for e in _config(mixture="molecule_generalist").mixture_entries()}
-    assert passes["mol/chebi20"] == 3 and passes["mol/g2s"] is None
+    assert passes["mol/chebi20"] == 6 and passes["mol/g2s"] is None
+    assert {n: p for n, p in passes.items() if p is not None} == {
+        f"mol/{s}": 6 for s in ("bace", "bbbp", "hiv", "tox21", "sider", "chebi20")
+    }, "every finite corpus carries the cap, or the smallest one still binds"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

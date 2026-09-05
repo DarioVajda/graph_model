@@ -47,7 +47,7 @@ def main() -> int:
     from src.generalist.config import RunConfig, load_config_file
 
     config = RunConfig(**load_config_file(
-        "src/generalist/configs/002_cross_check_bace_graph.jsonc")).validate()
+        "src/generalist/configs/probes/002_cross_check_bace_graph.jsonc")).validate()
     _registry, adapter_config = wiring.build_registry(config)
 
     for split in ("train", "val", "test"):

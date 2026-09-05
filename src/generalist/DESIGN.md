@@ -66,7 +66,10 @@ src/generalist/
 │   ├── builtin.py             # D7: the validators listed in §D7.3
 │   ├── adaptation.py          # D7: steps-to-target
 │   └── report.py              # run record assembly
-├── configs/                   # .jsonc for the sweep runner
+├── configs/                   # .jsonc for the sweep runner — see configs/README.md
+│   ├── runs/                  #   the campaign: reproduced by naming a file
+│   ├── probes/                #   smokes, cross-checks, screens; disposable once reported
+│   └── forks/                 #   --fork-config overlays; not RunConfigs on their own
 ├── results/                   # runs.jsonl, per_example/, lineage.json — never committed
 └── tests → tests/generalist/  # §T
 ```
@@ -471,7 +474,9 @@ selected score.
 | `fork` | D6 |
 | `eval` | run a set of validators on a checkpoint, no training; writes an `eval` record |
 
-`--init <name>` writes a sweep config under `configs/`, as the template experiment does.
+`--init <name>` writes a sweep config under `configs/probes/`, as the template experiment does — a
+config that does not exist yet has produced no number anyone quotes, and a file earns `configs/runs/`
+by becoming the campaign.
 
 ### D8.2 One `RunConfig`, one place
 

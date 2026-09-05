@@ -1,0 +1,85 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // Arm 2, graph, seed 1. Identical to `001_molecule_generalist_graph_s0.jsonc`
+  // in every field but `seed` and `name`; that file carries the reasoning for the
+  // whole six-cell campaign and is where a recipe decision gets corrected.
+  //
+  //   src/generalist/tools/chain.sh src/generalist/configs/runs/001_molecule_generalist_graph_s1.jsonc
+  //
+  // `data_seed` stays 0. The seed axis is initialisation and example order, not
+  // the data: all six cells read one build (`42f7a14bed21f876`), so a difference
+  // between two seeds is the run's own spread and nothing else. That is the whole
+  // point of the three-seed design — §8.4 has two cases of a single seed telling
+  // this campaign something that did not replicate.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "molecule_generalist_graph_s1",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "12:00:00",
+      "inductor_cache": ".inductor_cache/generalist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 3,
+    "dependency": "afterany"
+  },
+
+  "arm": "graph",
+  "mixture": "molecule_generalist",
+  "validators": "default",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "bias": "spd+magnetic",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "tokens_per_step": 16384,
+  "accumulation_steps": 16,
+  "loss_norm": "per_example",
+  "max_steps": 5599,
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "seed": 1,
+  "wandb_project": null
+}

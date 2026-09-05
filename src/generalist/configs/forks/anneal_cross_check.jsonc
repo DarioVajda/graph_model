@@ -7,7 +7,7 @@
   //     --from src/generalist/results/runs/cross_check_bace_flat/checkpoint-1510 \
   //     --mode anneal \
   //     --fork-config src/generalist/configs/forks/anneal_cross_check.jsonc \
-  //     --config src/generalist/configs/003_cross_check_bace_flat.jsonc
+  //     --config src/generalist/configs/probes/003_cross_check_bace_flat.jsonc
   //
   // One file for both arms. The two trunks differ in `tokens_per_step` and so in
   // step count, but they train the same corpus for the same 40 passes and stop

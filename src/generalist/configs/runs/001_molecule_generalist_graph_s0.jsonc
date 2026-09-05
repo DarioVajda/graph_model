@@ -3,20 +3,26 @@
   // Arm 2 of the molecules plan: one 1B model over every molecule task.
   // MOLECULE_GENERALIST.md §2 (the mixture) and §7 (the recipe).
   //
-  //   python3 -m src.generalist validate  --config src/generalist/configs/001_molecule_generalist.jsonc
-  //   python3 -m src.generalist data_prep --config src/generalist/configs/001_molecule_generalist.jsonc
-  //   src/generalist/tools/chain.sh       src/generalist/configs/001_molecule_generalist.jsonc
+  // THIS FILE CARRIES THE REASONING FOR ALL SIX CELLS. The other five configs in
+  // this directory are the same recipe at another arm or another seed and say
+  // only what they change; a decision about the recipe is corrected here.
   //
-  // Gated on the two checklist items at the top of MOLECULE_GENERALIST.md: the
-  // tuned three-seed arm-1 re-run, and the T10 smoke run. Nothing here should be
-  // submitted before both have reported — `lr`, `tokens_per_step` and
-  // `in_mixture`'s cost are all values the smoke run settles.
+  //   python3 -m src.generalist validate  --config src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
+  //   python3 -m src.generalist data_prep --config src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
+  //   src/generalist/tools/chain.sh       src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
+  //
+  // Both gates have reported. Arm 1's three-seed closing table is
+  // `molecules/PLAN.md` §8.4.8 and is what arm 2 is differenced against; the T10
+  // smoke run settled `tokens_per_step` and the harness cross-checked against the
+  // specialist on BACE (`results/BUILD_LOG.md` §T10, §T11).
   //
   // The flat twin is the same file with "arm": "flat" and "bias": "none";
   // RunConfig.validate refuses a flat arm carrying a bias, because on a
   // single-node graph every structural bias is identically zero (Property 2) and
   // a bias string in the record would advertise a comparison that is not
-  // happening. Three seeds x two arms is the whole of the compute (§7).
+  // happening. Three seeds x two arms is the whole of the compute (§7); the
+  // build is shared across all six, since `build_version` is a function of the
+  // data fields and every cell holds those fixed.
   // ───────────────────────────────────────────────────────────────────────────
 
   "name": "molecule_generalist_graph_s0",
@@ -29,11 +35,50 @@
       "max_concurrent": 1,
       "partition": "frida",
       "account": "povejmo",
-      "gpus": "B200",
+      // The list form, which renders as `GPU_BRD:B300|GPU_BRD:B200` (`chain.sh`).
+      // A bare string names one brand and would sit in the queue behind whichever
+      // of the two is free; the node weights on frida are inverted with respect to
+      // speed, so leaving the field open is worse still — it lands on L4s.
+      //
+      // H100 is off the list, on a measurement rather than caution. The shakedown
+      // read a 76.1 GB training peak at two ranks, and two ranks is the *cheap*
+      // case: `micro_batch_tokens` is `tokens_per_step / (accumulation_steps x
+      // world_size)`, so one card doubles it from 1024 to 2048 and the activation
+      // peak with it. An 80 GB H100 has no room for that, and the same run on a
+      // 180 GB B200 or a 288 GB B300 does. A brand list that a cell cannot
+      // actually fit on is not headroom, it is a run that dies once the scheduler
+      // takes the offer.
+      "gpus": ["B300", "B200"],
       "gpus_per_config": 1,
       "cpus": 16,
+      // 128G, and this is now a measured number rather than an inherited one.
+      // `molecules/PLAN.md` §8.4.9's HIV OOM turned out not to be a dataset that
+      // did not fit: at `num_workers > 0` HF's evaluation loader is rebuilt by
+      // accelerate on every `evaluate` call, and each rebuild forks a fresh set of
+      // persistent workers without shutting the previous set down, so an HIV graph
+      // cell leaks ~1 GB of unreclaimable anon per evaluation and walks into the
+      // ceiling near the end of a long run. Neither half of that can happen here:
+      // this trainer forces `dataloader_num_workers=0` and runs no HF evaluation
+      // loop at all (`eval_strategy: "no"` — the D7 validators are the
+      // evaluation). Measured on one HIV graph cell at `num_workers 0`: 50.7 GB
+      // cgroup peak, of which 6.8 GB is anon and the rest reclaimable page cache,
+      // and dead flat across the run. What is larger here is the resident payload
+      // — every source's graphs at once rather than one corpus — which is ~11 GB
+      // of anon at the measured 12.7x pickle expansion. 192G would be carrying a
+      // workaround for a leak this run cannot have. The `throughput` validator
+      // reports `host_peak_gb` every 50 steps, so the first chunk replaces this
+      // estimate with its own measurement.
       "mem": "128G",
-      "time": "24:00:00",
+      // 12 h. The training itself is ~3.6 h at the measured 2.3 s/step, but the
+      // two milestone firings are the other half of the bill — `in_mixture` alone
+      // ran 65 minutes on the *flat* arm (`config.py DEFAULT_VALIDATORS`), and
+      // this arm's rows are 3.5x longer. 8 h was chosen when backfill looked like
+      // the binding constraint; it was not, since all six cells started within a
+      // minute of submission, so the only thing a short chunk bought was a cliff
+      // for the run to fall off. Sized so one chunk holds training and both
+      // milestones with margin, rather than trimming it to a number the run has
+      // to hit.
+      "time": "12:00:00",
       // Shared across the chain's chunks: every chunk compiles the same flex
       // kernels, and that work is CPU-bound and byte-identical between them
       // (project-ddp-flex-bucketing). Used only if the directory exists, so a
@@ -44,8 +89,11 @@
   },
 
   // The chain script reads this block; the sweep runner ignores it.
+  // Three 8 h chunks rather than six 24 h ones: the first should finish the run
+  // outright, and the other two are the safety net for a chunk Slurm kills. A
+  // chunk that opens on a run already at its horizon exits without training.
   "chain": {
-    "chunks": 6,
+    "chunks": 3,
     "dependency": "afterany"
   },
 
@@ -58,10 +106,11 @@
   "model_name": "meta-llama/Llama-3.2-1B",
   "impl": "v2-flex",
   "bias": "spd+magnetic",
-  // Pending the clamp sweep (molecules/PLAN.md §8.4.3, §9). The Levi transform
-  // doubles every distance, so 32 clamps the far half of about a quarter of
-  // molecules; the per-example error-vs-diameter measurement decides it, not a
-  // round number.
+  // Settled at 32 (molecules/PLAN.md §8.4.9). The clamp ablation is null — the
+  // governing quantity is the fraction of node *pairs* past the ceiling, 2.56 % on
+  // BACE and 1.20 % on BBBP, not the 53 % of molecules an earlier reading quoted —
+  // and 32 is what every molecules sweep from `001` to `028` used, so it is the
+  // value that keeps arm 2 comparable with arm 1.
   "max_spd": 32,
   "magnetic_dim": 32,
   "magnetic_q": 0.25,
@@ -88,12 +137,59 @@
   // ~85 GB — a few dozen examples a step, which is the range the specialist runs
   // sit in at batch 4 x accum 8, with headroom for a long caption batch.
   "tokens_per_step": 16384,
-  "accumulation_steps": 8,
+  // 16 on this arm, against the flat arm's 8, and the difference is deliberate.
+  // D4.4 makes `accumulation_steps` the *memory* knob and `tokens_per_step` the
+  // experimental one: `micro_batch_tokens` is `tokens_per_step /
+  // (accumulation_steps x world_size)`, so the two arms take the same examples in
+  // the same order and produce the same optimizer step whatever this is set to.
+  // It is set per arm because the arms have genuinely different memory profiles —
+  // a graph example is 288.28 tokens against a flat one's 82.51.
+  //
+  // 8 does not fit. At one card that is a 2048-token micro-batch, and the first
+  // launch died at step 20 with `Tried to allocate 16.78 GiB ... 151.22 GiB is
+  // allocated by PyTorch` on a 178 GB B200. 16 puts the micro-batch back to the
+  // 1024 the shakedown ran at, and measures **100.6 GB** at step 200 — not the
+  // 76.1 GB the shakedown read at that same micro-batch, because that number was
+  // two ranks and this one carries the whole optimizer and gradient state on one
+  // card. Both halves of that are worth keeping: a two-rank peak does not
+  // transfer to one card even at a matched micro-batch, and 100.6 GB is why the
+  // brand list above cannot include an 80 GB H100 at any `accumulation_steps`.
+  //
+  // Note the failure was *stochastic* — seed 1 was still healthy at step 93 when
+  // seed 0 had already died — because the peak is set by the longest molecule
+  // that happens to land in a micro-batch. A cell surviving its first hundred
+  // steps proves nothing; the headroom has to be read off the peak, not off
+  // whether a run is still alive.
+  "accumulation_steps": 16,
   "loss_norm": "per_example",         // §2: captions would otherwise be the gradient
-  "max_steps": 0,                     // 0 = the §2 budget rule sets the horizon
-  "lr": 3e-4,                         // provisional at r16; the three-seed re-run settles it
+  // Pinned rather than left at 0 ("let the §2 budget rule decide"), and pinned to
+  // the number that rule gives the graph arm at `CORPUS_PASSES` 6. The horizon
+  // has to be *identical* across the two arms, and the budget rule cannot deliver
+  // that on its own: the arms match on examples per step, not tokens per step, so
+  // the flat arm's token budget is an integer chosen to land on the graph arm's
+  // examples/step, and no integer exists that also lands on the same step count —
+  // 4689 resolves to 5600 and 4690 to 5598, straddling 5599 without touching it.
+  // Pinning both arms and giving the flat arm the value on the *short* side of
+  // the target (4689, so it draws 318,179 examples against the budget's 318,217)
+  // buys the matched schedule for 0.012 % on examples per step, and leaves every
+  // pass cap unexceeded on both arms.
+  "max_steps": 5599,
+  // Settled 2026-09-04 at 1e-4, matched across arms. The specialist settled the
+  // rate per (task, arm) — 3e-4 on BACE and BBBP, 1e-4 on HIV (§8.4.6) — and one
+  // mixture cannot hold both, so the choice is which of those two a single rate
+  // inherits. Two reasons it is the lower one. The schedule differs: the
+  // specialists ran warmup + cosine, which touches its peak rate for a moment and
+  // spends most of the run below it, while WSD holds the stable phase at `lr` for
+  // essentially the whole run — the same number means a materially larger dose
+  // here, so inheriting a cosine peak as a constant rate is not a matched
+  // transfer. And the risk is asymmetric: 3e-4 was measured to cost the graph arm
+  // 0.109 ROC-AUC on HIV (§8.4.7), where it also produced the screen's highest
+  // validation and lowest test score, while 1e-4 on BACE and BBBP was screened and
+  // came out worse rather than broken. HIV is also 10.6 % of this mixture against
+  // BACE's 2.0 % and BBBP's 2.4 %.
+  "lr": 1e-4,
   "bias_lr": 1e-2,
-  "lr_min": 3e-5,                     // §7: the anneal decays to lr/10
+  "lr_min": 1e-5,                     // §7: the anneal decays to lr/10
   "warmup_steps": 200,
   "rewarm_steps": 200,
   "weight_decay": 0.1,
