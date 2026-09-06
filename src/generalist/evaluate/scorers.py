@@ -45,7 +45,8 @@ from __future__ import annotations
 
 __all__ = [
     "answer_start", "eval_indices", "endpoints_of", "generate_predictions",
-    "margin_array", "score_source", "teacher_forced",
+    "left_padding", "margin_array", "prompt_item", "score_source",
+    "scoring_cost", "teacher_forced",
 ]
 
 #: How many examples a validator scores per task by default. Generation is the
@@ -71,7 +72,30 @@ DEFAULT_BATCH_SIZE = 8
 #: 8192 positions is ~4 GB of fp32 logits, so a single row that long is still
 #: affordable and eight ordinary ones still batch together. D4.4 makes this same
 #: argument for the training batch; the eval path had not inherited it.
+#:
+#: The generation path groups against the same budget, where it is conservative
+#: rather than binding: a prefill projects one position through the vocabulary
+#: (`causal_lm.prepare_inputs_for_generation` asks for ``logits_to_keep=1``) and
+#: the KV cache for eight rows of 8192 positions is a few hundred MB. Sharing the
+#: budget is not about the memory there — it is what makes a generation batch
+#: land on ``(B, L, N)`` shapes the scoring batches have already compiled.
 DEFAULT_BATCH_TOKENS = 8192
+
+
+def scoring_cost(spec, n: int) -> float:
+    """Roughly what scoring ``n`` examples of ``spec`` costs, in forward passes.
+
+    Used only to balance the ranks (`parallel.assign`), so it has one job: put
+    the two orders of magnitude between a teacher-forced yes/no and a caption on
+    the right side of each other. A teacher-forced row is one forward over its
+    batch; a generated row is a prefill plus ``max_new_tokens`` sequential decode
+    steps, and the decode steps are what a milestone spends its time on. Nothing
+    this gets wrong can move a metric — a mis-costed target is scored on the same
+    rows in the same batches, just possibly on a busier rank.
+    """
+    if getattr(spec, "answer_kind", None) in ("text", "smiles"):
+        return float(n) * float(getattr(spec, "max_new_tokens", None) or 64)
+    return float(n)
 
 
 def eval_indices(n_total: int, max_samples):
@@ -285,54 +309,139 @@ def margin_array(model, tokenizer, collator, source, indices, device=None,
 # Generation
 # ─────────────────────────────────────────────────────────────────────────────
 
+def prompt_item(item) -> dict:
+    """One item with its prompt node truncated at the answer boundary.
+
+    The generation input: everything the training item carries except the answer
+    tokens and the columns that only supervision uses. Split out of the loop
+    because the batching below has to measure these before it can group them —
+    the row length that decides a batch is the *truncated* one.
+    """
+    from ..schema import SIDECAR_KEY
+
+    start = answer_start(item)
+    prompt_node = int(item["prompt_node"])
+    gen = {k: v for k, v in item.items() if k not in (SIDECAR_KEY, "labels")}
+    gen["input_ids"] = [list(x) for x in item["input_ids"]]
+    gen["input_ids"][prompt_node] = gen["input_ids"][prompt_node][:start]
+    return gen
+
+
+class _Prepared:
+    """A list of built items, addressed the way :func:`token_batches` addresses a source."""
+
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, i):
+        return self._items[i]
+
+
+def left_padding(collator):
+    """``collator`` with the padding moved to the front, or ``None`` if it cannot be.
+
+    A shallow copy rather than a second construction: the collator carries the
+    tokenizer, the bucket ladders and the block size, and a generation batch that
+    bucketed differently from a training batch would compile its own flex kernels
+    for no reason. ``None`` for a collator with no such knob (the v0 ragged
+    batcher), which is the signal to fall back to one row at a time — the layout
+    is the correctness condition for batching, not a preference.
+    """
+    import copy
+
+    if not hasattr(collator, "padding_side"):
+        return None
+    if getattr(collator, "padding_side") == "left":
+        return collator
+    out = copy.copy(collator)
+    out.padding_side = "left"
+    return out
+
+
 def generate_predictions(model, tokenizer, collator, source, indices,
-                         max_new_tokens: int = 64, device=None) -> tuple:
+                         max_new_tokens: int = 64, device=None,
+                         batch_size: int = DEFAULT_BATCH_SIZE,
+                         batch_tokens: int = DEFAULT_BATCH_TOKENS) -> tuple:
     """Greedy continuations from the answer boundary. ``(predictions, targets)``.
 
-    One example per call: generation batches cannot be bucketed (the prompt node
-    must stay last in the packed sequence, so nothing may be padded past it),
-    which is the same constraint kgqa's generative eval works under and the
-    reason it also runs one at a time.
+    **Batched, left-padded, and on the same fast path as the rest of the run.**
+    All three used to be otherwise, and the three are one change: generation ran
+    a row at a time, on the dense eager kernel, from a right-padded batch. The
+    docstring this replaces gave a reason for the first two that does not hold
+    here — that a generation batch "cannot be bucketed (the prompt node must stay
+    last in the packed sequence, so nothing may be padded past it)". The prompt
+    node does have to stay last, and `GraphCollatorV2` under ``pad_to_block``
+    pads past it *at any batch size, including one*: the packed length is rounded
+    up to a 512 bucket, so a 200-token prompt is followed by 312 pads whether it
+    is alone in the batch or not. Batch size was never what put padding after the
+    prompt node; the padding side was. Hence `left_padding`, after which the last
+    real token is at ``L-1`` for every row and a batch of eight is exactly eight
+    copies of the case that already worked.
 
-    Flex attention needs block-aligned lengths and these batches are not aligned,
-    so the whole loop runs on the dense eager path — decode steps use it anyway,
-    this only extends that to the prefill.
+    Two things the same change fixes:
+
+    * **RoPE on the generated tokens.** ``prepare_inputs_for_generation`` numbers
+      a new token ``position_ids[:, -1] + 1``, continuing the prompt node's local
+      counter. Under right padding ``position_ids[:, -1]`` is a pad, which is 0,
+      so every continuation was numbered 1, 2, 3 … and RoPE placed it *before*
+      the prompt it was answering. Left padding makes that read the prompt node's
+      last position, which is what the expression was written for.
+    * **The prefill kernel.** ``use_flex`` needs ``q_len == kv_len`` and a
+      block-aligned length, and a bucketed prompt batch is both — so forcing
+      ``graph_attn_impl`` to eager was giving up the fused kernel on the one pass
+      in the evaluation that is quadratic in the sequence length. Decode steps
+      still fall back to eager inside the model, where ``q_len == 1`` and flex
+      buys nothing; that fallback is automatic and needs nothing here.
+
+      **What flex buys on this path is the peak, not the clock.** Batched-eager
+      and batched-flex come out level on time — generation is decode-dominated
+      and decode is eager either way — but the eval's peak allocation is 23.8 GB
+      against 10.5 GB, with the one-row-at-a-time path it replaces at 13.1 GB. So
+      batching on the eager prefill would have pushed the evaluation *above* the
+      path it replaces, beside a training step that already peaks at 100.6 GB on
+      a 178 GB card. That is the shape of the 2026-09-04 OOM, and flex is what
+      keeps this batching safe to fire mid-training.
+
+    Row counts come off `token_batches`' power-of-two ladder against the same
+    token budget the teacher-forced paths use, so the ``(B, L, N)`` shapes a
+    generation batch compiles are shapes the scoring batches have already
+    compiled. That is what keeps batched generation from filling dynamo's cache
+    with a second family of kernels — measured, the whole evaluation touches 25
+    distinct triples on the graph arm and 1 on the flat arm against a cap of 128,
+    which is *fewer* than the path this replaces (27 and 2), because a batch of
+    one is no longer a shape of its own.
     """
     import torch
-
-    from ..schema import SIDECAR_KEY
 
     was_training = getattr(model, "training", False)
     if hasattr(model, "eval"):
         model.eval()
-    config = getattr(model, "config", None)
-    impl = getattr(config, "graph_attn_impl", None)
-    if impl == "flex":
-        config.graph_attn_impl = "eager"
 
-    predictions, targets = [], []
+    prompts = _Prepared([prompt_item(source[i]) for i in indices])
+    targets = _answers(source, indices)
+    gen_collator = left_padding(collator)
+    if gen_collator is None:
+        gen_collator, batch_size = collator, 1
+
+    predictions = [""] * len(prompts)
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_id is None:
+        pad_id = getattr(tokenizer, "eos_token_id", None)
     with torch.no_grad():
-        for i in indices:
-            item = source[i]
-            side = _sidecar(item)
-            start = answer_start(item)
-            prompt_node = int(item["prompt_node"])
-
-            gen = {k: v for k, v in item.items() if k not in (SIDECAR_KEY, "labels")}
-            gen["input_ids"] = [list(x) for x in item["input_ids"]]
-            gen["input_ids"][prompt_node] = gen["input_ids"][prompt_node][:start]
-
-            batch = _to_device(collator([gen]), device)
+        for chunk in token_batches(prompts, list(range(len(prompts))), batch_size,
+                                   batch_tokens):
+            batch = _to_device(gen_collator([prompts[j] for j in chunk]), device)
             out = model.generate(
                 **batch, max_new_tokens=max_new_tokens, do_sample=False,
-                num_beams=1, pad_token_id=getattr(tokenizer, "eos_token_id", None))
-            new_tokens = out[0][batch["input_ids"].shape[1]:]
-            predictions.append(
-                tokenizer.decode(new_tokens, skip_special_tokens=True).strip())
-            targets.append(side.get("answer", ""))
+                num_beams=1, pad_token_id=pad_id)
+            new_tokens = out[:, batch["input_ids"].shape[1]:]
+            for row, j in enumerate(chunk):
+                predictions[j] = tokenizer.decode(
+                    new_tokens[row], skip_special_tokens=True).strip()
 
-    if impl == "flex":
-        config.graph_attn_impl = "flex"
     if was_training and hasattr(model, "train"):
         model.train()
     return predictions, targets
@@ -383,7 +492,8 @@ def score_source(model, tokenizer, collator, source, spec, device=None,
                             batch_size, per_endpoint, batch_tokens)
     predictions, targets = generate_predictions(
         model, tokenizer, collator, source, indices,
-        max_new_tokens=spec.max_new_tokens or 64, device=device)
+        max_new_tokens=spec.max_new_tokens or 64, device=device,
+        batch_size=batch_size, batch_tokens=batch_tokens)
     if kind == "smiles":
         from ..adapters.molecules import smiles_scores
 

@@ -21,6 +21,18 @@ Every one of them is stdlib at import time — torch, numpy, sklearn and RDKit a
 imported inside ``run`` — because this module is imported by
 `evaluate/__init__.py`, which `validate` mode imports on the login node.
 
+**Sharding.** The four validators that cost anything — `in_mixture`, `held_out`,
+`leakage`, `perm_spread`, `per_example` — hand their work to
+`evaluate/parallel.py`'s ``run_sharded`` instead of looping over it, so a
+multi-rank run splits a scoring pass rather than repeating it once per rank. The
+unit is always a whole target (a ``(task, split)`` pair, one stereo view, one
+task's permutation sweep), never a slice of one, which is what keeps every metric
+identical to the single-rank number. The rest are not sharded and say why:
+`bias_norm` and `throughput` read one number off the process, `grad_share`
+measures the micro-batch this rank actually trained on and is a per-rank quantity
+by construction, and `base_exact`'s cost is loading the base model, which every
+rank would have to do whatever the comparison were split into.
+
 **The context's open field.** Three validators need something structural about
 the run that is not a model, a dataset or a step. They read it from
 ``ctx.config`` under the constants named below rather than growing an
@@ -141,21 +153,40 @@ class _ScoringValidator(BaseValidator):
                 for k in METRIC_KEYS[spec.answer_kind]}
 
     def run(self, ctx) -> dict:
-        from .scorers import DEFAULT_BATCH_SIZE, DEFAULT_BATCH_TOKENS, score_source
+        """Score every target, one whole target per rank (`evaluate.parallel`).
+
+        The ``(task, split)`` pair is the shard unit because it is the largest
+        one that keeps a metric identical to what a single-rank run computes: the
+        pair is drawn from the same ``eval_indices`` and grouped into the same
+        batches wherever it runs. Splitting rows across ranks would be finer
+        grained and would make an AUROC a combination of partial statistics; the
+        cost of not doing it is a little imbalance, which the cost estimate
+        below is there to keep small.
+        """
+        from .parallel import run_sharded
+        from .scorers import (
+            DEFAULT_BATCH_SIZE, DEFAULT_BATCH_TOKENS, score_source, scoring_cost,
+        )
 
         max_samples = self.option("max_samples")
         batch_size = int(self.option("batch_size", DEFAULT_BATCH_SIZE))
         batch_tokens = int(self.option("batch_tokens", DEFAULT_BATCH_TOKENS))
-        out = {}
-        for task, split, source, spec in self.targets(ctx):
+        per_endpoint = bool(self.option("per_endpoint", True))
+
+        def score(target) -> dict:
+            task, split, source, spec = target
             scored = score_source(
                 ctx.model, ctx.tokenizer, ctx.collator, source, spec,
                 device=ctx.device, max_samples=max_samples, batch_size=batch_size,
-                per_endpoint=bool(self.option("per_endpoint", True)),
-                batch_tokens=batch_tokens)
-            for key, value in scored.items():
-                out[f"{task}/{split}/{key}"] = value
-        return out
+                per_endpoint=per_endpoint, batch_tokens=batch_tokens)
+            return {f"{task}/{split}/{key}": value for key, value in scored.items()}
+
+        def cost(target) -> float:
+            _task, _split, source, spec = target
+            n = len(source)
+            return scoring_cost(spec, min(n, int(max_samples)) if max_samples else n)
+
+        return run_sharded(self.targets(ctx), score, cost=cost)
 
 
 @register
@@ -501,9 +532,11 @@ class BaseExact(BaseValidator):
 #: 1e-4 assertion on a quantity whose smallest nonzero value is 0.125 cannot be
 #: met by an equivariant model — it can only be met by luck, when every
 #: permutation happens to land on the same grid point. So the comparison is
-#: against ``max(tolerance, margin_quantum)``, with the quantum measured from
-#: the margins in hand rather than assumed, and reported beside the spread so
-#: the assumption is visible instead of buried in a threshold.
+#: against ``max(tolerance, margin_control_max + margin_quantum)``, with both
+#: the quantum and the control measured from the run in hand rather than
+#: assumed, and both reported beside the spread so the assumption is visible
+#: instead of buried in a threshold. See :meth:`PermSpread._control_spread` for
+#: why the floor is measured and why one quantum of slack sits above it.
 PERM_TOL = 1e-4
 
 
@@ -563,6 +596,7 @@ class PermSpread(BaseValidator):
         from ...experiments.molecules.evaluate import (
             answer_token_ids, make_margin_preprocessor,
         )
+        from .parallel import run_sharded
         from .scorers import eval_indices, teacher_forced
 
         n_perms = int(self.option("n_permutations", 10))
@@ -571,8 +605,14 @@ class PermSpread(BaseValidator):
         yes_id, no_id = answer_token_ids(ctx.tokenizer)
         preprocess = make_margin_preprocessor(yes_id, no_id)
 
-        out = {}
-        for task, source, _task_spec in self._tasks(ctx):
+        # One task per rank. A task's permutation sweep is `n_permutations` full
+        # passes plus `n_control` more, and the spread is a max over all of them,
+        # so the sweep is the smallest unit that still produces the metric rather
+        # than a piece of it. This fires once, at the end of a run, over as many
+        # yes/no tasks as the mixture has.
+        def measure(target) -> dict:
+            task, source, _task_spec = target
+            out = {}
             arm = ctx.arm or getattr(source, "arm", "flat")
             indices = eval_indices(len(source), cap)
             views = [_PermutedSource(source, arm, p, ctx.tokenizer, indices)
@@ -615,10 +655,10 @@ class PermSpread(BaseValidator):
                 # described and reads at a glance as a broken run. The spread and
                 # the quantum are reported on both arms; the verdict is not.
                 control = self._control_spread(ctx, source, arm, indices,
-                                               preprocess)
+                                               preprocess, n_perms)
                 out[f"{task}/margin_control_max"] = control
-                out[f"{task}/within_tolerance"] = float(
-                    spread <= max(tol, quantum, control))
+                out[f"{task}/within_tolerance"] = _within_tolerance(
+                    spread, tol, control, quantum)
 
             classes = _symmetry_classes(source, indices)
             strata = {"all": np.ones(len(indices), dtype=bool),
@@ -627,9 +667,19 @@ class PermSpread(BaseValidator):
             for stratum, mask in strata.items():
                 out.update({f"{task}/{stratum}/{k}": v for k, v in
                             _auroc_spread(margins, y_true, mask).items()})
-        return out
+            return out
 
-    def _control_spread(self, ctx, source, arm, indices, preprocess) -> float:
+        n_control = int(self.option("n_control", n_perms))
+
+        def cost(target) -> float:
+            _task, source, _spec = target
+            passes = n_perms + (n_control if (ctx.arm or "flat") == "graph" else 0)
+            return float(len(eval_indices(len(source), cap)) * passes)
+
+        return run_sharded(self._tasks(ctx), measure, cost=cost)
+
+    def _control_spread(self, ctx, source, arm, indices, preprocess,
+                        n_perms: int) -> float:
         """The same measurement with nothing permuted — the instrument's own floor.
 
         Property 1 is a statement about the function the model computes, and the
@@ -651,12 +701,22 @@ class PermSpread(BaseValidator):
         margin no more than re-batching does", which is Property 1 in a form the
         hardware can actually satisfy. Set ``n_control: 0`` to fall back to the
         quantum alone.
+
+        **The two sides have to be the same estimator.** Both are a maximum over
+        passes, and a maximum over ten draws of a distribution is larger than a
+        maximum over three of the same distribution — so a control run at the
+        old default of 3 against a permuted sweep of 10 read low, and read low
+        exactly when the margins were tight enough for one grid step to decide
+        the verdict. The first arm-2 campaign lost four of fifteen graph cells
+        that way, every one of them by a single quantum. The default is now
+        ``n_permutations``, and the cost of the extra passes is what the
+        batched, sharded evaluation bought.
         """
         import numpy as np
 
         from .scorers import teacher_forced
 
-        n_control = int(self.option("n_control", 3))
+        n_control = int(self.option("n_control", n_perms))
         if n_control < 2:
             return 0.0
         rng = np.random.default_rng(0)
@@ -674,6 +734,26 @@ class PermSpread(BaseValidator):
             rows.append(row)
         rows = np.asarray(rows, dtype=np.float64)
         return float((rows.max(axis=0) - rows.min(axis=0)).max()) if rows.size else 0.0
+
+
+def _within_tolerance(spread, tol, control, quantum) -> float:
+    """The Property 1 verdict: does relabelling move the margin more than noise?
+
+    ``control`` is the same measurement with nothing permuted and ``quantum`` the
+    grid the margin lives on, both measured from the run in hand
+    (:meth:`PermSpread._control_spread`, :func:`_margin_quantum`). The comparison
+    allows one grid step above the floor, and the reason is that both sides are a
+    maximum over passes of the same discrete noise: a permuted sweep landing one
+    step above the control is what a fair coin produces when relabelling does
+    nothing at all, so a strict ``<=`` would fail about half the time on a model
+    that satisfies Property 1 exactly. The first arm-2 campaign lost four of
+    fifteen graph cells to that, every one of them by a single quantum.
+
+    The slack costs the test nothing it was buying. What it has to separate is
+    the flat arm, whose spread runs 2.6 to 13.1 against a quantum of 0.125 —
+    twenty to a hundred steps away, not one.
+    """
+    return float(spread <= max(float(tol), float(control) + float(quantum)))
 
 
 def _margin_quantum(margins) -> float:
@@ -1081,12 +1161,18 @@ class PerExample(BaseValidator):
         from ...experiments.molecules.analysis import write_per_example_report
         from ...experiments.molecules.evaluate import answer_token_ids
 
+        from .parallel import run_sharded
+
         out_dir = os.path.join(ctx.scratch_dir, "per_example")
         os.makedirs(out_dir, exist_ok=True)
         yes_id, no_id = answer_token_ids(ctx.tokenizer)
 
-        out = {}
-        for task, source, spec in self._tasks(ctx):
+        # One task per rank. Each writes its own file under its own name, so
+        # sharding needs no coordination over the output either — the JSONL a
+        # rank produces is the whole report for that task, and the summary the
+        # gather carries names the path it went to.
+        def report(target) -> dict:
+            task, source, spec = target
             tier = "B" if spec.answer_kind == "yesno" else "A"
             shim = _PredictShim(ctx, tier, yes_id, no_id,
                                 batch_size=int(self.option("batch_size", 8)))
@@ -1095,6 +1181,7 @@ class PerExample(BaseValidator):
             summary = write_per_example_report(
                 shim, source, _AnalysisConfig(tier, (ctx.config or {}).get(MAX_SPD, 32)),
                 path, yes_id=yes_id if tier == "B" else None)
+            out = {}
             for key in self.SUMMARY_KEYS:
                 value = summary.get(key)
                 if key == "per_example_path":
@@ -1102,7 +1189,10 @@ class PerExample(BaseValidator):
                 else:
                     out[f"{task}/{key}"] = (float("nan") if value is None
                                             else float(value))
-        return out
+            return out
+
+        return run_sharded(self._tasks(ctx), report,
+                           cost=lambda t: float(len(t[1])))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1308,6 +1398,7 @@ class Leakage(BaseValidator):
         from collections import Counter
 
         from ..schema import SIDECAR_KEY
+        from .parallel import run_sharded
         from .scorers import eval_indices, score_source
 
         task = str(self.option("task", LEAKAGE_TASK))
@@ -1340,12 +1431,23 @@ class Leakage(BaseValidator):
         views = {keep: _StereoSource(source, arm, keep, ctx.tokenizer, indices,
                                      pairs, max_length)
                  for keep in (True, False)}
-        scored = {keep: score_source(ctx.model, ctx.tokenizer, ctx.collator, view,
-                                     spec, device=ctx.device, max_samples=None,
-                                     batch_size=int(self.option("batch_size", 8)))
-                  for keep, view in views.items()}
 
-        n_stripped = len(views[False].changed)
+        # The two views are the shard unit: same rows, same size, same answer
+        # kind, and independent of each other until the verdict below. Two ranks
+        # is all this validator can use — a third would have nothing to take —
+        # and the halving is worth having because both views are full passes.
+        def score(keep) -> dict:
+            out = score_source(ctx.model, ctx.tokenizer, ctx.collator, views[keep],
+                               spec, device=ctx.device, max_samples=None,
+                               batch_size=int(self.option("batch_size", 8)))
+            # `changed` fills in as the view is read, so it is only true once the
+            # pass over it has finished — which is here, and on the rank that ran it.
+            return {f"{int(keep)}/em": float(out["em_accuracy"]),
+                    f"{int(keep)}/changed": float(len(views[keep].changed))}
+
+        scored = run_sharded([True, False], score)
+
+        n_stripped = int(scored["0/changed"])
         if not void and not n_stripped:
             raise EvalError(
                 f"leakage: closing the stereo channel changed none of the {n} "
@@ -1354,8 +1456,8 @@ class Leakage(BaseValidator):
                 "assigned centre and the strip failed to find it. The verdict "
                 "would read as 'at chance' while the channel was still open.")
 
-        tagged = float(scored[True]["em_accuracy"])
-        stripped = float(scored[False]["em_accuracy"])
+        tagged = float(scored["1/em"])
+        stripped = float(scored["0/em"])
         sigma = (base * (1.0 - base) / n) ** 0.5 if n else float("nan")
         line = base + float(self.option("sigmas", 3.0)) * sigma
         return {

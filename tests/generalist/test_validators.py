@@ -127,6 +127,9 @@ class StubLM(torch.nn.Module):
         self.graph_bias_weights = torch.nn.Parameter(torch.full((4, 8), 0.25))
         self.generation = generation
         self.tokenizer = FakeTokenizer()
+        #: Rows per `generate` call, so a test can say the loop batched rather
+        #: than only that it produced the right number of strings.
+        self.batch_sizes = []
 
     def forward(self, input_ids=None, **kwargs):
         from transformers.modeling_outputs import CausalLMOutput
@@ -134,6 +137,7 @@ class StubLM(torch.nn.Module):
         return CausalLMOutput(logits=self.head(self.emb(input_ids)))
 
     def generate(self, input_ids=None, max_new_tokens=16, **kwargs):
+        self.batch_sizes.append(int(input_ids.shape[0]))
         new = self.tokenizer.encode(self.generation)[:max_new_tokens]
         tail = torch.tensor([new] * input_ids.shape[0], dtype=input_ids.dtype)
         return torch.cat([input_ids, tail], dim=1)
@@ -879,6 +883,59 @@ def test_the_graph_arm_measures_the_floor_it_asserts_against(ctx):
     assert run.metrics["perm_spread/mol/tox21/within_tolerance"] == 1.0
 
 
+def test_the_control_runs_as_many_passes_as_the_permutation_sweep(ctx):
+    """Both sides of the verdict have to be the same estimator.
+
+    Each is a maximum over passes, and a maximum over ten draws is larger than a
+    maximum over three of the same distribution — so a control left at the old
+    default of 3 read low against a sweep of 10, and read low exactly when the
+    margins were tight enough for one grid step to decide the verdict. The
+    default is `n_permutations`; `n_control` still overrides it.
+    """
+    import dataclasses
+
+    graph = dataclasses.replace(ctx, arm="graph")
+    seen = []
+    original = builtin.PermSpread._control_spread
+
+    def spy(self, ctx_, source, arm, indices, preprocess, n_perms):
+        seen.append(n_perms)
+        return original(self, ctx_, source, arm, indices, preprocess, n_perms)
+
+    builtin.PermSpread._control_spread = spy
+    try:
+        ev.run_validators(graph, [builtin.PermSpread(cadence="manual",
+                                                     n_permutations=4)],
+                          event="manual", strict=True)
+    finally:
+        builtin.PermSpread._control_spread = original
+    # Once per yes/no task, each carrying the sweep's own pass count.
+    assert seen and set(seen) == {4}
+
+
+def test_a_spread_one_quantum_above_the_floor_is_not_a_property_violation():
+    """The verdict allows one grid step above the measured control.
+
+    Both sides are a maximum over passes of the same grid-valued noise, so a
+    permuted sweep one step above the control is what a fair coin produces when
+    relabelling does nothing — the outcome that cost the first arm-2 campaign
+    four of fifteen graph cells, every one by exactly one quantum. Two steps is
+    still a failure, and the flat arm sits twenty to a hundred steps out.
+    """
+    tol, quantum, control = 1e-4, 0.125, 0.125
+    assert builtin._within_tolerance(0.125, tol, control, quantum) == 1.0
+    assert builtin._within_tolerance(0.250, tol, control, quantum) == 1.0
+    assert builtin._within_tolerance(0.375, tol, control, quantum) == 0.0
+    # What the campaign actually measured on the flat arm, for scale.
+    assert builtin._within_tolerance(2.625, tol, control, quantum) == 0.0
+    # With no control the quantum alone still carries a step of slack.
+    assert builtin._within_tolerance(0.125, tol, 0.0, quantum) == 1.0
+    assert builtin._within_tolerance(0.250, tol, 0.0, quantum) == 0.0
+    # An unquantized margin falls back to the configured tolerance.
+    assert builtin._within_tolerance(1e-5, tol, 0.0, 0.0) == 1.0
+    assert builtin._within_tolerance(1e-3, tol, 0.0, 0.0) == 0.0
+
+
 def test_the_control_can_be_turned_off(ctx):
     """`n_control: 0` falls back to the quantum alone — the behaviour before the
     floor was measured, kept reachable because the extra passes are not free."""
@@ -1262,6 +1319,20 @@ class _Rows(list):
         return {"input_ids": [[0] * list.__getitem__(self, index)]}
 
 
+class _Repeated:
+    """``n`` copies of one built item, as a ``TaskSource``."""
+
+    def __init__(self, item, n):
+        self._item, self._n = item, int(n)
+        self.task, self.split, self.arm, self.pass_id = "mol/chebi20", "test", "flat", 0
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __getitem__(self, i):
+        return dict(self._item)
+
+
 def test_one_long_row_does_not_drag_a_full_batch_up_with_it():
     """The shakedown defect, reproduced.
 
@@ -1332,3 +1403,210 @@ def test_row_counts_stay_on_a_power_of_two_ladder():
             longest = max(len(source[i]["input_ids"][0]) for i in group)
             assert len(group) * longest <= budget or len(group) == 1, \
                 "splitting down must never push a group over the budget"
+
+
+# ── generation: batched, left-padded, one prediction per index ───────────────
+
+def test_generation_batches_and_keeps_every_prediction_on_its_own_index():
+    """A batched loop that returned rows in group order would silently mis-pair.
+
+    `token_batches` splits a greedy group down to a power-of-two ladder, so the
+    batches are not the same size and the second one does not start where a
+    caller counting by ``batch_size`` would expect. The predictions have to be
+    written back by index, and the targets have to stay aligned with them —
+    every generative metric in the suite pairs the two positionally.
+    """
+    from src.generalist.evaluate.scorers import generate_predictions
+
+    source = ctx_source = _Repeated(
+        flat_item("mol/chebi20", "test", "text",
+                  "Question: describe this molecule.", "CCO",
+                  "The molecule is an alcohol.", "CCO"), 11)
+    model = StubLM(generation=" ok")
+    predictions, targets = generate_predictions(
+        model, TOKENIZER, GraphCollatorV2(pad_token_id=0), source,
+        list(range(len(ctx_source))), max_new_tokens=4)
+
+    assert len(predictions) == 11 and len(targets) == 11
+    assert all(p == "ok" for p in predictions)
+    assert all(t == "The molecule is an alcohol." for t in targets)
+    # 11 rows on the ladder is 8 + 2 + 1, so the loop really did batch.
+    assert model.batch_sizes == [8, 2, 1]
+
+
+def test_generation_falls_back_to_one_row_when_the_collator_cannot_left_pad():
+    """A right-padded batch would continue every short row from a pad.
+
+    The layout is the correctness condition, so a collator with no
+    ``padding_side`` is a reason to stop batching rather than to batch anyway.
+    """
+    from src.generalist.evaluate.scorers import generate_predictions, left_padding
+
+    class Ragged:
+        def __call__(self, items):
+            return GraphCollatorV2(pad_token_id=0)(items)
+
+    assert left_padding(Ragged()) is None
+    source = _Repeated(
+        flat_item("mol/chebi20", "test", "text",
+                  "Question: describe this molecule.", "CCO",
+                  "The molecule is an alcohol.", "CCO"), 5)
+    model = StubLM(generation=" ok")
+    predictions, _targets = generate_predictions(
+        model, TOKENIZER, Ragged(), source, list(range(5)), max_new_tokens=4)
+    assert predictions == ["ok"] * 5
+    assert model.batch_sizes == [1, 1, 1, 1, 1]
+
+
+# ── DDP: the shard plan, and the guard that keeps a failure from hanging ─────
+
+def test_the_shard_plan_balances_by_cost_and_is_the_same_on_every_rank():
+    """Every rank computes the assignment; none of them is told what it is.
+
+    That only works if the plan is a pure function of the inputs, ties included —
+    two units of equal cost have to land the same way on rank 0 and on rank 3, or
+    a unit is scored twice and another not at all.
+    """
+    from src.generalist.evaluate.parallel import assign
+
+    units = list("abcdefgh")
+    costs = [100.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    plan = assign(units, costs, 4)
+
+    assert sorted(u for bucket in plan for u in bucket) == units
+    assert plan[0] == ["a"], "the expensive unit is placed first and alone"
+    assert max(len(b) for b in plan[1:]) - min(len(b) for b in plan[1:]) <= 1
+    assert assign(units, costs, 4) == plan
+    assert assign(units, [1.0] * 8, 4) == [["a", "e"], ["b", "f"], ["c", "g"],
+                                           ["d", "h"]]
+
+
+def test_a_single_rank_run_neither_shards_nor_swallows_an_exception():
+    """The path every current campaign cell is on: no group, no gather, no change."""
+    from src.generalist.evaluate.parallel import run_sharded
+
+    seen = []
+
+    def work(unit):
+        seen.append(unit)
+        return {f"{unit}/n": float(unit)}
+
+    assert run_sharded([1, 2, 3], work) == {"1/n": 1.0, "2/n": 2.0, "3/n": 3.0}
+    assert seen == [1, 2, 3]
+
+    def boom(unit):
+        raise ZeroDivisionError("scoring blew up")
+
+    with pytest.raises(ZeroDivisionError, match="scoring blew up"):
+        run_sharded([1], boom)
+
+
+def test_assign_refuses_a_cost_list_that_does_not_match_the_units():
+    from src.generalist.evaluate.parallel import assign
+
+    with pytest.raises(ev.EvalError, match="exactly one cost estimate"):
+        assign(["a", "b"], [1.0], 2)
+
+
+def test_the_cost_estimate_puts_generation_above_teacher_forcing():
+    """It only decides placement, but it has to get the order of magnitude right.
+
+    A caption at 64 new tokens is 64 sequential decode steps per row against one
+    forward for a yes/no; a plan that treated them as equal would put both
+    generative tasks on one rank and leave the others waiting for it.
+    """
+    from src.generalist.evaluate.scorers import scoring_cost
+
+    yesno = TaskSpec(name="mol/bace", domain="molecules", adapter="molecules",
+                     kind="corpus", answer_kind="yesno", metric="roc_auc",
+                     weight=1.0, mean_tokens=40.0, train_size=32,
+                     max_new_tokens=64, build_version="test")
+    caption = TaskSpec(name="mol/chebi20", domain="molecules", adapter="molecules",
+                       kind="corpus", answer_kind="text", metric="bleu2",
+                       weight=1.0, mean_tokens=40.0, train_size=32,
+                       max_new_tokens=64, build_version="test")
+    assert scoring_cost(yesno, 500) == 500.0
+    assert scoring_cost(caption, 500) == 500.0 * 64
+
+
+# ── DDP: two real ranks, over gloo ───────────────────────────────────────────
+
+def _two_rank_body(rank, store, out_dir, mode):
+    """One rank of :func:`_two_ranks`."""
+    import json
+    import os
+
+    import torch.distributed as dist
+
+    from src.generalist.evaluate.parallel import run_sharded
+
+    dist.init_process_group(backend="gloo", init_method=f"file://{store}",
+                            rank=rank, world_size=2)
+    try:
+        def work(unit):
+            if mode == "raise" and unit == "a":
+                raise ValueError(f"unit {unit} is bad")
+            return {f"{unit}/n": float(ord(unit))}
+
+        try:
+            payload = {"metrics": run_sharded(list("abcd"), work), "error": None}
+        except Exception as exc:                                    # noqa: BLE001
+            payload = {"metrics": None, "error": f"{type(exc).__name__}: {exc}"}
+        with open(os.path.join(out_dir, f"rank{rank}.json"), "w") as fh:
+            json.dump(payload, fh)
+    finally:
+        dist.destroy_process_group()
+
+
+def _two_ranks(tmp_path, mode):
+    """Run :func:`_two_rank_body` on two processes and return what each wrote."""
+    import json
+
+    import torch.multiprocessing as mp
+
+    out_dir = tmp_path / mode
+    out_dir.mkdir()
+    # Fork, not spawn: a spawned child re-imports this module by name, and under
+    # pytest's rootdir insertion that name does not resolve. Nothing here has
+    # touched CUDA, which is the usual reason to prefer spawn.
+    context = mp.get_context("fork")
+    procs = [context.Process(target=_two_rank_body,
+                             args=(r, str(tmp_path / f"store_{mode}"), str(out_dir),
+                                   mode))
+             for r in (0, 1)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        # A deadlock is the failure this whole design is against, so the test
+        # fails on the clock rather than waiting for one.
+        p.join(timeout=180)
+    for p in procs:
+        if p.is_alive():
+            p.kill()
+            pytest.fail("a rank never returned from run_sharded — the gather hung")
+    return [json.loads((out_dir / f"rank{r}.json").read_text()) for r in (0, 1)]
+
+
+def test_two_ranks_split_the_work_and_agree_on_the_result(tmp_path):
+    """The point of the exercise: half the passes each, one full set of metrics."""
+    ranks = _two_ranks(tmp_path, "ok")
+    expected = {f"{u}/n": float(ord(u)) for u in "abcd"}
+    for payload in ranks:
+        assert payload["error"] is None, payload["error"]
+        assert payload["metrics"] == expected
+
+
+def test_a_failure_on_one_rank_reaches_both_instead_of_hanging(tmp_path):
+    """The deadlock D7's skip rule would otherwise turn into a lost run.
+
+    A rank that raised before the collective would leave the other waiting on a
+    message never sent, and the watchdog would take the training run down with
+    it. The exception travels through the gather as data, so both ranks raise —
+    and `run_validators` then skips one validator, which is the contract.
+    """
+    ranks = _two_ranks(tmp_path, "raise")
+    for rank, payload in enumerate(ranks):
+        assert payload["metrics"] is None
+        assert "EvalError" in payload["error"], payload["error"]
+        assert "unit a is bad" in payload["error"], (
+            f"rank {rank} was not told which rank failed or why: {payload['error']}")
