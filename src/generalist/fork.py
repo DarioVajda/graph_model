@@ -73,6 +73,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
@@ -962,6 +963,69 @@ def steps_to_target(history, target: dict):
 # Running a fork
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: Written by rank 0 once every one of ``prepare_fork``'s writes has landed. Its
+#: appearance is what the other ranks wait on.
+PREPARED_MARKER = ".prepared"
+
+#: How long a non-zero rank waits for rank 0 to finish that setup. Generous
+#: because the setup copies a whole checkpoint off a shared filesystem that may
+#: be carrying five other cells at the time.
+PREPARE_TIMEOUT_S = 20 * 60
+
+
+def _launch_rank() -> int:
+    """This process's rank, read from the launcher's environment.
+
+    ``torch.distributed`` is not up yet when a fork prepares its directories —
+    the process group is created inside the first ``TrainingArguments``, which
+    ``_run_leg`` builds afterwards — so :func:`evaluate.parallel.world` answers
+    0 on every rank here and is the wrong instrument. ``torchrun`` exports
+    ``RANK`` before it starts the children, which makes it the only thing true
+    this early. Absent, there is one process and it is rank 0.
+    """
+    for key in ("RANK", "LOCAL_RANK"):
+        value = os.environ.get(key)
+        if value not in (None, ""):
+            try:
+                return int(value)
+            except ValueError:
+                pass
+    return 0
+
+
+def _leg_start_checkpoint(plan: ForkPlan, leg, copy_checkpoint: bool):
+    """Where a leg starts from — the path only, nothing created.
+
+    Every rank needs this to fill in ``start_checkpoint``; only rank 0 puts
+    anything there.
+    """
+    if leg.start != "parent":
+        return None
+    if not copy_checkpoint:
+        if leg.resume:
+            raise ForkError(
+                f"leg {leg.name!r}: copy_checkpoint=False would resume "
+                "directly out of the parent's directory, and a resume "
+                "restores the schedule from the checkpoint it resumes — so "
+                "the fork's appended segment would have to be written into "
+                "the parent. A fork never writes to its parent.")
+        return plan.parent_ckpt
+    return os.path.join(leg.output_dir, os.path.basename(plan.parent_ckpt))
+
+
+def _await_prepared(marker: str, plan: ForkPlan) -> None:
+    """Block until rank 0 has finished the fork's on-disk setup."""
+    deadline = time.monotonic() + PREPARE_TIMEOUT_S
+    while not os.path.exists(marker):
+        if time.monotonic() > deadline:
+            raise ForkError(
+                f"waited {PREPARE_TIMEOUT_S}s for rank 0 to prepare "
+                f"{plan.run_dir} and {marker!r} never appeared. Rank 0 has "
+                "either died or is still copying the parent checkpoint; this "
+                "rank cannot resume from a directory that is not finished.")
+        time.sleep(1.0)
+
+
 def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
                  results_dir: str = None, copy_checkpoint: bool = True,
                  runs_jsonl: str = None) -> ForkPlan:
@@ -974,8 +1038,30 @@ def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
     it has left the parent exactly as it found it, plus a ``PINNED`` marker,
     which costs nothing but a file.
 
+    **Rank 0 writes; the others wait.** Every rank of a ``torchrun`` job runs
+    this, and all of it is filesystem mutation — a `copytree` of the parent, a
+    `schedule.json` rewritten inside the copy, two pin markers, `fork.json`, a
+    lineage entry and a `runs.jsonl` line. Run concurrently that is a
+    check-then-act race on `copytree`, which is how two cells of the first
+    anneal launch died with ``FileExistsError`` on a directory another rank had
+    created between the check and the copy. The crash was the good case: a rank
+    losing the race the other way skips the copy while rank 0 is still making
+    it, and resumes from a half-copied checkpoint, and four ranks rewriting
+    `schedule.json` at once can leave a torn file that decides the whole decay.
+    So the writes happen once, and the other ranks wait for
+    :data:`PREPARED_MARKER` before they return a plan pointing at them.
+
     Returns the plan with the legs' ``start_checkpoint`` filled in.
     """
+    marker = os.path.join(plan.run_dir, PREPARED_MARKER)
+    if _launch_rank() != 0:
+        _await_prepared(marker, plan)
+        plan.legs = tuple(
+            replace(leg, start_checkpoint=_leg_start_checkpoint(
+                plan, leg, copy_checkpoint))
+            for leg in plan.legs)
+        return plan
+
     lineage = lineage or Lineage(results_dir or os.path.dirname(plan.run_dir))
 
     # The parent is pinned first: from here on it is exempt from rotation, so a
@@ -988,20 +1074,9 @@ def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
     legs = []
     for leg in plan.legs:
         os.makedirs(leg.output_dir, exist_ok=True)
-        start_ckpt = None
+        start_ckpt = _leg_start_checkpoint(plan, leg, copy_checkpoint)
         if leg.start == "parent":
-            if not copy_checkpoint:
-                if leg.resume:
-                    raise ForkError(
-                        f"leg {leg.name!r}: copy_checkpoint=False would resume "
-                        "directly out of the parent's directory, and a resume "
-                        "restores the schedule from the checkpoint it resumes — so "
-                        "the fork's appended segment would have to be written into "
-                        "the parent. A fork never writes to its parent.")
-                start_ckpt = plan.parent_ckpt
-            else:
-                start_ckpt = os.path.join(
-                    leg.output_dir, os.path.basename(plan.parent_ckpt))
+            if copy_checkpoint:
                 if not os.path.exists(start_ckpt):
                     shutil.copytree(plan.parent_ckpt, start_ckpt)
                 # The child's schedule lives in the child's copy.
@@ -1039,6 +1114,12 @@ def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
                  "leg": leg.name, "start": leg.start, "seed": int(leg.seed),
                  "created": plan.created},
                 sort_keys=True, separators=(",", ":"), default=str))
+
+    # Last, and only once everything above has landed: the other ranks are
+    # spinning on this file and will resume out of these directories the moment
+    # it appears.
+    _write_json(marker, {"created": plan.created, "mode": plan.mode,
+                         "legs": [leg.name for leg in plan.legs]})
     return plan
 
 
@@ -1138,8 +1219,12 @@ def _run_leg(plan: ForkPlan, leg: ForkLeg, trainer_factory: Callable,
             f"directory is {leg.output_dir}. A fork's checkpoints and its record "
             "have to land in the directory its lineage entry names.")
     # Resume entries from the child's own chunk boundaries belong in the same
-    # file as the fork entry; the factory does not have to know that.
-    if getattr(trainer, "lineage_hook", None) is None:
+    # file as the fork entry; the factory does not have to know that. Rank 0
+    # keeps the record: every rank resumes and so every rank has an entry to
+    # note, and `append_line` would take all four rather than tear one — four
+    # identical lines describing one event is a record that has to be read with
+    # a caveat, so only one rank writes it.
+    if getattr(trainer, "lineage_hook", None) is None and _launch_rank() == 0:
         trainer.lineage_hook = lineage.hook(child=leg.output_dir)
 
     out = LegResult(leg=leg)
@@ -1186,6 +1271,17 @@ def _write_result(result: ForkResult) -> None:
     Two files rather than one rewritten file, because ``fork.json`` is the
     record that `PLAN.md` §5 requires to have been written *before* the fork ran
     — an admit criterion that could be rewritten afterwards is not a criterion.
+
+    Rank 0 only, for the reason :func:`prepare_fork` gives: this is an
+    ``open(path, "w")`` and every rank reaches it. Four of them truncating and
+    rewriting the same file interleave at different offsets, and the first
+    four-rank anneal wrote a `result.json` that was one complete document
+    followed by the tail of another — recoverable that time, and not something
+    to leave to how the writes happen to land. ``lineage`` needs no such guard:
+    :func:`lineage.append_line` is ``O_APPEND`` under ``flock``, so concurrent
+    ranks duplicate an entry rather than tear one.
     """
+    if _launch_rank() != 0:
+        return
     _write_json(os.path.join(result.plan.run_dir, "result.json"),
                 result.to_json())

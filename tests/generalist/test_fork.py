@@ -36,6 +36,7 @@ import pytest
 from transformers import TrainerCallback
 
 from src.generalist import checkpoint as ckpt_mod
+from src.generalist import fork as fork_mod
 from src.generalist.fork import (
     ADMISSION_PARTS,
     ALL_VALIDATORS,
@@ -819,6 +820,87 @@ class TestPlanOnly:
         assert decay.kind == "decay"
         assert decay.steps == max(1, round(0.10 * PARENT_STEPS))
         assert decay.factor_end == pytest.approx(0.1), "MOLECULE_GENERALIST §7: lr/10"
+
+    def test_only_rank_zero_writes_and_the_marker_lands_last(self, parent,
+                                                             tmp_path):
+        """Every rank of a torchrun job runs `prepare_fork`, and all of it writes.
+
+        Run concurrently that is a check-then-act race on the parent `copytree`,
+        which is how two cells of the first anneal launch died with
+        `FileExistsError`. The crash was the good case — a rank losing the race
+        the other way resumes from a half-copied checkpoint. So rank 0 writes
+        and the marker goes down last, after the copy, `fork.json`, the lineage
+        entry and the `runs.jsonl` line.
+        """
+        run_dir = tmp_path / "child"
+        result = fork(parent["ckpt"], "anneal",
+                      {"run_dir": str(run_dir), "decay_steps": 2},
+                      registry=parent["registry"],
+                      parent_mixture=parent["mixture"], results_dir=str(tmp_path),
+                      runs_jsonl=str(tmp_path / "runs.jsonl"))
+        marker = run_dir / fork_mod.PREPARED_MARKER
+        assert marker.exists(), "rank 0 left no marker for the other ranks"
+        leg = result.plan.leg("anneal")
+        assert ckpt_mod.is_complete(leg.start_checkpoint)
+        assert (run_dir / "fork.json").stat().st_mtime <= marker.stat().st_mtime
+
+    def test_a_non_zero_rank_waits_instead_of_writing(self, parent, tmp_path,
+                                                      monkeypatch):
+        """It contributes nothing to the directory and still gets a usable plan."""
+        run_dir = tmp_path / "child"
+        monkeypatch.setenv("RANK", "2")
+        # Rank 0's work, already done — which is the only state in which a
+        # non-zero rank is supposed to get past the wait.
+        monkeypatch.setattr(fork_mod, "PREPARE_TIMEOUT_S", 5)
+        with pytest.raises(ForkError, match="waited 5s for rank 0"):
+            fork(parent["ckpt"], "anneal",
+                 {"run_dir": str(run_dir), "decay_steps": 2},
+                 registry=parent["registry"], parent_mixture=parent["mixture"],
+                 results_dir=str(tmp_path))
+        assert not (run_dir / "fork.json").exists(), \
+            "a non-zero rank wrote the fork record"
+        assert not (run_dir / "anneal" / os.path.basename(parent["ckpt"])).exists(), \
+            "a non-zero rank copied the parent checkpoint"
+
+    def test_a_non_zero_rank_points_at_what_rank_zero_built(self, parent,
+                                                            tmp_path,
+                                                            monkeypatch):
+        run_dir = tmp_path / "child"
+        config = {"run_dir": str(run_dir), "decay_steps": 2}
+        rank0 = fork(parent["ckpt"], "anneal", dict(config),
+                     registry=parent["registry"],
+                     parent_mixture=parent["mixture"], results_dir=str(tmp_path))
+        before = _snapshot(str(run_dir))
+
+        monkeypatch.setenv("RANK", "3")
+        other = fork(parent["ckpt"], "anneal", dict(config),
+                     registry=parent["registry"],
+                     parent_mixture=parent["mixture"], results_dir=str(tmp_path))
+        assert other.plan.leg("anneal").start_checkpoint \
+            == rank0.plan.leg("anneal").start_checkpoint
+        assert _snapshot(str(run_dir)) == before, \
+            "a non-zero rank changed the directory rank 0 had finished"
+
+    def test_a_non_zero_rank_does_not_rewrite_the_result(self, parent, tmp_path,
+                                                         monkeypatch):
+        """`result.json` is an `open(path, "w")` and every rank reaches it.
+
+        Four ranks truncating and rewriting the same file interleave at
+        different offsets: the first four-rank anneal left a `result.json` that
+        was one complete document followed by the tail of another, which
+        `json.load` refuses outright.
+        """
+        run_dir = tmp_path / "child"
+        config = {"run_dir": str(run_dir), "decay_steps": 2}
+        fork(parent["ckpt"], "anneal", dict(config), registry=parent["registry"],
+             parent_mixture=parent["mixture"], results_dir=str(tmp_path))
+        written = (run_dir / "result.json").read_text()
+
+        monkeypatch.setenv("RANK", "1")
+        fork(parent["ckpt"], "anneal", dict(config), registry=parent["registry"],
+             parent_mixture=parent["mixture"], results_dir=str(tmp_path))
+        assert (run_dir / "result.json").read_text() == written
+        json.loads((run_dir / "result.json").read_text())
 
     def test_an_absolute_lr_min_is_converted_against_the_parents_lr(
             self, parent, tmp_path):
