@@ -9,10 +9,28 @@
 #
 #   src/generalist/tools/run_cli.sh data_prep --config src/generalist/configs/probes/000_smoke.jsonc
 #   GPU=1 src/generalist/tools/run_cli.sh eval --checkpoint <ckpt> --config <cfg>
+#   GPU=4 GPUS="B300|B200" src/generalist/tools/run_cli.sh fork --from <ckpt> ...
 #
 # Env overrides: PARTITION (frida), CPUS (16), MEM (64G), TIME (02:00:00),
-# GPU (0 -> CPU-only; 1 -> one GPU of any Blackwell/H100/A100 class), NAME,
-# INDUCTOR_CACHE.
+# GPU (0 -> CPU-only; 1 -> one GPU; >1 -> that many ranks under torchrun), NAME,
+# INDUCTOR_CACHE, GPUS (brand list, default all Blackwell/H100/A100), EXCLUDE
+# (node list to keep off), WAIT (1 blocks and echoes the tail, 0 submits and
+# prints the job id — which is what several of these at once needs).
+#
+# GPU is the rank count as well as the card count, which is `chain.sh`'s rule
+# (`gpus_per_config` is the single source of truth) for the same reason: naming
+# the two separately is how a job ends up with four ranks and one card. Above 1
+# the body runs under `torchrun --standalone`, and the harness picks the world
+# size up from the environment — the mixture sampler splits each optimizer step
+# across the ranks (`micro_batch_tokens` is `tokens_per_step / (accumulation_steps
+# x world_size)`), so the step is unchanged and only the wall clock moves.
+# `accumulation_steps` has to come down by the same factor to hold the
+# micro-batch, and it is a CLI flag: `--accumulation-steps`.
+#
+# GPUS takes `chain.sh`'s `|`-separated brand list ("B300|B200") and renders it
+# as a `GPU_BRD:` constraint. The default spans every fast brand, which is right
+# for a scoring pass and wrong for anything whose per-rank peak exceeds 80 GB —
+# name the brands when the run has a measured peak.
 #
 # INDUCTOR_CACHE names a directory to share compiled flex kernels with, the way
 # `execution.sbatch.inductor_cache` does for a sweep or a chain. There is no
@@ -38,6 +56,9 @@ CPUS="${CPUS:-16}"
 MEM="${MEM:-64G}"
 TIME="${TIME:-02:00:00}"
 GPU="${GPU:-0}"
+GPUS="${GPUS:-}"
+EXCLUDE="${EXCLUDE:-}"
+WAIT="${WAIT:-1}"
 INDUCTOR_CACHE="${INDUCTOR_CACHE:-}"
 if [ -n "$INDUCTOR_CACHE" ]; then
   case "$INDUCTOR_CACHE" in /*) ;; *) INDUCTOR_CACHE="$REPO/$INDUCTOR_CACHE" ;; esac
@@ -50,11 +71,17 @@ NAME="${NAME:-gen_${1:-cli}}"
 SCRIPT="$LOG_DIR/$STAMP.sh"
 LOG="$LOG_DIR/$STAMP.out"
 
+if [ "$GPU" -gt 1 ] 2>/dev/null; then
+  RUNNER="torchrun --standalone --nproc_per_node $GPU -m src.generalist"
+else
+  RUNNER="python -m src.generalist"
+fi
+
 {
   echo "#!/usr/bin/env bash"
   echo "set -x"
   echo "cd $REPO"
-  echo "python -m src.generalist $* ; rc=\$?"
+  echo "$RUNNER $* ; rc=\$?"
   echo "echo CLI_EXIT=\$rc; exit \$rc"
 } > "$SCRIPT"
 chmod +x "$SCRIPT"
@@ -66,13 +93,39 @@ SWEEP_LOGIN=$REPO/login.sh bash $REPO/sweep/slurm_launch.sh ${NAME}_$STAMP $SCRI
 
 GPU_ARGS=()
 if [ "$GPU" != "0" ]; then
-  GPU_ARGS=(--gres "gpu:$GPU" --constraint 'GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100|GPU_BRD:A100')
+  CONSTRAINT='GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100|GPU_BRD:A100'
+  if [ -n "$GPUS" ]; then
+    CONSTRAINT=""
+    IFS='|' read -r -a _brands <<< "$GPUS"
+    for brand in "${_brands[@]}"; do
+      [ -z "$brand" ] && continue
+      CONSTRAINT="${CONSTRAINT:+$CONSTRAINT|}GPU_BRD:$brand"
+    done
+  fi
+  GPU_ARGS=(--gres "gpu:$GPU" --constraint "$CONSTRAINT")
+fi
+[ -n "$EXCLUDE" ] && GPU_ARGS+=(--exclude "$EXCLUDE")
+
+echo "[cli] submitting: $RUNNER $*"
+echo "[cli] log: $LOG"
+
+SB=(-p "$PARTITION" -A povejmo -c "$CPUS" --mem "$MEM" -t "$TIME"
+    "${GPU_ARGS[@]}" -J "$NAME" -o "$LOG" --wrap "$WRAP")
+
+if [ "$WAIT" = "0" ]; then
+  # Submit and return. `--parsable` promises one bare job id and does not
+  # deliver one here — the login banner is printed on stdout ahead of it — so
+  # take the last line that is only digits, the way `chain.sh` does.
+  JOB="$(sbatch --parsable "${SB[@]}" 2>&1 | grep -E '^[0-9]+$' | tail -n 1)"
+  if [ -z "$JOB" ]; then
+    echo "[cli] submission failed; no job id"
+    exit 1
+  fi
+  echo "[cli] job $JOB (not waiting)"
+  exit 0
 fi
 
-echo "[cli] submitting: python -m src.generalist $*"
-echo "[cli] log: $LOG"
-sbatch --wait -p "$PARTITION" -A povejmo -c "$CPUS" --mem "$MEM" -t "$TIME" \
-       "${GPU_ARGS[@]}" -J "$NAME" -o "$LOG" --wrap "$WRAP" >/dev/null
+sbatch --wait "${SB[@]}" >/dev/null
 rc=$?
 echo "[cli] ---- tail of $LOG ----"
 tail -n 60 "$LOG" 2>/dev/null
