@@ -8,7 +8,11 @@ Covers:
     positions byte-identical to the unpadded collation;
   * custom ``len_buckets`` / ``node_buckets`` overrides and the L-alignment guard;
   * padding is loss-neutral for the dense (eager) backend — the property the flex
-    path relies on (padded tokens masked, padded nodes never gathered).
+    path relies on (padded tokens masked, padded nodes never gathered);
+  * ``padding_side="left"``: the row moves and nothing else does, the loss is the
+    same on either side, the prompt node's last token lands on the last position
+    (which is what ``generate`` continues from, and what right padding takes
+    away), and a batch of rows decodes to what each row decodes to alone.
 """
 
 import sys, os
@@ -154,3 +158,119 @@ def test_padding_loss_neutral_eager(k_hop):
         loss_pad = model(**pad).loss
     assert torch.allclose(loss_raw, loss_pad, atol=1e-9, rtol=1e-9), \
         f"k={k_hop}: padded loss {loss_pad.item()} != raw {loss_raw.item()}"
+
+
+# ── left padding, and the batched generation it exists for ───────────────────
+
+#: A small bucket ladder, so a generation test does not have to decode past a
+#: 512-position prompt to say anything. The block size comes down with it —
+#: ``pad_to_block`` requires the bucket to be a multiple of it.
+_SHORT = dict(pad_token_id=0, pad_to_block=True, len_buckets=[64],
+              node_buckets=[8], block_size=64)
+
+
+def _double(batch):
+    for key in ("laplacian_coordinates", "rwse", "rrwp", "magnetic_V",
+                "magnetic_lambdas"):
+        if batch.get(key) is not None:
+            batch[key] = batch[key].double()
+    return batch
+
+
+def test_left_padding_puts_the_prompt_nodes_last_token_at_the_end():
+    """The property batched generation needs, and the one right padding breaks.
+
+    ``generate`` continues from position ``L-1``, so that position has to hold
+    the last real token of every row. Under right padding it holds a pad — not
+    only for the short row but for every row, because ``pad_to_block`` rounds the
+    length up to a bucket. The two assertions on ``right`` are what the layout
+    used to be, kept here because the defect they describe is invisible in a
+    metric: generation still produces text, from a position counter that starts
+    over at 1.
+    """
+    items = _make_items()
+    left = GraphCollatorV2(padding_side="left", **_SHORT)([dict(it) for it in items])
+    right = GraphCollatorV2(**_SHORT)([dict(it) for it in items])
+
+    for i, item in enumerate(items):
+        prompt = item["input_ids"][item["prompt_node"]]
+        assert left["attention_mask"][i, -1] == 1
+        assert int(left["node_ids"][i, -1]) == item["prompt_node"]
+        assert int(left["input_ids"][i, -1]) == prompt[-1]
+        # `prepare_inputs_for_generation` numbers a new token position_ids[:, -1]
+        # + 1, so this is what decides where RoPE puts the continuation.
+        assert int(left["position_ids"][i, -1]) == len(prompt) - 1
+
+        assert right["attention_mask"][i, -1] == 0
+        assert int(right["position_ids"][i, -1]) == 0
+
+
+def test_left_padding_moves_the_row_and_changes_nothing_else():
+    items = _make_items()
+    left = GraphCollatorV2(padding_side="left", **_SHORT)([dict(it) for it in items])
+    right = GraphCollatorV2(**_SHORT)([dict(it) for it in items])
+    width = right["input_ids"].shape[1]
+
+    for i in range(len(items)):
+        n = int(right["attention_mask"][i].sum())
+        assert int(left["attention_mask"][i].sum()) == n
+        for key in ("input_ids", "position_ids", "node_ids", "labels"):
+            assert torch.equal(right[key][i, :n], left[key][i, width - n:]), key
+        assert (left["attention_mask"][i, :width - n] == 0).all()
+        assert (left["labels"][i, :width - n] == -100).all()
+
+
+@pytest.mark.parametrize("k_hop", [0, 2])
+def test_left_padding_is_loss_neutral_eager(k_hop):
+    """Which end the padding sits on cannot move the loss.
+
+    Same argument as :func:`test_padding_loss_neutral_eager` and the same fp64
+    tolerance: padded keys are masked out of attention by ``pad_mask``, which
+    `build_dense_structural_mask` reads rather than assuming the padding is at
+    the end, and padded queries produce rows nothing consumes.
+    """
+    items = _make_items()
+    cfg = GTLMLlamaConfig(k_hop=k_hop, graph_attn_impl="eager", spd=True, max_spd=8,
+                          magnetic=True, magnetic_dim=8, **_BASE)
+    model = GTLMLlamaForCausalLM(cfg).double().eval()
+
+    right = _double(GraphCollatorV2(k_hop=k_hop, **_SHORT)([dict(it) for it in items]))
+    left = _double(GraphCollatorV2(k_hop=k_hop, padding_side="left",
+                                   **_SHORT)([dict(it) for it in items]))
+    with torch.no_grad():
+        loss_right = model(**right).loss
+        loss_left = model(**left).loss
+    assert torch.allclose(loss_right, loss_left, atol=1e-9, rtol=1e-9), \
+        f"k={k_hop}: left-padded loss {loss_left.item()} != right {loss_right.item()}"
+
+
+def test_batched_generation_matches_one_row_at_a_time():
+    """The equivalence batching has to have: eight rows at once is eight rows.
+
+    Greedy, so there is one right answer per row and it cannot depend on what
+    else is in the batch. Run in fp64 for the same reason the loss check is —
+    bf16 would leave a disagreement here unattributable between the batching and
+    the arithmetic, and the batching is what is under test.
+    """
+    items = _make_items()
+    cfg = GTLMLlamaConfig(k_hop=0, graph_attn_impl="eager", spd=True, max_spd=8,
+                          magnetic=True, magnetic_dim=8, **_BASE)
+    model = GTLMLlamaForCausalLM(cfg).double().eval()
+    # No early stop: a row that ended would be padded to the batch's length and
+    # the shapes would differ for a reason that is not the batching.
+    model.generation_config.eos_token_id = None
+    model.generation_config.pad_token_id = 0
+    collator = GraphCollatorV2(padding_side="left", **_SHORT)
+
+    batch = _double(collator([dict(it) for it in items]))
+    with torch.no_grad():
+        out = model.generate(**batch, max_new_tokens=6, do_sample=False, num_beams=1)
+    batched = out[:, batch["input_ids"].shape[1]:]
+
+    for i, item in enumerate(items):
+        one = _double(collator([dict(item)]))
+        with torch.no_grad():
+            alone = model.generate(**one, max_new_tokens=6, do_sample=False,
+                                   num_beams=1)
+        assert torch.equal(batched[i], alone[0, one["input_ids"].shape[1]:]), \
+            f"row {i} decoded differently in a batch of {len(items)} than alone"

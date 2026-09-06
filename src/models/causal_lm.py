@@ -455,6 +455,13 @@ class GraphCausalLMMixin:
             "prompt_node": prompt_node,
             "num_nodes": kwargs.get("num_nodes"),
             "k_hop_mask": kwargs.get("k_hop_mask"),
+            # Greedy and sampled decoding both read `logits[:, -1, :]` and nothing
+            # else, so the prefill has no reason to project the whole sequence
+            # through the vocabulary. Left at 0 it does: a (B, L, 128256) tensor,
+            # which at B=8 and a 1536-token bucket is 3.2 GB of transient that the
+            # batched evaluation would otherwise pay on top of a resident training
+            # step. Unchanged for the decode steps, where q_len is 1 already.
+            "logits_to_keep": 1,
         }
         for key in ("shortest_path_dists", "laplacian_coordinates", "rwse", "rrwp",
                     "magnetic_V", "magnetic_lambdas"):

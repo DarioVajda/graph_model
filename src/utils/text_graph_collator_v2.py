@@ -6,7 +6,7 @@ Unlike :class:`GraphCollator` (v0/v1), which returns a ragged
 collator does all sequence *packing* up-front and emits a flat, HuggingFace-
 idiomatic batch:
 
-    input_ids       (B, L)      long   - packed token ids, right padded
+    input_ids       (B, L)      long   - packed token ids, padded (see padding_side)
     position_ids    (B, L)      long   - per-node position ids (reset each node)
     node_ids        (B, L)      long   - which graph node each token belongs to
     attention_mask  (B, L)      long   - 1 for real tokens, 0 for padding
@@ -36,6 +36,9 @@ Packing semantics (identical to v0's ``_prepare_inputs`` with ``padding_side
   * ``position_ids`` restart from 0 at every node boundary;
   * ``labels`` for graph i are placed at ``[prefix_len : prefix_len + prompt_len]``
     so that HF's shift-by-one causal loss predicts the prompt tokens.
+
+``padding_side="left"`` slides each row's packed tokens to the end of the batch
+width instead, which is what batched generation needs; see the constructor.
 """
 
 import torch
@@ -110,7 +113,8 @@ class GraphCollatorV2:
                  pad_to_block: bool = False, block_size: int = 128,
                  len_buckets=None, node_buckets=None,
                  node_position_mode: str = "reset", max_spd: int = 64,
-                 landmark_d_max: int = 8, landmark_required: bool = False):
+                 landmark_d_max: int = 8, landmark_required: bool = False,
+                 padding_side: str = "right"):
         """
         Args:
             tokenizer:   Optional tokenizer; used only to source ``pad_token_id``.
@@ -166,7 +170,32 @@ class GraphCollatorV2:
                          the same far/unreachable bucket cap ``SPDBias`` itself
                          clamps into; construct from the model's config
                          (``GraphCollatorV2(..., max_spd=cfg.max_spd)``).
+            padding_side: Which end of the packed sequence the padding goes on.
+                         ``"right"`` (default) is the training layout described
+                         above. ``"left"`` is for **batched generation**, and it
+                         is the only layout in which a batch of prompts can be
+                         continued at all: ``generate`` appends new tokens after
+                         position ``L-1``, so every row's last real token has to
+                         *be* at ``L-1``. Right padding puts a pad there for
+                         every row shorter than the batch maximum and — because
+                         ``pad_to_block`` rounds L up to a bucket — for every row
+                         including the longest, so even a batch of one continues
+                         from a pad. Two consequences follow from that pad and
+                         both are wrong: ``position_ids[:, -1]`` is 0 rather than
+                         the prompt node's last local position, so
+                         ``prepare_inputs_for_generation`` numbers the generated
+                         tokens 1, 2, 3, … instead of continuing the counter, and
+                         RoPE then places them *before* the prompt they answer.
+                         Nothing else about the batch changes: padded positions
+                         are masked out of attention at either end, the soft bias
+                         is gathered per node rather than per position, and the
+                         structural mask is built from ``pad_mask``, which says
+                         where the padding is rather than assuming an end.
         """
+        if padding_side not in ("left", "right"):
+            raise ValueError(
+                f"padding_side must be 'left' or 'right', got {padding_side!r}")
+        self.padding_side   = padding_side
         self.tokenizer      = tokenizer
         self.k_hop          = k_hop
         self.k_hop_directed = k_hop_directed
@@ -230,13 +259,17 @@ class GraphCollatorV2:
 
         for i, p in enumerate(packed):
             L = p['length']
-            input_ids[i, :L]      = p['tokens']
-            position_ids[i, :L]   = p['positions']
-            node_ids[i, :L]       = p['nodes']
-            attention_mask[i, :L] = 1
+            # Where this row's real tokens start. Right padding puts them at 0;
+            # left padding slides them to the end so the last real token lands on
+            # the last position, which is where generation continues from.
+            o = target_len - L if self.padding_side == "left" else 0
+            input_ids[i, o:o + L]      = p['tokens']
+            position_ids[i, o:o + L]   = p['positions']
+            node_ids[i, o:o + L]       = p['nodes']
+            attention_mask[i, o:o + L] = 1
             if has_labels:
                 lab = batch[i]['labels']
-                s, e = p['prefix_len'], p['prefix_len'] + p['prompt_len']
+                s, e = o + p['prefix_len'], o + p['prefix_len'] + p['prompt_len']
                 if lab.shape[0] != p['prompt_len']:
                     raise ValueError(
                         f"labels for graph {i} have length {lab.shape[0]} but the prompt "
