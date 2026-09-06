@@ -24,6 +24,17 @@ labels improve scaffold-split property prediction. That claim survives any leade
 and no corpus-bound baseline can copy it. Secondary: zero-shot and adaptation-efficiency on the
 held-out tasks, and the permutation-invariance spread of the flat twin.
 
+**What it produced, 2026-09-06 (§8).** The primary claim is a **null at the available resolution**:
+pooled over nine (set, seed) pairs against the last-checkpoint pairing, the generalist beats the
+specialist by +0.0100 ROC-AUC on the graph arm and +0.0154 on the flat one, against a per-pair sd of
+0.025–0.040 and a power table that puts three seeds at 0.05. Training on every molecule task at once
+neither helped nor hurt property prediction measurably. The secondary claim is the strong one:
+**Property 1 passes on all fifteen graph cells**, with the graph arm pinned at two to three grid
+steps of the margin's quantum while the flat arm runs 10× to 40× wider — and the gap *widens* through
+the anneal, because the flat arm's spread grows with its margins and the graph arm's does not. Within
+arm 2 the arms split along one line: the flat arm wins property prediction (0.7969 vs 0.7795), the
+graph arm wins the structural probes (0.9408 vs 0.9359) and both held-out structural tasks.
+
 **Why now, before the trunk:** the trunk is a multi-task model routed by the question node over
 merged sources with per-source loss accounting. None of that has been exercised on molecules. One
 domain with two metric families (exact match beside AUROC-from-margin), a multi-endpoint set, a
@@ -52,12 +63,15 @@ code than any single graph-QA domain — and it costs a few percent of what the 
       general-text held-out loss, adapter-on against adapter-off: the assistant goal makes text
       ability something to measure, and no validator measures it. Optionally two more cross-check
       graph seeds, ~25 min each, for a margin that landed thin.
-- [ ] **Arm 2.** Three seeds × two arms, the mixture in §2, WSD stable phase, one anneal fork at
-      the end.
-- [ ] **Read-out.** Arm 2 − arm 1 per (dataset, seed), paired; held-out zero-shot; adaptation
-      steps-to-target from the generalist vs from base Llama; permutation spread.
-- [ ] **Write-up** into this file, with the disclosures §7 lists attached to every number.
-- [ ] *(Optional, §8)* the same recipe on Llama-3.2-3B and Llama-3.1-8B.
+- [x] **Arm 2.** ✅ **2026-09-06.** Three seeds × two arms at 5,599 steps, the mixture in §2, WSD
+      stable phase, one anneal fork a cell decaying to `lr/10` over 561 steps. All twelve runs
+      completed; the six annealed checkpoints are the reportable models.
+- [x] **Read-out.** ✅ §8. Arm 2 − arm 1 paired within (dataset, seed) against §8.4.8; held-out
+      zero-shot; permutation spread on both arms. Adaptation steps-to-target is **not** measured —
+      it needs an `adapt` fork per held-out task and none was run.
+- [x] **Write-up** ✅ §8, with §5's graph-to-SMILES disclosure and §7's generation-path caveat
+      attached to the numbers they bear on.
+- [ ] *(Optional, §9)* the same recipe on Llama-3.2-3B and Llama-3.1-8B.
 
 ---
 
@@ -366,7 +380,239 @@ counts on a power-of-two ladder so the batch dimension stops contributing shape 
 (`evaluate/scorers.py`). Worth remembering as a class of bug: a compile cap that is too low costs an
 order of magnitude and reports nothing but a warning.
 
-## 8. Optional last step — a larger suite
+**A second one the campaign caught, and it was reporting numbers rather than hiding.** The recompile
+cap explained a slow validator; it did not explain a validator that stays slow with the cap raised.
+The first milestone of the campaign's own run cost **133 minutes on the flat arm and about 161 on the
+graph arm**, against 34 minutes of training for the 2,000 steps it interrupted — and the second firing
+cost the same as the first, so it was not compilation. It was the generation loop, which ran one
+example per `generate` call. Pulling on that found the reason it had to: a generation batch was
+believed unbatchable because "the prompt node must stay last in the packed sequence, so nothing may
+be padded past it". True, and not a statement about batch size — `GraphCollatorV2` under
+`pad_to_block` rounds the packed length up to a 512 bucket, so a 200-token prompt is followed by 312
+pads *at batch size one*. The padding side was the constraint all along, and the padding side is a
+knob.
+
+Two things came out of moving it (`GraphCollatorV2(padding_side="left")`, `evaluate/scorers.py`):
+
+* **The generative metrics were wrong, in the direction of understating the model.**
+  `prepare_inputs_for_generation` numbers each new token `position_ids[:, -1] + 1`, continuing the
+  prompt node's local counter. Under right padding `position_ids[:, -1]` is a pad, which is 0, so
+  every continuation was numbered 1, 2, 3 … and RoPE placed it *before* the prompt it was answering.
+  Measured on `checkpoint-1500` of `graph_s0` and `checkpoint-3500` of `flat_s0`, 128 samples, every
+  teacher-forced number identical and only the generative ones moving: flat-arm ChEBI-20 METEOR
+  0.285 -> 0.463 and ROUGE-L 0.213 -> 0.303; flat-arm g2s `roundtrip_match` **0.000 -> 0.031** and
+  `exact_match` 0.000 -> 0.008. A metric that read as "the model cannot do this at all" was an
+  artifact of where the continuation was placed.
+* **It is between eight and eleven times faster**, on the same checkpoint, rows and card: 3,946 s ->
+  464 s on the graph arm, 3,341 s -> 298 s on the flat arm (second pass in both cases; the first pays
+  for compiles).
+
+**Flex on the generation prefill is a memory result, not a speed one.** `use_flex` needs
+`q_len == kv_len` and a block-aligned length, and a bucketed prompt batch is both — so forcing
+`graph_attn_impl` to eager was giving up the fused kernel on the one quadratic pass in the
+evaluation. Batched-and-eager against batched-and-flex came out level on the clock (458 s vs 464 s,
+and the eager run was on the *faster* comparison in one sense — a B200 against a B300 — so flex is at
+worst neutral), because generation is dominated by sequential decode steps and decode falls back to
+eager inside the model either way. The peak is where it shows: **23.8 GB batched-eager against 10.5 GB
+batched-flex**, with the old one-at-a-time path at 13.1 GB. So batching *without* flex would have
+pushed the evaluation's peak above the path it replaced, next to a training step that already peaks
+at 100.6 GB on a 178 GB card — which is the shape of the 2026-09-04 OOM. Flex on the prefill is what
+makes the batching safe to run mid-training.
+
+**Evaluation is sharded across ranks now** (`evaluate/parallel.py`). The unit is a whole scoring
+target — a `(task, split)` pair, one stereo view, one task's permutation sweep — never a slice of
+one, so a rank scores the same rows in the same batches it would have alone and the metric is
+identical rather than merely close. Verified at four ranks against one on the same card class: **889
+of 889 keys identical**, all four ranks agreeing with each other, at 918 s -> 268 s (3.4x of an ideal
+4x, the gap being the imbalance left by scoring whole targets). Placement is
+longest-processing-time-first against a cost estimate that prices a generated row at `max_new_tokens`
+forward passes and a teacher-forced one at one.
+
+Together: a milestone that cost 133 minutes on the flat arm should cost about **12 minutes** on one
+card and **3-4 minutes** on four. The single-card campaign cells are unaffected — with one rank there
+is no process group and no gather, and the code takes the direct path.
+
+**Shape count, since the batching adds a family of them.** Every batch the evaluation collates was
+recorded as its `(B, L, N)` triple, which is what the compiled flex kernel guards on. The whole
+evaluation touches **25 distinct shapes on the graph arm and 1 on the flat arm**, against a cap of
+128 — and that is *fewer* than the path it replaces (27 and 2), because generation now groups on the
+same power-of-two row ladder and the same L/N buckets as the scoring batches instead of contributing
+a `B = 1` family of its own. The cap does not need raising.
+
+**Two rank races, found by running a fork distributed for the first time.** `prepare_fork` and
+`_write_result` both run on *every* rank and both are filesystem writes. The copy of the parent
+checkpoint was guarded by `if not os.path.exists(...)`, which is check-then-act: two of the six
+anneal cells died with `FileExistsError` when a second rank created the directory between the check
+and the `copytree`. The crash was the good case — a rank losing the race the other way skips the copy
+while rank 0 is still making it and resumes from a half-copied checkpoint, and four ranks rewriting
+`schedule.json` at once can tear the file that decides the whole decay. `result.json` showed the
+silent version: it is an `open(path, "w")` every rank reaches, and four of the six cells wrote a file
+that was one complete document overwritten by another at a different offset. One was recoverable
+from its own tail, three were not and came back from the copy `mode_fork` prints to stdout. Both
+sites are rank 0 only now, with the other ranks waiting on a marker rank 0 writes last; `append_line`
+needed no such guard, being `O_APPEND` under `flock`, so concurrent ranks duplicate a lineage entry
+rather than tear one. The rank has to come from `RANK` in the environment rather than
+`evaluate.parallel.world`, because the process group does not exist yet at `prepare_fork` — it is
+created inside the first `TrainingArguments`, which `_run_leg` builds afterwards, so `world()` would
+answer 0 on every rank and every one of them would write.
+
+**DDP width is not free on the graph arm, and the reason is the shape set.** The anneals ran at four
+ranks (`tools/run_cli.sh` takes `GPU=4` and runs the body under `torchrun`; `accumulation_steps` has
+to come down by the same factor to hold `micro_batch_tokens`, and it is a CLI flag). Steady state was
+**1.0 s/step against the trunk's 3.29 s/it on one card**, which is the split working. But splitting
+the step across ranks changes which examples land in a micro-batch, so the collator emits `(B, L, N)`
+triples the single-rank trunk never produced, and each new one pays a full Triton autotune — one was
+logged at 330 s for 13 choices. About 45 such stalls per graph cell accounted for **96 % of the wall
+clock**, and the flat arm, whose flex kernels are far cheaper to tune, recompiled just as often and
+finished its 561 steps in six minutes. The stalls saturate rather than recur, so the cost is bounded
+and lands in the shared inductor cache — but four ranks made the graph anneal *slower* than one rank
+against a warm cache would have been. Bucketing `B` on the same ladder as `L` and `N` for training
+batches, the way `evaluate/scorers.py` already does for evaluation, would make the shape set
+independent of the rank count and is the fix worth carrying into the next campaign.
+
+## 8. What arm 2 measured
+
+Six trunks at 5,599 steps, then six `anneal` forks decaying to `lr/10` over 561 steps
+(`configs/forks/anneal_molecule_generalist.jsonc`). The annealed checkpoint is the reportable model
+and every number below is read off it; the trunk's own scores are milestone measurements, not
+results. Run 2026-09-06 at four ranks a cell — the flat anneals took 13 to 18 minutes each, the
+graph anneals 2h16 to 2h25.
+
+### Property 1 holds, and holds harder than the trunk showed
+
+Ten relabelings of every test molecule, the margin's spread across them, against the floor the same
+run measures (§7, `evaluate/builtin.py`):
+
+| set | graph spread | graph control | flat spread | graph AUROC spread | flat AUROC spread |
+|---|---:|---:|---:|---:|---:|
+| BACE | 0.2500 | 0.2500 | 6.2083 | 0.0029 | 0.1256 |
+| BBBP | 0.2917 | 0.2500 | 11.5833 | 0.0028 | 0.0767 |
+| HIV | 0.3333 | 0.2500 | 3.2500 | 0.0109 | 0.1399 |
+| SIDER | 0.2917 | 0.2917 | 8.9531 | 0.0030 | 0.0305 |
+| Tox21 | 0.2917 | 0.3333 | 5.1667 | 0.0080 | 0.0701 |
+
+**All fifteen graph cells pass**, and the margin's quantum is 0.125 everywhere, so the graph arm sits
+at two to three grid steps — the floor, not a signal. The flat arm is 10× to 40× wider on the raw
+margin and 10× to 45× wider on the AUROC. The `symmetric` stratum is empty on every task, so nothing
+here is diluted by molecules a relabeling cannot move.
+
+The sharper statement is what the anneal did to each arm. The decay grows the margins, and the flat
+arm's spread grows with them — BACE 5.17 → 6.21, Tox21 3.46 → 5.17 — exactly as `_control_spread`
+describes. The graph arm's did not move off the quantum. The invariance is not merely tight at one
+point in training; it survives the margins growing underneath it, on an arm whose comparison does
+not.
+
+**The trunk read 11/15 on the same weights, and that was the instrument.** The verdict compared a
+spread maximised over ten permutation passes against a control maximised over three, and a maximum
+over ten draws of the same noise is larger than a maximum over three — so the control read low, and
+read low exactly where the margins were tight enough for one grid step to decide. Every one of the
+four trunk failures missed by a single quantum. The control now runs `n_permutations` passes and the
+comparison allows one quantum above it, because both sides are maxima of the same grid-valued noise
+and a strict `<=` between two of those is a coin flip. What the test has to separate is two orders of
+magnitude away.
+
+### Arm 2 − arm 1 on the primary three
+
+Paired within (dataset, seed) against `molecules/PLAN.md` §8.4.8, positive meaning the generalist
+beats the specialist:
+
+| set | arm | arm 2 | arm 1 best-val | Δ | arm 1 last-ckpt | Δ (primary) |
+|---|---|---:|---:|---:|---:|---:|
+| BACE | graph | 0.8185 | 0.8202 | −0.0018 | 0.8133 | **+0.0052** |
+| BACE | flat | 0.8667 | 0.8224 | +0.0443 | 0.8338 | **+0.0329** |
+| BBBP | graph | 0.7093 | 0.7056 | +0.0037 | 0.6882 | **+0.0211** |
+| BBBP | flat | 0.7113 | 0.7157 | −0.0044 | 0.6870 | **+0.0243** |
+| HIV | graph | 0.7374 | 0.7691 | −0.0317 | 0.7336 | **+0.0038** |
+| HIV | flat | 0.7291 | 0.7617 | −0.0326 | 0.7401 | **−0.0110** |
+
+Pooled over the nine (set, seed) pairs, against the last-checkpoint pairing that §7 makes primary:
+graph **+0.0100**, winning 7 of 9; flat **+0.0154**, winning 6 of 9. Against best-val: graph −0.0099
+(4/9), flat +0.0024 (5/9).
+
+**The honest reading is that training on every molecule task at once neither helps nor hurts
+scaffold-split property prediction at a resolution these seeds can see.** The pooled effect is one to
+one-and-a-half ROC-AUC points with a per-pair sd of 0.025 to 0.040, and §8.4.8's own power table puts
+three seeds at 0.05 — so this is a null at the resolution available, not a demonstrated gain. It is
+also the answer to the question the campaign was built to ask: the free structural labels did not buy
+a measurable improvement, and they did not cost one either. The direction is consistent across both
+arms and both pairings bar one cell, which is worth more than the magnitude.
+
+### Where the arms actually differ
+
+Within arm 2, averaged over three seeds on the annealed checkpoint:
+
+| category | graph | flat |
+|---|---:|---:|
+| property classification (5 sets, ROC-AUC) | 0.7795 ± 0.0060 | **0.7969 ± 0.0080** |
+| structural probes (9 tasks, EM) | **0.9408 ± 0.0003** | 0.9359 ± 0.0069 |
+| `bond_path`, held out | **0.0667 ± 0.0061** | 0.0420 ± 0.0053 |
+| `longest_chain`, held out | **0.1013 ± 0.0323** | 0.0460 ± 0.0106 |
+| `clintox` FDA_APPROVED, held out | 0.4046 ± 0.0147 | **0.5550 ± 0.0769** |
+
+The split is clean and it runs along one line: **the flat arm wins where pretrained chemistry helps
+and the graph arm wins where the answer is a function of the graph.** Property prediction on these
+corpora leans on scaffold and functional-group patterns a model that has read a great deal of SMILES
+has some purchase on, and the flat arm hands the molecule to those weights in the notation they were
+trained in. The graph arm presents a representation the base model has never seen and must learn the
+mapping through LoRA and the bias alone. On the structural probes — ring membership, ring size,
+functional-group atom membership — and on both held-out structural tasks, where pretraining buys
+nothing, the ordering reverses; `longest_chain` by a factor of 2.2.
+
+One number is worth more than its size: the graph arm's probe seed spread is **±0.0003** against the
+flat arm's ±0.0069, twenty times tighter. A representation learned from scratch converges to the same
+place every time; one that leans on a pretrained prior inherits that prior's seed sensitivity.
+
+This is a mechanism consistent with the data, not one these runs test. Separating it would need an
+arm holding both representations, or the same comparison against a base model with no chemistry
+pretraining, and neither exists here. Two counter-explanations were tested and discounted: corpus
+size does not predict the gap (r = +0.18 between the gap and a task's examples per step, and SIDER is
+among the largest and still 0.030 behind), and under-training does not explain it either — the
+trunk's worst graph deficit, `ring_count` at 0.698 against 0.859, closed to 0.877 against 0.910
+through the anneal, while the property gap survived the decay.
+
+### Generation, with §5's disclosure attached
+
+| | graph | flat |
+|---|---:|---:|
+| ChEBI-20 METEOR | 0.4573 | 0.4711 |
+| ChEBI-20 ROUGE-L | 0.3059 | 0.3146 |
+| g2s validity | 0.0560 | 0.1527 |
+| g2s `exact_match` | 0.0000 | 0.0193 |
+| g2s `roundtrip_match` | 0.0000 | 0.0300 |
+
+On captioning, where both arms face the same task, they perform the same. **The g2s rows are not an
+arm comparison and must never be quoted as one** (§5): the flat twin's matched task is
+canonicalization, and its input is a randomized SMILES *with stereo* that already spells out every
+atom and bond of the answer in the answer's own alphabet. The graph arm generates the string from a
+graph. The two numbers measure different tasks.
+
+What the graph column does say on its own terms is that the graph arm emits a valid SMILES about 6 %
+of the time and a correct one never, across all three seeds. That is a real capability limit and
+belongs in any write-up — as a statement about graph-to-SMILES at this scale and budget, not as a
+deficit relative to the flat arm.
+
+**The trunk's generative numbers are not comparable to these.** They were produced by the
+right-padded one-row generation path and are understated for the reason §7 gives, so a trunk → anneal
+delta on ChEBI-20 or g2s mixes the decay's effect with the padding fix. Only the annealed column
+stands alone.
+
+### Property 2, leakage, and the partition
+
+`base_exact` reports `within_tolerance` 1.0 with `max_abs_diff` exactly 0.0 on all six annealed
+cells: adapters off reproduces base Llama bit for bit, so the graph machinery is additive and
+removable. `leakage` passes on all six — the stereo tag ablation moves `stereo_assigned` by 0.038 to
+0.056 against a line of 0.9596, well inside the band. No cell scored a molecule its arm's training
+saw in another role.
+
+### What is still owed
+
+A general-text held-out loss, adapter-on against adapter-off, is still not measured, and the
+assistant goal makes text ability something this campaign should have reported. The primary claim is
+underpowered by design at three seeds; §8.4.8's table says sixteen would be needed for the effect
+size actually observed. Both are statements about what the next campaign should carry, not caveats
+that change what is written above.
+
+## 9. Optional last step — a larger suite
 
 After the 1B result is in, and only then: the same registry, mixture, partition and harness on
 **Llama-3.2-3B** and **Llama-3.1-8B**. Same adapter (`modeling_gtlm_llama.py`), same tokenizer

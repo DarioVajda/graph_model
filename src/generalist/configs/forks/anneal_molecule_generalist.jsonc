@@ -40,11 +40,18 @@
   },
 
   // 280, not the cross-check's 50. `eval_steps` scores the decay on its way down,
-  // and on this campaign a scoring firing is not cheap: `in_mixture` alone ran 65
-  // minutes at `max_samples: 500` on the flat arm, which is why the trunk moved it
-  // to `milestone` (`config.py DEFAULT_VALIDATORS`). At 50 a 560-step decay would
+  // and when this was written a scoring firing was not cheap: the trunk's first
+  // milestone cost 133 minutes on the flat arm, which is why it moved to
+  // `milestone` (`config.py DEFAULT_VALIDATORS`). At 50 a 560-step decay would
   // fire eleven times and the anneal would cost more than the run it closes. 280
   // gives a midpoint and an endpoint, which is enough to see the decay behaving;
   // the number that matters is scored at the end of the leg regardless.
+  //
+  // That firing is now ~12 minutes on one card and ~4 on four
+  // (`MOLECULE_GENERALIST.md` §7), so 50 would cost roughly two hours rather than
+  // twenty-four and is affordable for the first time. Left at 280 anyway: what a
+  // finer cadence buys is resolution on a curve that closes a leg of 560 steps,
+  // and two points already show whether the decay is behaving. Lower it when
+  // there is a question about the *shape* of the decay to answer.
   "eval_steps": 280
 }

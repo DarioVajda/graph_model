@@ -275,6 +275,18 @@ MIXTURES = {
 #: resolution of a *diagnostic* curve — `in_mixture` carries no ``end`` cadence,
 #: so it was never the source of a reported number. What it buys is a campaign
 #: that finishes inside its chunk instead of spilling across three.
+#:
+#: **The hour is now eight minutes, and the cadence should go back on the next
+#: campaign.** The firing was slow because generation ran one example per
+#: `generate` call, and it ran one at a time because a right-padded batch cannot
+#: be continued (`MOLECULE_GENERALIST.md` §7). Batched, left-padded and on the
+#: flex prefill it is 8.5x faster on the graph arm and 11.2x on the flat one,
+#: and sharded across four ranks another 3.4x on top — so the 133-minute flat
+#: firing measured here is about 12 minutes on one card. At that price
+#: ``steps:1000`` costs a run under an hour of measurement and gives back the
+#: five-point curve. It is **not** changed now: ``validator_specs`` is inside
+#: ``config_hash``, so editing this tuple while the six arm-2 cells are live
+#: would refuse their own resume. Change it with the next campaign's configs.
 DEFAULT_VALIDATORS = (
     {"name": "in_mixture", "cadence": "milestone", "max_samples": 500},
     {"name": "held_out", "cadence": "milestone", "max_samples": 500},
