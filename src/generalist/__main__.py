@@ -2,13 +2,18 @@
 D8.1 — the command line: ``validate``, ``data_prep``, ``train``, ``resume``,
 ``fork``, ``eval``.
 
-    python3 -m src.generalist validate  --config src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
-    python3 -m src.generalist data_prep --config <cfg>
-    python3 -m src.generalist train     --config <cfg>
-    python3 -m src.generalist resume    --from latest --config <cfg>
-    python3 -m src.generalist fork      --from <ckpt> --mode anneal --config <cfg>
-    python3 -m src.generalist eval      --checkpoint <ckpt> --config <cfg>
+    python3 -m src.generalist validate  --config src/generalist/configs/runs/molecule_generalist.jsonc --cell molecule_generalist_graph_s0
+    python3 -m src.generalist data_prep --config <cfg> --cell <cell>
+    python3 -m src.generalist train     --config <cfg> --cell <cell>
+    python3 -m src.generalist resume    --from latest --config <cfg> --cell <cell>
+    python3 -m src.generalist fork      --from <ckpt> --mode anneal --config <cfg> --cell <cell>
+    python3 -m src.generalist eval      --checkpoint <ckpt> --config <cfg> --cell <cell>
     python3 -m src.generalist --init my_run          # write a config under configs/probes/
+
+``--cell`` names one run of a config that holds several. A campaign is one file
+(`configs/README.md`), so the flag is how a single cell of it is addressed; a
+config holding one run does not take it and a config holding several refuses to
+guess.
 
 This file is a dispatcher and nothing else: every mode resolves a
 :class:`~src.generalist.config.RunConfig`, hands it to `wiring.py`, and prints.
@@ -44,6 +49,7 @@ from .config import (
     PROBES_DIR,
     ConfigError,
     RunConfig,
+    config_cells,
     load_config_file,
     shell_assignments,
     write_template,
@@ -93,6 +99,10 @@ def add_config_flags(parser: argparse.ArgumentParser) -> None:
 def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=None, metavar="PATH",
                         help="a .jsonc run config (the same file the sweep runner takes).")
+    parser.add_argument("--cell", default=None, metavar="NAME",
+                        help="which run of a multi-cell config to resolve "
+                             "(a campaign is one file; see configs/README.md). "
+                             "Omit for a config that holds a single run.")
     parser.add_argument("--runs-jsonl", default=None,
                         help="(runner) JSONL to append this run's record to.")
     parser.add_argument("--run-id", default=None,
@@ -116,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
         "validate", help="resolve the config, check the partition, print the "
                          "mixture table and the step budget. No GPU.")
     add_common(validate)
+    validate.add_argument("--cells", action="store_true",
+                          help="print the config's cell names, one per line, "
+                               "and exit. This is what a campaign is looped over.")
     validate.add_argument("--json", action="store_true",
                           help="also print the resolved config as JSON.")
     validate.add_argument("--print-shell", action="store_true",
@@ -191,7 +204,7 @@ def config_from_args(args) -> RunConfig:
     """``RunConfig`` defaults, then the ``--config`` file, then explicit flags."""
     values = {}
     if getattr(args, "config", None):
-        values.update(load_config_file(args.config))
+        values.update(load_config_file(args.config, getattr(args, "cell", None)))
     for spec in fields(RunConfig):
         given = getattr(args, spec.name, None)
         if given is not None:
@@ -451,6 +464,13 @@ def load_fork_config(path, args, config: RunConfig) -> dict:
         out["decay_steps"] = int(args.decay_steps)
     out.setdefault("tokens_per_step", config.tokens_per_step)
     out.setdefault("seed", config.seed)
+    # A leg continues the parent's training distribution, so it has to resolve the
+    # mixture the way the parent did. Without this the fork water-fills against
+    # nothing and draws at the PRESET shares while the trunk drew at the thinned
+    # ones — which is not a smaller error than it sounds: it is a mixture change
+    # in the middle of a run, and on the 2x campaign it doubled what the anneal
+    # asked of BBBP and BACE.
+    out.setdefault("budget_scale", config.budget_scale)
     if args.fork_mode == "anneal":
         out.setdefault("min_factor", config.decay_min_factor())
     # D7.4, applied before anything is written: a fork may select, but never on
@@ -467,9 +487,19 @@ def mode_fork(config: RunConfig, args) -> int:
     fork_config = load_fork_config(args.fork_config, args, config)
     registry, adapter_config = wiring.build_registry(config)
 
+    # The checkpoint records the mixture RESOLVED — name, weight, passes,
+    # cap_per_pass — which is everything a fork needed before blocks existed and
+    # is now missing two fields. `block` and `floor` decide how the water-filling
+    # reallocates a thinned share, so without them every task lands in a block of
+    # its own and a leg of a `budget_scale` run cannot resolve at all. The config
+    # in hand is the parent's own, so hand over its preset entries rather than the
+    # checkpoint's stripped copy.
+    parent_mixture = config.mixture_entries()
+
     if args.dry_run:
         plan = plan_fork(args.from_, args.fork_mode, fork_config,
-                         registry=registry, run_dir=args.run_dir)
+                         registry=registry, run_dir=args.run_dir,
+                         parent_mixture=parent_mixture)
         print(json.dumps(plan.to_json(), indent=2, sort_keys=True, default=str))
         return 0
 
@@ -485,6 +515,7 @@ def mode_fork(config: RunConfig, args) -> int:
         validators=validators, eval_sets=eval_sets, lineage=lineage)
 
     result = fork(args.from_, args.fork_mode, fork_config, registry=registry,
+                  parent_mixture=parent_mixture,
                   run_dir=args.run_dir, results_dir=config.lineage_dir(),
                   lineage=lineage, trainer_factory=trainer_factory,
                   validate=validate, runs_jsonl=config.runs_jsonl())
@@ -554,6 +585,15 @@ def main(argv=None) -> int:
     if not args.mode:
         parser.print_help()
         return 2
+    if getattr(args, "cells", False):
+        # Before the config is resolved, because the whole point is that a
+        # multi-cell config cannot resolve without being told which cell.
+        if not args.config:
+            print("--cells needs a --config to list.", file=sys.stderr)
+            return 2
+        for name in config_cells(args.config):
+            print(name)
+        return 0
 
     config = config_from_args(args)
     return MODE_FUNCTIONS[args.mode](config, args)

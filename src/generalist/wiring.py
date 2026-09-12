@@ -126,7 +126,8 @@ def resolve_mixture(config: RunConfig, registry: Registry, *, steps=None,
     return resolve(registry, config.mixture_entries(),
                    tokens_per_step=config.tokens_per_step, steps=steps,
                    min_examples_per=config.min_examples_per,
-                   allow_held_out=allow_held_out)
+                   allow_held_out=allow_held_out,
+                   budget_scale=config.budget_scale)
 
 
 def passes_needed(mixture, registry: Registry) -> dict:

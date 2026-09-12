@@ -48,6 +48,7 @@ from src.generalist.config import (
     VALIDATOR_SETS,
     ConfigError,
     RunConfig,
+    config_cells,
     load_config_file,
     runnable_configs,
     shell_assignments,
@@ -61,6 +62,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 #: listed: a config that nobody remembered to register here is exactly the one
 #: that stops resolving unnoticed.
 SHIPPED = runnable_configs()
+
+#: Every *cell* of every shipped config, as ``(path, cell name)``. A campaign is
+#: one file holding one cell per (arm, seed) (`configs/README.md`), so the file
+#: is no longer the unit a test can check — resolving a multi-cell config once
+#: would leave eleven of its twelve runs unvalidated.
+SHIPPED_CELLS = [(path, cell) for path in SHIPPED for cell in config_cells(path)]
 
 
 def _config(**overrides) -> RunConfig:
@@ -101,10 +108,11 @@ def test_discovery_covers_both_directories_and_skips_the_fork_overlays():
     assert not [p for p in SHIPPED if p.startswith(forks + os.sep)]
 
 
-@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: os.path.basename(p))
-def test_shipped_configs_validate(path):
-    """Every runnable shipped config resolves and passes ``RunConfig.validate``."""
-    config = RunConfig(**load_config_file(path)).validate()
+@pytest.mark.parametrize("path,cell", SHIPPED_CELLS, ids=lambda v: os.path.basename(v))
+def test_shipped_configs_validate(path, cell):
+    """Every cell of every shipped config resolves and passes ``RunConfig.validate``."""
+    config = RunConfig(**load_config_file(path, cell)).validate()
+    assert config.run_name == cell
     assert config.mixture in MIXTURES
     assert config.validators in VALIDATOR_SETS
     # Property 2, on the file rather than on a constructed object: a flat arm
@@ -113,71 +121,193 @@ def test_shipped_configs_validate(path):
         assert config.bias.strip() == "none"
 
 
-def test_the_campaign_cells_differ_only_where_they_are_meant_to():
-    """Six files, one recipe. This is what keeps them from drifting apart.
+def test_task_passes_overrides_one_corpus_and_refuses_a_generator():
+    """The repeat cap is per task, and only a corpus has one.
 
-    There is no config inheritance, so the arm-2 campaign is six complete files
-    that are copies of one another everywhere except the axes it varies: the run
-    name, the seed, and — between arms — `arm`, `bias` and `tokens_per_step`.
-    Any other field that comes to differ is a silent recipe change in one cell of
-    a six-cell comparison, which is precisely the failure that would be read as a
-    seed effect.
-
-    Two fields are on the allowed list and both are allowed for the same reason —
-    they are the knobs that *hold* the recipe equal rather than vary it, and the
-    two arms need different values to arrive at the same place:
-
-    * `tokens_per_step`, because matching the arms in examples requires it to
-      differ — a flat example is ~3.5x shorter (`..._flat_s0.jsonc`).
-    * `accumulation_steps`, because it only sets `micro_batch_tokens` and so
-      changes nothing about which examples a step draws or what gradient it
-      produces (D4.4). The graph arm needs 16 to fit one card; the flat arm has
-      no such problem and 8 keeps its micro-batches from getting pointlessly
-      small.
-
-    Both are still asserted single-valued *within* an arm, which is where a
-    genuine drift between seeds would show up.
+    ``task_passes`` is how a budget the mixture cannot otherwise sustain gets
+    bought, so it has to be exact about what it is buying: a generator draws a
+    fresh pass every time (D4.2) and has no repeats to raise, and silently
+    accepting the override would put a number in the config that does nothing.
     """
-    cells = {os.path.basename(p): RunConfig(**load_config_file(p))
-             for p in SHIPPED
-             if os.path.basename(p).startswith("001_molecule_generalist_")}
-    assert len(cells) == 6, f"expected six campaign cells, found {sorted(cells)}"
+    config = _config(mixture="molecule_generalist", validators="default",
+                     task_passes="mol/chebi20=7")
+    entries = {e["name"]: e for e in config.mixture_entries()}
+    assert entries["mol/chebi20"]["passes"] == 7
+    assert entries["mol/sider"]["passes"] == 6          # untouched
 
-    varies = {"run_name", "seed", "arm", "bias", "tokens_per_step",
-              "accumulation_steps"}
+    with pytest.raises(ConfigError, match="generator"):
+        _config(mixture="molecule_generalist", validators="default",
+                task_passes="mol/g2s=7").mixture_entries()
+    with pytest.raises(ConfigError, match="task_passes names"):
+        _config(mixture="molecule_generalist", validators="default",
+                task_passes="mol/nope=7").mixture_entries()
+    with pytest.raises(ConfigError, match="not an integer"):
+        _config(task_passes="mol/chebi20=seven").pass_overrides()
+
+
+@pytest.mark.parametrize("scale", [0, -1.0])
+def test_a_bad_budget_scale_is_refused_at_validate(scale):
+    with pytest.raises(ConfigError, match="budget_scale"):
+        _config(budget_scale=scale).validate()
+
+
+def test_a_multi_cell_config_refuses_to_pick_a_cell_for_the_caller():
+    """Naming no cell is an error, not a default.
+
+    A campaign file holds twelve runs and resolving it without a cell would have
+    to guess which one — and a wrong guess is a job that trains the wrong arm
+    under the right name. The error names the cells, so the fix is in the message.
+    """
+    path = os.path.join(CONFIGS_DIR, "runs", "molecule_generalist.jsonc")
+    cells = config_cells(path)
+    assert len(cells) > 1
+    with pytest.raises(ConfigError) as excinfo:
+        load_config_file(path)
+    assert "molecule_generalist_graph_s0" in str(excinfo.value)
+    with pytest.raises(ConfigError):
+        load_config_file(path, "no_such_cell")
+
+
+#: The campaign's legs — one arm each — and the three seeds each runs at. The
+#: extended-horizon rerun of two of them lives in `probes/` until it reports.
+CAMPAIGN_LEGS = ("molecule_generalist_graph", "molecule_generalist_flat",
+                 "notation_selfies", "notation_inchi")
+CAMPAIGN_SEEDS = (0, 1, 2)
+
+#: What a campaign cell may differ from its siblings in. Everything else is the
+#: recipe, and a recipe that drifts in one cell of a twelve-cell comparison reads
+#: as a seed effect rather than as the mistake it is.
+#:
+#: * `run_name`, `seed`, `arm`, `bias` — the experiment's own axes.
+#: * `tokens_per_step`, because matching the arms in EXAMPLES requires it to
+#:   differ: a SMILES example is ~3.5x shorter than a graph one.
+#: * `accumulation_steps`, `gpus_per_config`, `chunks` — execution shape. The
+#:   first only sets `micro_batch_tokens` and so changes nothing about which
+#:   examples a step draws or what gradient it produces (D4.4); the other two are
+#:   unhashed Slurm fields.
+#: * `validators`, because the notation arms cannot run `perm_spread` — SELFIES
+#:   and InChI are canonical-only, so there is no re-ordered string to rewrite.
+CAMPAIGN_VARIES = {"run_name", "seed", "arm", "bias", "tokens_per_step",
+                   "accumulation_steps", "gpus_per_config", "chunks",
+                   "validators"}
+
+
+#: What each campaign cell resolved to when its numbers were measured. A config
+#: in `runs/` is a result artifact: reorganising the files is fine, but changing
+#: what a cell resolves to breaks the tie between a quoted number and the run that
+#: produced it, and `config_hash` is the only thing that would notice.
+CAMPAIGN_HASHES = {
+    "molecule_generalist_graph_s0": "297fc38e3f200f10",
+    "molecule_generalist_graph_s1": "5a97f979a0edcce7",
+    "molecule_generalist_graph_s2": "b0a9b083dda3be97",
+    "molecule_generalist_flat_s0": "1ab2083371fb2235",
+    "molecule_generalist_flat_s1": "18cbc9c64bdc8e09",
+    "molecule_generalist_flat_s2": "63645809bc0e8303",
+    "notation_selfies_s0": "70b360fc773a73a6",
+    "notation_selfies_s1": "96b1730fea93c71d",
+    "notation_selfies_s2": "1e5e797ea2228b58",
+    "notation_inchi_s0": "456f0137e9bc64fb",
+    "notation_inchi_s1": "6d2edee2c6459bdf",
+    "notation_inchi_s2": "c2a8b450703e4c3d",
+}
+
+
+def test_the_campaign_still_resolves_to_the_runs_that_were_measured():
+    """The twelve cells hash to what their run records carry.
+
+    Every number in `configs/runs/molecule_generalist.md` was measured from a
+    checkpoint whose record names one of these digests. Editing the file is
+    allowed — merging twelve configs into it did not move a single one — but an
+    edit that changes what a cell *resolves to* silently detaches the write-up
+    from the runs, and nothing else in the suite would catch it.
+    """
+    cells = config_cells(os.path.join(CONFIGS_DIR, "runs", "molecule_generalist.jsonc"))
+    # A subset, not an equality: cells added for a campaign that has not run yet
+    # have no measured digest to pin, and pinning one before the run would be
+    # pinning a guess.
+    assert set(CAMPAIGN_HASHES) <= set(cells)
+    for name, digest in CAMPAIGN_HASHES.items():
+        assert RunConfig(**cells[name]).config_hash()[:16] == digest, (
+            f"{name} no longer resolves to the run that was measured")
+
+
+def test_the_campaign_cells_differ_only_where_they_are_meant_to():
+    """One file, twelve cells, one recipe — asserted rather than assumed.
+
+    Merging the campaign into a single config makes most of this structural: a
+    field written once at the top level cannot drift between cells. What is still
+    worth asserting is the other half — that the bundle and the seed axis vary
+    *only* what they are meant to, that the arms are matched where the comparison
+    depends on it, and that the file really does hold the twelve cells the
+    write-up quotes.
+    """
+    path = os.path.join(CONFIGS_DIR, "runs", "molecule_generalist.jsonc")
+    cells = {name: RunConfig(**values)
+             for name, values in config_cells(path).items()}
+    assert set(cells) == {f"{leg}_s{seed}" for leg in CAMPAIGN_LEGS
+                          for seed in CAMPAIGN_SEEDS}
+
+    def leg_of(name):
+        return name.rsplit("_s", 1)[0]
+
     reference = next(iter(cells.values()))
     for name, config in cells.items():
         for spec in dataclasses.fields(RunConfig):
-            if spec.name in varies:
+            if spec.name in CAMPAIGN_VARIES:
                 continue
             assert getattr(config, spec.name) == getattr(reference, spec.name), (
                 f"{name} differs from the campaign recipe in {spec.name!r}")
 
-    seeds = {(c.arm, c.seed) for c in cells.values()}
-    assert seeds == {(a, s) for a in ("graph", "flat") for s in (0, 1, 2)}
-    # Within an arm the token budget is one number; across arms it must not be,
-    # because the arms are matched in examples and a flat example is ~3.5x shorter.
-    for arm in ("graph", "flat"):
-        for field in ("tokens_per_step", "accumulation_steps"):
-            values = {getattr(c, field) for c in cells.values() if c.arm == arm}
-            assert len(values) == 1, f"{arm} cells disagree on {field}: {values}"
-    assert ({c.tokens_per_step for c in cells.values() if c.arm == "graph"} !=
-            {c.tokens_per_step for c in cells.values() if c.arm == "flat"})
+    # Within a leg every varying field is one number, which is where a genuine
+    # drift between seeds would show up.
+    for leg in CAMPAIGN_LEGS:
+        members = [c for n, c in cells.items() if leg_of(n) == leg]
+        assert len(members) == len(CAMPAIGN_SEEDS)
+        for field in ("tokens_per_step", "accumulation_steps", "validators",
+                      "arm", "budget_scale", "max_steps"):
+            # (budget_scale and max_steps are uniform here; asserted anyway, so
+            #  a horizon change to one cell of a leg cannot pass unnoticed.)
+            values = {getattr(c, field) for c in members}
+            assert len(values) == 1, f"{leg} cells disagree on {field}: {values}"
+        assert {c.seed for c in members} == set(CAMPAIGN_SEEDS)
 
-    # The arms must still land on the same micro-batch after their two knobs are
-    # combined — that is the quantity the OOM was about, and the only reason
-    # `accumulation_steps` is allowed to differ at all.
-    micro = {c.arm: c.tokens_per_step / c.accumulation_steps for c in cells.values()}
-    assert micro["graph"] == 1024, (
-        f"the graph arm's micro-batch is {micro['graph']} tokens; 2048 is the "
-        "value that OOMed a 178 GB card at step 20")
+    # Across the arms of ONE horizon the token budget must not be shared, because
+    # the arms are matched in examples and no two of these representations
+    # measure the same tokens/example. Between horizons it may repeat: the graph
+    # arm's 16384 is the same at both, and it is the flat arm's that moves,
+    # because the water-filled shares shift the mean example length.
+    for scale in {c.budget_scale for c in cells.values()}:
+        legs = {leg_of(n): c for n, c in cells.items() if c.budget_scale == scale}
+        budgets = {c.arm: c.tokens_per_step for c in legs.values()}
+        assert len(set(budgets.values())) == len(budgets), (
+            f"two arms at budget_scale {scale} share a token budget: {budgets}")
+
+    # Every cell lands on the same micro-batch after its knobs are combined, to
+    # within the rounding the integer budgets force. That is the quantity the OOM
+    # was about, and the only reason `accumulation_steps` may differ at all.
+    for name, config in cells.items():
+        micro = config.tokens_per_step / (config.accumulation_steps
+                                          * config.gpus_per_config)
+        if config.arm == "graph":
+            assert micro == 1024, (
+                f"{name}'s micro-batch is {micro} tokens; 2048 is the value that "
+                "OOMed a 178 GB card at step 20")
+        else:
+            assert 512 <= micro <= 1088, (
+                f"{name} runs at {micro} micro-batch tokens, off the ~1024 every "
+                "other cell holds")
+
+    # Property 2 on every flat arm, not just the SMILES one.
+    for config in cells.values():
+        if config.arm != "graph":
+            assert config.bias.strip() == "none"
 
 
-@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: os.path.basename(p))
-def test_validate_mode_prints_a_mixture_table(path, capsys):
-    assert cli.main(["validate", "--config", path]) == 0
+@pytest.mark.parametrize("path,cell", SHIPPED_CELLS, ids=lambda v: os.path.basename(v))
+def test_validate_mode_prints_a_mixture_table(path, cell, capsys):
+    assert cli.main(["validate", "--config", path, "--cell", cell]) == 0
     out = capsys.readouterr().out
-    config = RunConfig(**load_config_file(path))
+    config = RunConfig(**load_config_file(path, cell))
     assert config.run_name in out
     assert config.config_hash() in out
     assert "mixture" in out

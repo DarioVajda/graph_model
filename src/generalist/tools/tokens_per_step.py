@@ -30,10 +30,12 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--cell", default=None,
+                        help="which cell of a multi-cell config to read.")
     parser.add_argument("--examples-per-step", type=float, default=32.0)
     args = parser.parse_args()
 
-    config = RunConfig(**load_config_file(args.config)).validate()
+    config = RunConfig(**load_config_file(args.config, args.cell)).validate()
     registry, _ = wiring.build_registry(config)
 
     missing = wiring.unbuilt_tasks(registry, config)

@@ -430,3 +430,148 @@ def test_registry_lookup_helpers():
     assert reg.get("mol/bace").metric == "roc_auc"
     with pytest.raises(RegistryError, match="mol/nope: not registered"):
         reg.get("mol/nope")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# budget_scale: a small corpus must not decide how long everything else trains
+#
+# One block holding all three, so a clamped corpus has somewhere to give its
+# share to. On the fixture: bace 3000 available at share 0.25, chebi 4000 at
+# 0.25, g2s a generator at 0.5, and the budget rule gives 12000 bound by bace.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ONE_BLOCK = [dict(e, block="all") for e in MIXTURE]
+
+
+def test_budget_scale_of_one_is_a_no_op():
+    """The property every result measured before this existed depends on.
+
+    At 1.0 nothing is clamped, the shares are the preset's to the digit, and the
+    mixture hash is what it was — so annotating a preset with blocks and floors
+    does not retroactively make a finished run look like a different one.
+    """
+    plain = resolve(registry(), MIXTURE, TOKENS_PER_STEP)
+    blocked = resolve(registry(), ONE_BLOCK, TOKENS_PER_STEP, budget_scale=1.0)
+    assert blocked.shares == plain.shares
+    assert blocked.shares == blocked.desired_shares
+    assert blocked.clamped == frozenset()
+    assert blocked.hash() == plain.hash()
+    assert blocked.budget_examples == plain.budget_examples == 12000
+
+
+def test_budget_scale_thins_the_corpora_that_cannot_sustain_their_share():
+    """Twice the run, and the small corpora are drawn less rather than ending it.
+
+    The exact arithmetic: at 24000 examples bace can sustain 3000/24000 = 12.5 %
+    and chebi 4000/24000 = 16.67 %, both under their 25 % preset share, so both
+    clamp and the 20.83 points they give up go to the one member of their block
+    with headroom. Every clamped corpus lands at *exactly* its pass count in
+    epochs, which is the invariant: it hands over the same examples it always
+    did, spread across a longer run instead of ending it.
+    """
+    mixture = resolve(registry(), ONE_BLOCK, TOKENS_PER_STEP, budget_scale=2.0)
+    assert mixture.budget_examples == 24000
+    assert mixture.clamped == frozenset({"mol/bace", "mol/chebi20"})
+    assert mixture.shares["mol/bace"] == pytest.approx(0.125)
+    assert mixture.shares["mol/chebi20"] == pytest.approx(4000 / 24000)
+    assert mixture.shares["mol/g2s"] == pytest.approx(1.0 - 0.125 - 4000 / 24000)
+    assert sum(mixture.shares.values()) == pytest.approx(1.0)
+
+    by_name = {e.name: e for e in mixture.entries}
+    for name in ("mol/bace", "mol/chebi20"):
+        assert mixture.epochs(by_name[name]) == pytest.approx(by_name[name].passes)
+    # A generator's passes are fresh draws, not repeats, so the column is empty
+    # rather than reporting a number that means something else.
+    assert mixture.epochs(by_name["mol/g2s"]) is None
+    assert mixture.desired_shares["mol/bace"] == pytest.approx(0.25)
+
+
+#: The real mixture's shape: a block that can absorb a clamp (Tier B, where BACE
+#: and BBBP hand their share to HIV/Tox21/SIDER) beside a block of one that
+#: cannot (ChEBI-20). The block of one is what actually stops a longer run, and
+#: it is not the task that binds the base budget — so raising *its* pass cap buys
+#: the budget without moving the base underneath the request.
+SPLIT_BLOCKS = [
+    {"name": "mol/bace", "weight": 1.0, "block": "a"},
+    {"name": "mol/g2s", "weight": 2.0, "block": "a"},
+    {"name": "mol/chebi20", "weight": 1.0, "block": "chebi"},
+]
+
+
+def test_a_block_of_one_shrinks_rather_than_refusing_a_budget_it_nearly_supports():
+    """Phase 2: a block with nobody to redistribute to spills instead of failing.
+
+    At 18000 examples ChEBI can hold 4000/18000 = 22.2 % against its 25 % target
+    — 89 % of it, inside the floor — so the run resolves and the 2.8 points it
+    cannot carry go to whatever still has headroom. Refusing here would reject a
+    budget the mixture very nearly supports, which is the wrong call for a knob
+    whose whole purpose is to stop one small source dictating the horizon.
+    """
+    mixture = resolve(registry(), SPLIT_BLOCKS, TOKENS_PER_STEP, budget_scale=1.5)
+    assert mixture.budget_examples == 18000
+    assert "mol/chebi20" in mixture.clamped
+    assert mixture.shares["mol/chebi20"] == pytest.approx(4000 / 18000)
+    assert sum(mixture.shares.values()) == pytest.approx(1.0)
+    # The spill landed on the only task with headroom, not on the other clamped one.
+    assert mixture.shares["mol/bace"] == pytest.approx(3000 / 18000)
+
+
+def test_the_spill_is_bounded_and_names_the_block_that_ran_out():
+    """Unbounded, the deficit always ends up on the generators.
+
+    At twice the budget ChEBI would hold 16.7 % against a 25 % target — 67 % of
+    it — and what it gave up would go to g2s, the one task with infinite
+    headroom. That is a different experiment arrived at by choosing a GPU budget,
+    so the floor stops it and says which block ran out.
+    """
+    with pytest.raises(RegistryError, match=r"block 'chebi'.*under the 80% floor"):
+        resolve(registry(), SPLIT_BLOCKS, TOKENS_PER_STEP, budget_scale=2.0)
+    # The bound is the thing doing the refusing, not the clamp itself.
+    relaxed = resolve(registry(), SPLIT_BLOCKS, TOKENS_PER_STEP, budget_scale=2.0,
+                      block_floor=0.6)
+    assert relaxed.shares["mol/chebi20"] == pytest.approx(4000 / 24000)
+
+
+def test_raising_a_corpus_pass_cap_buys_the_budget_back():
+    """The sanctioned way past that refusal, and it shows up in the hash.
+
+    Doubling ChEBI's passes clears it, and because ChEBI never bound the base
+    budget (BACE does, at 3000/0.25 = 12000) the target stays 24000 rather than
+    receding as the mixture grows.
+    """
+    bought = [dict(e, passes=4) if e["name"] == "mol/chebi20" else dict(e)
+              for e in SPLIT_BLOCKS]
+    mixture = resolve(registry(), bought, TOKENS_PER_STEP, budget_scale=2.0)
+    assert mixture.budget_examples == 24000
+    assert mixture.shares["mol/chebi20"] == pytest.approx(0.25)   # no longer clamped
+    assert mixture.clamped == frozenset({"mol/bace"})
+    assert mixture.shares["mol/bace"] == pytest.approx(0.125)
+    assert mixture.shares["mol/g2s"] == pytest.approx(0.625)      # absorbed, in-block
+    assert mixture.hash() != resolve(registry(), SPLIT_BLOCKS, TOKENS_PER_STEP).hash()
+
+
+def test_a_floor_stops_a_reported_benchmark_from_being_thinned_away():
+    floored = [dict(e, block="all", floor=0.2) if e["name"] == "mol/bace"
+               else dict(e, block="all") for e in MIXTURE]
+    with pytest.raises(RegistryError, match=r"mol/bace: budget .* under its floor"):
+        resolve(registry(), floored, TOKENS_PER_STEP, budget_scale=2.0)
+
+
+def test_budget_scale_needs_something_finite_to_scale():
+    tiny = [{"name": "mol/g2s", "weight": 1.0}]
+    with pytest.raises(RegistryError, match="budget_scale: the mixture has no corpus"):
+        resolve(registry(), tiny, TOKENS_PER_STEP, min_examples_per=0,
+                budget_scale=2.0)
+
+
+@pytest.mark.parametrize("scale", [0, -1.0, float("nan"), float("inf")])
+def test_a_bad_budget_scale_fails(scale):
+    with pytest.raises(RegistryError, match="budget_scale"):
+        resolve(registry(), MIXTURE, TOKENS_PER_STEP, budget_scale=scale)
+
+
+def test_an_unknown_mixture_entry_key_is_refused():
+    """A misspelled key is a silent no-op, which is the worst kind of typo here:
+    a `floors` that never floors anything reads exactly like one that works."""
+    with pytest.raises(RegistryError, match="unknown key"):
+        resolve(registry(), [dict(e, blok="all") for e in MIXTURE], TOKENS_PER_STEP)

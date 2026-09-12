@@ -71,10 +71,16 @@ NAME="${NAME:-gen_${1:-cli}}"
 SCRIPT="$LOG_DIR/$STAMP.sh"
 LOG="$LOG_DIR/$STAMP.out"
 
+# RUNMOD names the module to run, so a one-off tool under `tools/` gets the
+# container, the constraint list and the log discipline the harness modes get
+# rather than a second launcher that drifts from this one.
+#   RUNMOD=src.generalist.tools.notation_probe GPU=1 src/generalist/tools/run_cli.sh --out ...
+RUNMOD="${RUNMOD:-src.generalist}"
+
 if [ "$GPU" -gt 1 ] 2>/dev/null; then
-  RUNNER="torchrun --standalone --nproc_per_node $GPU -m src.generalist"
+  RUNNER="torchrun --standalone --nproc_per_node $GPU -m $RUNMOD"
 else
-  RUNNER="python -m src.generalist"
+  RUNNER="python -m $RUNMOD"
 fi
 
 {
@@ -111,6 +117,12 @@ echo "[cli] log: $LOG"
 
 SB=(-p "$PARTITION" -A povejmo -c "$CPUS" --mem "$MEM" -t "$TIME"
     "${GPU_ARGS[@]}" -J "$NAME" -o "$LOG" --wrap "$WRAP")
+
+# DEPENDENCY queues this behind another job ("afterok:12345"), which is what a
+# step that has to follow a run it cannot wait for needs — an anneal fork owed by
+# a trunk that is still going. Slurm then holds it whether or not the shell that
+# submitted it is still alive, which a `WAIT=1` block does not.
+[ -n "${DEPENDENCY:-}" ] && SB+=(--dependency "$DEPENDENCY")
 
 if [ "$WAIT" = "0" ]; then
   # Submit and return. `--parsable` promises one bare job id and does not

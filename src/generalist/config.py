@@ -90,7 +90,11 @@ def runnable_configs(configs_dir: str = CONFIGS_DIR) -> list:
 #: what keeps ``validate`` mode light.
 WIRED_TOKENS = ("spd", "magnetic", "magnetic_shared")
 
-ARMS = ("graph", "flat")
+#: Re-exported from `schema.py`, which owns them: an arm is a property of the
+#: example format, and a config that accepts one the schema rejects fails after
+#: the dataset is built rather than before.
+from .schema import ARMS, FLAT_ARMS  # noqa: E402  (re-export, kept beside its use)
+
 LOSS_NORMS = ("per_example", "per_token")
 
 #: Fields excluded from the config hash: two jobs of one run differ in these.
@@ -100,7 +104,7 @@ UNHASHED_FIELDS = ("run_name", "output_dir", "results_dir")
 #: the hash therefore reads from that view instead. Keeping both would make a
 #: no-op ``task_weights`` override — a task's own weight written out explicitly —
 #: read as a different run, and two spellings of one mixture are one mixture.
-DERIVED_FIELDS = ("mixture", "task_weights", "validators")
+DERIVED_FIELDS = ("mixture", "task_weights", "task_passes", "validators")
 
 
 class ConfigError(ValueError):
@@ -146,12 +150,29 @@ TIER_A_FAMILIES = (
 #: it — BACE simply inherits the binding role at 3.00 epochs and the budget moves
 #: 12 % — so the cap moves for the finite corpora as a set.
 #:
-#: This is a ceiling, not the fix. The right correction is on the sampling side:
-#: down-weight a small corpus so it is drawn less often instead of capping the
-#: run when it runs out. That changes the mixture shares every result so far was
-#: measured under, so it waits for the next campaign rather than landing between
-#: arm 1 and arm 2. Worth doing before the larger generalists.
+#: Six is a ceiling and was never the fix. The fix is on the sampling side and is
+#: now implemented: ``budget_scale`` sets the run length and `registry.resolve`
+#: **down-weights a corpus that cannot sustain its share for that long**, within
+#: its block, instead of stopping the whole run when the smallest one runs out.
+#: At ``budget_scale`` 1.0 the water-filling is a no-op and the shares below are
+#: exactly what they have always been, which is what keeps every result measured
+#: so far comparable. Six remains the per-corpus repeat ceiling and is overridable
+#: per task (``task_passes``), which is how a budget the mixture cannot otherwise
+#: sustain gets bought — explicitly, in the config, rather than silently.
 CORPUS_PASSES = 6
+
+#: Blocks, for the water-filling. A block is a design statement about what the
+#: model should be — 40 % property prediction, 25 % structure, 20 % captioning,
+#: 15 % generation — and it must NOT drift with the compute budget. So a clamped
+#: corpus gives its share to its own block and to nowhere else: BACE and BBBP
+#: hand theirs to HIV/Tox21/SIDER, and Tier B still holds 40 %.
+#:
+#: A block of one has nobody to redistribute to, so ChEBI-20 can only shrink and
+#: spill the remainder across the mixture. That is allowed, and bounded: no block
+#: may fall below ``registry.BLOCK_SHARE_FLOOR`` of its design share, which lets
+#: ChEBI carry the mixture to 2.41x. BACE's own 1 % floor binds first at 2.28x,
+#: so on this mixture a per-task floor always fires before the block floor does.
+BLOCKS = {"tier_b": "tier_b", "tier_a": "tier_a", "chebi": "chebi", "g2s": "g2s"}
 
 
 def molecule_generalist_mixture() -> tuple:
@@ -174,15 +195,23 @@ def molecule_generalist_mixture() -> tuple:
     for name in sorted(TIER_B_SIZES):
         entries.append({"name": f"mol/{name}",
                         "weight": BLOCK_SHARES["tier_b"] * root[name] / total,
-                        "passes": CORPUS_PASSES})
+                        "passes": CORPUS_PASSES, "block": BLOCKS["tier_b"],
+                        # BACE and BBBP are two of the five sets this campaign
+                        # reports, and they are also the two the water-filling
+                        # thins first. A floor makes "the model barely trained on
+                        # a benchmark it is scored on" a refusal rather than a
+                        # number nobody looked at.
+                        "floor": 0.01 if name in ("bace", "bbbp") else None})
 
     per_family = BLOCK_SHARES["tier_a"] / len(TIER_A_FAMILIES)
     for name in TIER_A_FAMILIES:
-        entries.append({"name": f"mol/{name}", "weight": per_family})
+        entries.append({"name": f"mol/{name}", "weight": per_family,
+                        "block": BLOCKS["tier_a"]})
 
     entries.append({"name": "mol/chebi20", "weight": BLOCK_SHARES["chebi"],
-                    "passes": CORPUS_PASSES})
-    entries.append({"name": "mol/g2s", "weight": BLOCK_SHARES["g2s"]})
+                    "passes": CORPUS_PASSES, "block": BLOCKS["chebi"]})
+    entries.append({"name": "mol/g2s", "weight": BLOCK_SHARES["g2s"],
+                    "block": BLOCKS["g2s"]})
     return tuple(entries)
 
 
@@ -211,6 +240,23 @@ SMOKE_MIXTURE = (
 #: 32, `lora_r` 16, `lr` 3e-4: graph 0.8220, flat 0.8598.
 CROSS_CHECK_MIXTURE = (
     {"name": "mol/bace", "weight": 1.0, "passes": 40},
+)
+
+#: The graph-to-SMILES specialist: `mol/g2s` and nothing else.
+#:
+#: §8 measured the graph arm at `exact_match` **0.0000** — 0 of 1500 attempts
+#: over three seeds — and doubling the horizon left it at exactly 0.0000 while
+#: validity fell 0.056 -> 0.040. Two readings survive that: the arm cannot
+#: serialize a graph at 1B, or a 15 % share of a sixteen-task mixture is not
+#: enough of the gradient to learn a generative task with. A specialist
+#: separates them, because it is the second reading taken to its limit — one
+#: task, the whole budget, the whole schedule.
+#:
+#: It is a mixture of one generator, so it has no finite source to set the
+#: budget from and `max_steps` is not optional here: `registry.resolve` refuses a
+#: mixture with no corpus in it unless a step count already bounds the run.
+G2S_SPECIALIST_MIXTURE = (
+    {"name": "mol/g2s", "weight": 1.0},
 )
 
 #: The smoke mixture plus the two tasks the smoke run never reached: the
@@ -242,6 +288,7 @@ MIXTURES = {
     "smoke": SMOKE_MIXTURE,
     "smoke_probe": SMOKE_PROBE_MIXTURE,
     "cross_check": CROSS_CHECK_MIXTURE,
+    "g2s_specialist": G2S_SPECIALIST_MIXTURE,
 }
 
 
@@ -347,10 +394,52 @@ SHAKEDOWN_VALIDATORS = (
     {"name": "per_example", "cadence": "end"},
 )
 
+#: The default set minus `perm_spread`, for the canonical-only notation arms of
+#: `MOLECULE_GENERALIST.md` §9 Tier 0.2 (`flat_selfies`, `flat_inchi`).
+#:
+#: **Dropped because it cannot be measured there, not because it is inconvenient.**
+#: Property 1 is read as the spread of the margin across *re-orderings* of the
+#: same molecule, and SELFIES and InChI are canonical by construction: there is no
+#: re-ordered form of either, so there is nothing to sweep. The validator refuses
+#: rather than returning a spread of zero — a zero would read as the tightest
+#: possible Property-1 pass on an arm that never had the property — and this set
+#: keeps that refusal from firing once per run. `leakage` stays: stripping
+#: stereochemistry *is* expressible in every notation, so the campaign's leakage
+#: detector keeps working here (`evaluate/builtin.py::_write_notation`).
+NOTATION_VALIDATORS = tuple(
+    spec for spec in DEFAULT_VALIDATORS if spec["name"] != "perm_spread")
+
+#: The `g2s_specialist` set: what is left of the suite when the mixture is one
+#: generative task.
+#:
+#: Six of the nine defaults have nothing to measure here and are dropped for that
+#: reason rather than for cost. `base_exact` and `perm_spread` read a ``token``
+#: or ``yesno`` margin and g2s is ``smiles``; `per_example` skips every other
+#: kind by construction; `grad_share` compares a task's share of the gradient
+#: against its configured weight, which on a mixture of one is 1.0 against 1.0;
+#: `held_out` and `leakage` want tasks a g2s-only build never materialises, so
+#: leaving them on would ask the run to build sixteen sources it does not train.
+#:
+#: `in_mixture` goes back to a step cadence, which the default set gave up when a
+#: firing cost over an hour. It is affordable again — batched left-padded
+#: generation is 8.5x faster on the graph arm and there is one task behind it
+#: rather than sixteen — and the curve is the point of the run: whether validity
+#: moves off the floor at all, and when. ``steps:1000`` rather than ``steps:500``
+#: because g2s generates 256 new tokens a row and 500 rows a split, which is the
+#: expensive half of what used to cost an hour; eleven firings over the trunk is
+#: a readable curve at a few per cent of the run.
+G2S_SPECIALIST_VALIDATORS = (
+    {"name": "in_mixture", "cadence": "steps:1000", "max_samples": 500},
+    {"name": "bias_norm", "cadence": "steps:500"},
+    {"name": "throughput", "cadence": "steps:50"},
+)
+
 VALIDATOR_SETS = {
     "default": DEFAULT_VALIDATORS,
     "smoke": SMOKE_VALIDATORS,
     "shakedown": SHAKEDOWN_VALIDATORS,
+    "notation": NOTATION_VALIDATORS,
+    "g2s_specialist": G2S_SPECIALIST_VALIDATORS,
     "none": (),
 }
 
@@ -398,6 +487,15 @@ class RunConfig:
     question_node: str = "on"
     ordering: str = "rcm"
     max_length: int = 512
+    #: How a turn is spelled: ``"plain"``, ``"chat"``, or ``None``/``"auto"`` for
+    #: D3's pairing — chat iff the backbone is an Instruct variant. Naming it
+    #: explicitly is the weights-vs-formatting control arm.
+    prompt_style: str = None
+    #: Supervise a stop token at the end of a generative answer. See
+    #: `adapters.molecules.GENERATIVE_ANSWER_KINDS` for what its absence did to
+    #: the graph arm's graph-to-SMILES column; the configs that reproduce a
+    #: number measured before 2026-09-10 pin it to ``false``.
+    answer_eos: bool = True
     tier_a_cap_per_pass: int = 4000
     tier_a_val_size: int = 500
     tier_a_test_size: int = 1000
@@ -418,6 +516,21 @@ class RunConfig:
     mixture: str = "molecule_generalist"
     #: ``"mol/bace=0.03,mol/hiv=0.12"`` — per-task weight overrides on the preset.
     task_weights: str = ""
+    #: ``"mol/chebi20=7"`` — per-task repeat-cap overrides on the preset's
+    #: ``CORPUS_PASSES``. This is how a budget the mixture cannot otherwise
+    #: sustain gets bought: `resolve` refuses a ``budget_scale`` whose binding
+    #: block is a single corpus, and names it, and raising that corpus's passes
+    #: here is the explicit decision to repeat it more. In the config, in the
+    #: hash, in the record — never inferred.
+    task_passes: str = ""
+    #: How much longer than the mixture's own feasible budget to train, as a
+    #: multiple. 1.0 is that budget exactly and makes the water-filling a no-op,
+    #: so every share is the preset's and every result measured so far stays
+    #: comparable. Above 1.0, a corpus that cannot sustain its share for that long
+    #: is down-weighted *within its block* rather than being allowed to end the
+    #: run — which is the point: 1,244 BBBP molecules should not decide how long
+    #: Tox21 trains for.
+    budget_scale: float = 1.0
     #: D4.4: the effective batch, in tokens. ``batch_size`` is derived from it,
     #: never configured. The value is chosen from the smoke run's measured s/it
     #: (DESIGN.md §10), not from a round number.
@@ -563,8 +676,33 @@ class RunConfig:
                     "not a number") from None
         return out
 
+    def pass_overrides(self) -> dict:
+        """``task_passes`` parsed. Raises on anything that is not ``name=int``."""
+        out = {}
+        for chunk in (self.task_passes or "").split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            name, sep, raw = chunk.partition("=")
+            if not sep or not name.strip():
+                raise ConfigError(
+                    f"task_passes: {chunk!r} is not 'name=passes'; the whole "
+                    "field is a comma-joined list of those")
+            try:
+                passes = int(raw)
+            except ValueError:
+                raise ConfigError(
+                    f"task_passes: {name.strip()} has passes {raw!r}, which is "
+                    "not an integer") from None
+            if passes < 1:
+                raise ConfigError(
+                    f"task_passes: {name.strip()} has passes {passes}; a corpus "
+                    "is seen at least once")
+            out[name.strip()] = passes
+        return out
+
     def mixture_entries(self) -> tuple:
-        """The preset with ``task_weights`` applied — what the registry resolves.
+        """The preset with ``task_weights`` and ``task_passes`` applied.
 
         An override for a task the preset does not contain is an error: silently
         adding a task would put it in the gradient without it appearing in the
@@ -581,15 +719,24 @@ class RunConfig:
         entries = [dict(e) for e in preset]
         names = {e["name"] for e in entries}
         overrides = self.weight_overrides()
-        unknown = sorted(set(overrides) - names)
-        if unknown:
-            raise ConfigError(
-                f"task_weights names {unknown}, which the {self.mixture!r} mixture "
-                f"does not contain (it has {sorted(names)}). Add the task to the "
-                "preset if it belongs in the run.")
+        passes = self.pass_overrides()
+        for field, given in (("task_weights", overrides), ("task_passes", passes)):
+            unknown = sorted(set(given) - names)
+            if unknown:
+                raise ConfigError(
+                    f"{field} names {unknown}, which the {self.mixture!r} mixture "
+                    f"does not contain (it has {sorted(names)}). Add the task to "
+                    "the preset if it belongs in the run.")
         for entry in entries:
             if entry["name"] in overrides:
                 entry["weight"] = overrides[entry["name"]]
+            if entry["name"] in passes:
+                if "passes" not in entry:
+                    raise ConfigError(
+                        f"task_passes names {entry['name']}, which is a generator "
+                        "in this mixture — it draws a fresh pass every time and "
+                        "has no repeat cap to raise (D4.2).")
+                entry["passes"] = passes[entry["name"]]
         return tuple(entries)
 
     def validator_specs(self) -> tuple:
@@ -624,7 +771,8 @@ class RunConfig:
             question_node=self.question_node, ordering=self.ordering,
             magnetic_q=self.magnetic_q, magnetic_m=self.magnetic_m,
             max_spd=self.max_spd, model_name=self.model_name,
-            max_length=self.max_length,
+            max_length=self.max_length, answer_eos=self.answer_eos,
+            prompt_style=self.prompt_style,
             tier_a_cap_per_pass=self.tier_a_cap_per_pass,
             tier_a_val_size=self.tier_a_val_size,
             tier_a_test_size=self.tier_a_test_size,
@@ -665,7 +813,38 @@ class RunConfig:
         """
         drop = (set(UNHASHED_FIELDS) | set(self.SLURM_FIELDS)
                 | set(DERIVED_FIELDS))
-        return {k: v for k, v in self.to_dict().items() if k not in drop}
+        payload = {k: v for k, v in self.to_dict().items() if k not in drop}
+        # `block` and `floor` describe how the water-filling REALLOCATES a share
+        # it has to take away, so they are inert unless something is clamped, and
+        # nothing is clamped below `budget_scale` 1.0 — which is itself hashed. A
+        # run that draws different data therefore still hashes differently, and
+        # annotating the preset does not retroactively make every finished run
+        # look like a different one.
+        payload["mixture_entries"] = [
+            {k: v for k, v in entry.items() if k not in ("block", "floor")}
+            for entry in payload.get("mixture_entries", [])
+        ]
+        # Same rule, same reason: at 1.0 the water-filling clamps nothing and the
+        # run draws exactly what a config written before the field existed drew.
+        # Hashing it unconditionally would say two identical runs are different.
+        if payload.get("budget_scale") == 1.0:
+            payload.pop("budget_scale")
+        # And again: ``answer_eos: false`` is what every run before 2026-09-10
+        # trained under, so a config that pins it draws byte-identical data to
+        # one written before the field existed. Hashing it would rename six
+        # finished cells and refuse their own resume.
+        if payload.get("answer_eos") is False:
+            payload.pop("answer_eos")
+        # Same rule as `MoleculeAdapterConfig.build_version`: hash the *resolved*
+        # prompt style, and only when it is not the plain one every run before
+        # this field existed used.
+        from .adapters.molecules import resolved_prompt_style
+
+        style = resolved_prompt_style(self)
+        payload.pop("prompt_style", None)
+        if style != "plain":
+            payload["prompt_style"] = style
+        return payload
 
     def config_hash(self) -> str:
         return hashlib.sha256(
@@ -693,11 +872,11 @@ class RunConfig:
         # bias is identically zero. Letting a bias arm ride along would advertise
         # a comparison that is not happening.
         tokens = self.bias_tokens()
-        if self.arm == "flat" and self.bias.strip() != "none":
+        if self.arm in FLAT_ARMS and self.bias.strip() != "none":
             raise ConfigError(
-                "the flat arm is a single-node graph, where every graph bias "
-                "vanishes by construction (Property 2). Use bias 'none' on the "
-                "flat arm so the run record cannot imply a bias was in play.")
+                f"the flat arms are single-node graphs, where every graph bias "
+                f"vanishes by construction (Property 2). Use bias 'none' on "
+                f"{self.arm!r} so the run record cannot imply a bias was in play.")
         if self.bias.strip() != "none" and not tokens:
             raise ConfigError(
                 f"bias: {self.bias!r} is empty; use 'none' for the no-bias arm")
@@ -729,6 +908,11 @@ class RunConfig:
             raise ConfigError(
                 f"max_steps: must be >= 0 (0 = the mixture's own budget), got "
                 f"{self.max_steps}")
+        if not math.isfinite(self.budget_scale) or self.budget_scale <= 0:
+            raise ConfigError(
+                f"budget_scale: must be a positive finite number (1.0 = the "
+                f"mixture's own feasible budget), got {self.budget_scale!r}")
+        self.pass_overrides()               # parses, or raises here rather than at resolve
         if self.min_examples_per < 0:
             raise ConfigError("min_examples_per: must be >= 0")
         if self.generator_passes < 0:
@@ -803,35 +987,30 @@ SBATCH_TO_FIELD = {
 _FIELD_NAMES = frozenset(f.name for f in fields(RunConfig))
 
 
-def load_config_file(path: str) -> dict:
-    """A ``.jsonc`` config as a dict of ``RunConfig`` field values.
+def _fields_from(path: str, run: dict, meta: dict) -> dict:
+    """One expanded run, as a dict of ``RunConfig`` field values.
 
-    The sweep runner's own loader is reused (`sweep/expand.py`), so a file that
-    ``python -m sweep`` accepts and a file that ``--config`` accepts are the same
-    file. Reserved runner keys are dropped; ``name`` becomes ``run_name``, which
-    is the one place the two vocabularies differ.
+    Reserved runner keys are dropped; ``name`` becomes ``run_name``, which is the
+    one place the two vocabularies differ. The reserved ``execution.sbatch`` and
+    ``chain`` blocks are folded onto the Slurm fields, so a config says how it is
+    submitted once. An explicit field wins over the block, which is what makes an
+    override possible without editing what the sweep runner reads.
 
-    The reserved ``execution.sbatch`` and ``chain`` blocks are folded onto the
-    Slurm fields, so a config says how it is submitted once. An explicit
-    top-level field wins over the block, which is what makes an override
-    possible without editing what the sweep runner reads.
-
-    A key that is neither reserved nor a field is an error. A sweep config with a
-    typo in it is otherwise a job that runs to completion with a default nobody
-    chose.
+    A key that is neither reserved nor a field is an error. A config with a typo
+    in it is otherwise a job that runs to completion with a default nobody chose.
     """
-    from sweep.expand import load_config
-
-    raw = load_config(path)
-    if not isinstance(raw, dict):
-        raise ConfigError(f"{path}: a config must be a JSON object")
-
     out = {}
-    for key, value in raw.items():
+    if "name" in meta:
+        out["run_name"] = meta["name"]
+    if "results_dir" in meta:
+        out["results_dir"] = meta["results_dir"]
+
+    for key, value in run.items():
         if key == "name":
+            # Only reachable from inside a bundle; the top-level `name` is the
+            # file's and arrives above. Mapped rather than dropped, so a cell
+            # that names itself is not silently ignored.
             out["run_name"] = value
-        elif key == "results_dir":
-            out["results_dir"] = value
         elif key in RESERVED_KEYS:
             continue
         elif key in _FIELD_NAMES:
@@ -842,7 +1021,7 @@ def load_config_file(path: str) -> dict:
                 f"reserved keys {RESERVED_KEYS}. Fields are "
                 f"{sorted(_FIELD_NAMES)}.")
 
-    sbatch = ((raw.get("execution") or {}).get("sbatch") or {})
+    sbatch = ((meta.get("execution") or {}).get("sbatch") or {})
     for key, field_name in SBATCH_TO_FIELD.items():
         if key in sbatch:
             out.setdefault(field_name, sbatch[key])
@@ -852,12 +1031,84 @@ def load_config_file(path: str) -> dict:
         gpus = sbatch["gpus"]
         out.setdefault("gpus", "|".join(str(g) for g in gpus)
                        if isinstance(gpus, list) else str(gpus))
-    chain = raw.get("chain") or {}
+    chain = run.get("chain") or {}
     if "chunks" in chain:
         out.setdefault("chunks", int(chain["chunks"]))
     if "dependency" in chain:
         out.setdefault("chain_dependency", str(chain["dependency"]))
     return out
+
+
+def config_cells(path: str) -> dict:
+    """Every run a ``.jsonc`` config resolves to, as ``cell name -> field values``.
+
+    The sweep runner's own loader is reused (`sweep/expand.py`), so a file that
+    ``python -m sweep`` accepts and a file that ``--config`` accepts are the same
+    file — and a file that expands to several runs there expands to the same
+    several here. A list value is an axis and a list of objects is a bundle of
+    keys that vary together; a file with neither resolves to exactly one cell,
+    which is every probe config and was every run config before the arm-2
+    campaign was merged into one.
+
+    **A cell's name is its ``run_name``, plus ``_s<seed>`` when the file sweeps
+    the seed.** That rule is not a convenience: a campaign's cells have to be
+    addressable one at a time — a chain is submitted per cell, and so is an
+    anneal fork — and the suffix is the convention every run directory on disk
+    already follows. Names must come out distinct, because two cells sharing one
+    would share an output directory and quietly overwrite each other.
+    """
+    from sweep.expand import SweepError, expand, load_config, split_meta
+
+    raw = load_config(path)
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: a config must be a JSON object")
+    meta, sweep = split_meta(raw)
+    try:
+        runs = expand(sweep)
+    except SweepError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+
+    seeds = {run.get("seed") for run in runs}
+    suffix_seed = len(runs) > 1 and len(seeds) > 1
+
+    cells = {}
+    for run in runs:
+        values = _fields_from(path, run, meta)
+        name = values.get("run_name")
+        if not name:
+            raise ConfigError(f"{path}: a cell has no name; give the file a "
+                              f"'name', or every bundle object a 'run_name'.")
+        if suffix_seed:
+            name = f"{name}_s{values.get('seed')}"
+        values["run_name"] = name
+        if name in cells:
+            raise ConfigError(
+                f"{path}: two cells both resolve to the name {name!r}, so they "
+                f"would share an output directory. Give the axis that separates "
+                f"them a distinct 'run_name'.")
+        cells[name] = values
+    return cells
+
+
+def load_config_file(path: str, cell: str = None) -> dict:
+    """A ``.jsonc`` config as a dict of ``RunConfig`` field values.
+
+    ``cell`` names which of a multi-cell config's runs to resolve. A file that
+    holds exactly one run needs no name and refuses one that does not match; a
+    file that holds several refuses to guess, because picking a cell for the
+    caller is picking which run the numbers came from.
+    """
+    cells = config_cells(path)
+    if cell is None:
+        if len(cells) == 1:
+            return next(iter(cells.values()))
+        raise ConfigError(
+            f"{path} resolves to {len(cells)} cells; name one with --cell. "
+            f"Cells: {', '.join(sorted(cells))}")
+    if cell not in cells:
+        raise ConfigError(
+            f"{path} has no cell {cell!r}. Cells: {', '.join(sorted(cells))}")
+    return cells[cell]
 
 
 def shell_assignments(config: "RunConfig") -> str:

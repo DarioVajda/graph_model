@@ -384,6 +384,47 @@ class TestAForkInheritsTheParentsSpentBudget:
         assert {e.passes for e in leg.mixture.entries} == {16}, \
             "the resolved mixture, not just the config, must carry the override"
 
+    def test_a_leg_resolves_at_the_parents_budget_scale(self, parent, tmp_path):
+        """A leg continues the parent's training distribution, shares included.
+
+        `budget_scale` decides whether a corpus was thinned to what it could
+        sustain, so a leg that resolves without it draws at the PRESET shares
+        against a trunk that ran at the water-filled ones — a mixture change in
+        the middle of a run, and one that shows up only as a puzzling refusal
+        when the leg then asks a small corpus for twice what it has left.
+
+        `block` has to survive the round trip for the same reason: without it
+        every task lands in a block of its own and the water-filling has nowhere
+        to reallocate a thinned share to, so the leg cannot resolve at all.
+        """
+        # One tight task and two roomy ones, in a shared block: the tight one is
+        # what the budget rule binds on and what doubling then clamps, and the
+        # other two are what its share is reallocated to. Three symmetric tasks
+        # could not show any of this — they would all clamp together.
+        tight, *roomy = TASKS
+        mixture_config = (
+            [{"name": tight, "weight": 1.0, "passes": 16, "block": "all"}]
+            + [{"name": name, "weight": 1.0, "passes": 64, "block": "all"}
+               for name in roomy])
+        plan = plan_fork(parent["ckpt"], "anneal",
+                         {"run_dir": str(tmp_path / "c"), "budget_scale": 2.0},
+                         registry=parent["registry"],
+                         parent_mixture=mixture_config)
+        (leg,) = plan.legs
+        assert leg.mixture.budget_scale == 2.0
+        assert {e["block"] for e in leg.mixture_config} == {"all"}
+        assert tight in leg.mixture.clamped, \
+            "the tight task should be the one the doubled budget thins"
+        assert leg.mixture.shares[tight] < leg.mixture.desired_shares[tight]
+        # Resolving the same leg without the scale gives different shares, which
+        # is the bug this guards: same checkpoint, same fork config, two
+        # different training distributions.
+        plain = plan_fork(parent["ckpt"], "anneal",
+                          {"run_dir": str(tmp_path / "d")},
+                          registry=parent["registry"],
+                          parent_mixture=mixture_config)
+        assert plain.legs[0].mixture.budget_scale == 1.0
+
     def test_passes_may_only_name_a_task_the_fork_already_trains(self, parent,
                                                                  tmp_path):
         with pytest.raises(ForkError, match="does not train"):

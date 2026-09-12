@@ -462,6 +462,12 @@ def plan_fork(from_ckpt: str, mode: str, config: dict, *,
             f"{parent_state.get('tokens_per_step')!r} and the config sets none. "
             "It is what turns a step budget into examples (D4.4).")
     seed = int(config.get("seed", parent_state.get("seed") or 0))
+    # Same argument as `tokens_per_step`: a leg trains the parent's mixture, so it
+    # must resolve that mixture the parent's way. `budget_scale` decides whether a
+    # corpus was thinned to what it could sustain, and resolving without it gives
+    # the leg the preset shares against a trunk that ran at the water-filled ones.
+    budget_scale = float(config.get("budget_scale")
+                         or parent_state.get("budget_scale") or 1.0)
 
     # `anneal` and `admit` train the parent's mixture, and the checkpoint records
     # it entry by entry, so a fork is self-contained from a checkpoint path. An
@@ -475,6 +481,7 @@ def plan_fork(from_ckpt: str, mode: str, config: dict, *,
     built = builder(config=config, registry=registry, parent_mixture=parent_mixture,
                     parent_state=parent_state, parent_schedule=parent_schedule,
                     parent_step=parent_step, tokens_per_step=tokens_per_step,
+                    budget_scale=budget_scale,
                     seed=seed, run_dir=run_dir, from_ckpt=from_ckpt)
 
     parent_view = {
@@ -503,7 +510,7 @@ def plan_fork(from_ckpt: str, mode: str, config: dict, *,
 
 def _plan_anneal(*, config, parent_mixture, parent_schedule, parent_step,
                  tokens_per_step, seed, run_dir, from_ckpt, registry,
-                 parent_state, **_):
+                 parent_state, budget_scale=1.0, **_):
     """Append a ``decay`` to the parent's schedule and train the parent's mixture."""
     if not parent_mixture:
         raise ForkError(
@@ -531,7 +538,7 @@ def _plan_anneal(*, config, parent_mixture, parent_schedule, parent_step,
             f"{parent_schedule!r}: {exc}") from exc
 
     mixture = _resolve(registry, mixture_config, tokens_per_step,
-                       steps=decay_steps + 1)
+                       steps=decay_steps + 1, budget_scale=budget_scale)
     _check_budget_left(mixture, parent_state, mode="anneal")
     # The decay's endpoint is a step the model must actually take. A segment of
     # `decay_steps` interpolates over [start, start + decay_steps], so the LR is
@@ -550,7 +557,8 @@ def _plan_anneal(*, config, parent_mixture, parent_schedule, parent_step,
 
 
 def _plan_admit(*, config, parent_mixture, parent_schedule, parent_step,
-                tokens_per_step, seed, run_dir, registry, parent_state, **_):
+                tokens_per_step, seed, run_dir, registry, parent_state,
+                budget_scale=1.0, **_):
     """Add the candidate at its weight, re-warm, train a fixed budget."""
     if not parent_mixture:
         raise ForkError(
@@ -602,7 +610,8 @@ def _plan_admit(*, config, parent_mixture, parent_schedule, parent_step,
             f"{parent_schedule!r}: {exc}") from exc
 
     criterion = check_criterion(config.get("criterion"))
-    mixture = _resolve(registry, mixture_config, tokens_per_step, steps=budget_steps)
+    mixture = _resolve(registry, mixture_config, tokens_per_step, steps=budget_steps,
+                       budget_scale=budget_scale)
     _check_budget_left(mixture, parent_state, mode="admit")
     legs = [ForkLeg(name="admit", start="parent", seed=seed,
                     output_dir=os.path.join(run_dir, "admit"),
@@ -766,7 +775,17 @@ def _as_mixture_config(mixture) -> tuple:
     """``[{"name", "weight", …}]`` from a config list or a resolved ``Mixture``."""
     entries = getattr(mixture, "entries", None)
     if entries is not None:
-        return tuple({"name": e.name, "weight": float(e.weight)} for e in entries)
+        out = []
+        for e in entries:
+            item = {"name": e.name, "weight": float(e.weight)}
+            # Only when set, so a mixture that never used blocks keeps producing
+            # the two-key entry it always did.
+            if getattr(e, "block", ""):
+                item["block"] = e.block
+            if getattr(e, "floor", None) is not None:
+                item["floor"] = float(e.floor)
+            out.append(item)
+        return tuple(out)
     out = []
     for entry in mixture:
         if not isinstance(entry, dict) or not entry.get("name"):
@@ -857,11 +876,12 @@ def _check_budget_left(mixture, parent_state: dict, mode: str) -> None:
         "allowance raised: add `\"passes\": {\"<task>\": <n>}` to the fork config.")
 
 
-def _resolve(registry, mixture_config, tokens_per_step, steps):
+def _resolve(registry, mixture_config, tokens_per_step, steps, budget_scale=1.0):
     if registry is None:
         raise ForkError("fork: needs a registry to resolve the child's mixture")
     return resolve(registry, [dict(e) for e in mixture_config],
-                   tokens_per_step=tokens_per_step, steps=int(steps))
+                   tokens_per_step=tokens_per_step, steps=int(steps),
+                   budget_scale=budget_scale)
 
 
 def _adapt_mixture(registry: Registry, task: str, tokens_per_step: int, steps: int,

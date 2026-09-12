@@ -7,15 +7,21 @@
 # `resume --from latest`, and each waits on its predecessor with
 # `--dependency=afterany`.
 #
-#   src/generalist/tools/chain.sh src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
-#   CHUNKS=8 TIME=12:00:00 src/generalist/tools/chain.sh <config.jsonc>
-#   DRY_RUN=1 src/generalist/tools/chain.sh <config.jsonc>     # write, don't submit
+#   src/generalist/tools/chain.sh <config.jsonc> <cell>
+#   src/generalist/tools/chain.sh src/generalist/configs/runs/molecule_generalist.jsonc molecule_generalist_graph_s0
+#   CHUNKS=8 TIME=12:00:00 src/generalist/tools/chain.sh <config.jsonc> <cell>
+#   DRY_RUN=1 src/generalist/tools/chain.sh <config.jsonc> <cell>   # write, don't submit
+#
+# The second argument names which cell of the config to submit, and one chain is
+# one cell. A campaign is a single file holding every (arm, seed) it ran
+# (`configs/README.md`), so the whole of it is a loop over the cell names —
+# `validate --cells <config>` prints them.
 #
 # Every value comes from the config file (its `execution.sbatch` and `chain`
 # blocks, folded onto the RunConfig by `load_config_file`); the environment
 # variables below override one at a time.
 #
-#   CHUNKS TIME PARTITION ACCOUNT GPUS GPUS_PER_CONFIG CPUS MEM
+#   CELL CHUNKS TIME PARTITION ACCOUNT GPUS GPUS_PER_CONFIG CPUS MEM
 #   INDUCTOR_CACHE DEPENDENCY DRY_RUN
 #
 # Three properties this script exists to have:
@@ -47,13 +53,21 @@ cd "$REPO"
 
 CONFIG="${1:-}"
 if [ -z "$CONFIG" ]; then
-  echo "usage: $0 <config.jsonc> [chunks]" >&2
+  echo "usage: $0 <config.jsonc> [cell] [chunks]" >&2
   exit 2
 fi
 if [ ! -f "$CONFIG" ]; then
   echo "FATAL: no config at $CONFIG" >&2
   exit 2
 fi
+
+# A campaign is one file and a cell of it is one run (`configs/README.md`), so
+# the second positional names which. Optional, and it stays optional: a config
+# holding a single run takes no cell and `validate` refuses one that does not
+# match, which is what keeps a typo from silently submitting the wrong arm.
+CELL="${2:-${CELL:-}}"
+CELL_FLAG=""
+[ -n "$CELL" ] && CELL_FLAG="--cell $CELL"
 
 # The submitting interpreter is the project venv, not the login node's python:
 # `validate` resolves the whole config, and that reads RDKit and networkx. The
@@ -65,7 +79,7 @@ PYTHON="${PYTHON:-$REPO/.venv/bin/python3}"
 # One call, one source of truth. `validate --print-shell` resolves the config
 # exactly as a training job will, so a config this script accepts is a config
 # that runs — and a typo fails here, before anything is queued.
-SETTINGS="$("$PYTHON" -m src.generalist validate --config "$CONFIG" --print-shell)"
+SETTINGS="$("$PYTHON" -m src.generalist validate --config "$CONFIG" $CELL_FLAG --print-shell)"
 rc=$?
 if [ $rc -ne 0 ] || [ -z "$SETTINGS" ]; then
   echo "FATAL: the config did not validate; nothing submitted" >&2
@@ -74,7 +88,7 @@ if [ $rc -ne 0 ] || [ -z "$SETTINGS" ]; then
 fi
 eval "$SETTINGS"
 
-CHUNKS="${2:-${CHUNKS:-$GEN_CHUNKS}}"
+CHUNKS="${3:-${CHUNKS:-$GEN_CHUNKS}}"
 TIME="${TIME:-$GEN_TIME}"
 PARTITION="${PARTITION:-$GEN_PARTITION}"
 ACCOUNT="${ACCOUNT:-$GEN_ACCOUNT}"
@@ -131,9 +145,9 @@ PREV=""
 for i in $(seq 1 "$CHUNKS"); do
   SCRIPT="$CHAIN_DIR/chunk_$i.sh"
   if [ "$i" -eq 1 ]; then
-    BODY="$RUNNER train --config $CONFIG"
+    BODY="$RUNNER train --config $CONFIG $CELL_FLAG"
   else
-    BODY="$RUNNER resume --from latest --config $CONFIG"
+    BODY="$RUNNER resume --from latest --config $CONFIG $CELL_FLAG"
   fi
 
   {
@@ -146,7 +160,7 @@ for i in $(seq 1 "$CHUNKS"); do
     # live run), so it falls through to a resume — which is what a requeued first
     # chunk means.
     if [ "$i" -eq 1 ]; then
-      echo "$BODY || $RUNNER resume --from latest --config $CONFIG"
+      echo "$BODY || $RUNNER resume --from latest --config $CONFIG $CELL_FLAG"
     else
       echo "$BODY"
     fi
