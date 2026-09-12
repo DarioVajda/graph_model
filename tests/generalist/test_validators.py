@@ -829,6 +829,39 @@ def test_per_example_writes_one_row_per_example(ctx):
 # perm_spread
 # ─────────────────────────────────────────────────────────────────────────────
 
+@pytest.mark.parametrize("notation,molecule", [
+    ("SMILES", "CCO"),
+    ("SELFIES", "[C][C][O]"),
+    ("InChI", "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3"),
+])
+@pytest.mark.parametrize("style", ("plain", "chat"))
+def test_the_molecule_span_survives_chat_formatting(style, notation, molecule):
+    """`perm_spread` and `leakage` rewrite the molecule in a flat prompt in place.
+
+    They find it with `_flat_molecule_span`, which under plain formatting could
+    stop at the newline before ``\\nA:``. Chat formatting closes the user turn
+    instead and there is no newline there, so an unfixed span runs to the end of
+    the string and the validator rewrites the answer along with the molecule.
+
+    **Both validators fire late** — `perm_spread` at ``end`` — so this failing in
+    production costs a whole trunk before anyone sees it. That is why it is
+    tested at the seam rather than through a second full fixture.
+    """
+    from src.generalist.evaluate.builtin import _flat_molecule_span
+
+    body = f"Question: is it toxic?\n{notation}: {molecule}"
+    text = (f"{body}\nA: Yes" if style == "plain" else
+            f"<|start_header_id|>user<|end_header_id|>\n\n{body}<|eot_id|>"
+            f"<|start_header_id|>assistant<|end_header_id|>\n\n Yes")
+
+    start, end, found = _flat_molecule_span(text)
+    assert text[start:end] == molecule
+    assert found == notation.lower().replace("inchi", "inchi")
+    # And the rewrite it exists for puts the answer back untouched.
+    assert text[:start] + "CCC" + text[end:] == text.replace(molecule, "CCC")
+
+
+
 def test_perm_spread_stratifies_by_symmetry_class(ctx):
     """Benzene has one atom symmetry class, so randomisation cannot move it and a
     pooled spread would understate the effect (`molecules/PLAN.md` §6)."""

@@ -143,6 +143,7 @@ numpy==1.26.4
     #   matplotlib
     #   pandas
     #   peft
+    #   rdkit
     #   scikit-learn
     #   scipy
     #   seaborn
@@ -206,7 +207,9 @@ peft==0.18.1
 pfzy==0.3.4
     # via inquirerpy
 pillow==12.2.0
-    # via matplotlib
+    # via
+    #   matplotlib
+    #   rdkit
 platformdirs==4.9.6
     # via wandb
 pluggy==1.6.0
@@ -258,6 +261,8 @@ pyyaml==6.0.3
     #   peft
     #   transformers
     #   wandb
+rdkit==2026.3.5
+    # via -r requirements.in
 regex==2026.4.4
     # via transformers
 requests[socks]==2.33.1
@@ -281,6 +286,8 @@ scipy==1.15.3
     #   scikit-learn
     #   torch-sparse
 seaborn==0.13.2
+    # via -r requirements.in
+selfies==2.2.0
     # via -r requirements.in
 sentencepiece==0.2.1
     # via -r requirements.in

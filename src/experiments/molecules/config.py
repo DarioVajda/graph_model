@@ -37,6 +37,13 @@ class RunConfig:
     checkpoint: str = ""
     task: str = "ring_membership"           # a Tier-A generator or a Tier-B corpus
     arm: str = "graph"                      # "graph" | "flat"
+    # The flat arm's string notation — "smiles" | "selfies" | "inchi" (NOTATIONS
+    # in data.py). Flat arm only; the graph arm never serialises a molecule to a
+    # string. "smiles" is settled and is what every number before 2026-09-06 was
+    # measured on; the other two exist for the notation ladder in
+    # `generalist/MOLECULE_GENERALIST.md` §9 Tier 0, which varies pretraining
+    # exposure while holding expressiveness fixed.
+    notation: str = "smiles"
     encoding: str = "rich_levi"             # PLAN.md §3.2 (graph arm only)
     stereo_tags: bool = True                # parity tag in atom text (never the CIP label)
     bias: str = "spd+magnetic"              # '+'-joined arm string, or "none"
@@ -48,6 +55,12 @@ class RunConfig:
     # node attends to it. This is settled, not an open axis. Changes the graph, so
     # it is part of the dataset cache key.
     question_node: str = "on"
+
+    # How a turn is spelled (`data.PROMPT_FORMATS`). None/"auto" resolves to
+    # "chat" iff the backbone is an Instruct variant, which is D3's "instruct
+    # weights + chat template, both or neither" as a default rather than as a
+    # thing to remember. Changes the node text, so it is part of the cache key.
+    prompt_style: str = None
 
     # NOTE: there is deliberately no `node_position_mode` here. GTLM supports
     # "spd_depth" (a node's tokens start at STRIDE * depth from the prompt node
@@ -176,11 +189,16 @@ class RunConfig:
         # The flat arm is a single-node graph, so every structural bias is
         # identically zero on it (Property 2). Letting a bias arm ride along would
         # advertise a comparison that is not happening.
-        if self.arm == "flat" and self.bias.strip() != "none":
+        if self.arm != "graph" and self.bias.strip() != "none":
             raise ValueError(
-                "The flat arm is a single-node graph, where every graph bias "
-                "vanishes by construction (Property 2). Use --bias none for the "
-                "flat arm so the run record cannot imply a bias was in play.")
+                "The flat arms are single-node graphs, where every graph bias "
+                "vanishes by construction (Property 2). Use --bias none for "
+                f"{self.arm!r} so the run record cannot imply a bias was in play.")
+        from .data import NOTATIONS
+
+        if self.notation not in NOTATIONS:
+            raise ValueError(
+                f"Unknown notation {self.notation!r} (expected one of {NOTATIONS}).")
 
         tokens = self.bias_tokens()
         if self.bias.strip() != "none" and not tokens:

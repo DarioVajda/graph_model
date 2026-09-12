@@ -87,6 +87,52 @@ CHEBI_DIR = os.path.join(RAW_DIR, "chebi20")
 #: the right home for tens of gigabytes of built graphs.
 DEFAULT_CACHE_ROOT = os.path.join(_REPO_ROOT, "src", "generalist", "results", "data")
 
+#: Arm -> the flat notation it serialises to (`molecules/data.py` NOTATIONS).
+#:
+#: **The notation rides on the arm rather than on `MoleculeAdapterConfig`, and
+#: that is deliberate.** `build_version` hashes every adapter-config field, so a
+#: `notation` field there would change the hash for *every* build including the
+#: default one — invalidating `42f7a14bed21f876`, which all six arm-2 cells read
+#: and every number in §8 came from. `source_path` already keys on the arm, so
+#: putting it here gives each notation its own artifact inside the *same* build,
+#: which is also the truer statement: an arm is an input representation, and a
+#: notation is one more of those.
+FLAT_NOTATIONS = {"flat": "smiles", "flat_selfies": "selfies", "flat_inchi": "inchi"}
+
+
+def _notation_for(arm: str, task: str) -> str:
+    """The notation this ``(arm, task)`` serialises to, which is not always the arm's.
+
+    **Atom-level Tier-A tasks stay in SMILES on every arm, and this is a
+    disclosure rather than a detail.** Four of the nine training families —
+    ``ring_membership``, ``aromatic_ring``, ``ring_size``, ``fg_atom_membership``
+    — ask about a *named* atom ("is atom 14 in a ring?"), which the flat arm can
+    only answer if the string marks that atom. SMILES marks it with an atom map
+    number (``[cH:14]``); SELFIES and InChI have no atom-map form at all, and
+    `flat_serialize` refuses rather than handing over an unmarked string, because
+    a question naming an atom the input does not mark is a rigged comparison
+    rather than a hard one.
+
+    So the notation ladder holds those four families at SMILES for all three flat
+    arms, which keeps the **mixture identical** across arms — same families, same
+    shares, same rows — and confines the notation manipulation to everything
+    else: all five Tier-B property sets (which are what §9 Tier 0.2 measures), the
+    five molecule-level Tier-A families, ChEBI-20 and graph-to-SMILES. The
+    alternative, dropping those families from the notation arms, would have made
+    the arms differ in their training distribution as well as their notation, and
+    a gradient across arms could then be either.
+
+    The cost is real and belongs in the write-up: about 11 % of the mixture
+    (four of nine families at the Tier-A block's 0.25 share) is the *same* SMILES
+    on all three flat arms, so the notation contrast is diluted by that much.
+    """
+    notation = FLAT_NOTATIONS.get(arm, "smiles")
+    if notation == "smiles":
+        return notation
+    from ...experiments.molecules.tasks import ATOM_LEVEL_TASKS
+
+    return "smiles" if task in ATOM_LEVEL_TASKS else notation
+
 # ── the task table ───────────────────────────────────────────────────────────
 
 #: The nine Tier-A families that train. `MOLECULE_GENERALIST.md` §1.
@@ -151,6 +197,18 @@ class MoleculeAdapterConfig:
 
     model_name: str = "meta-llama/Llama-3.2-1B"
     max_length: int = 512
+    #: How a turn is spelled (`molecules/data.py::PROMPT_FORMATS`). ``None`` or
+    #: ``"auto"`` resolves to ``"chat"`` iff ``model_name`` is an Instruct
+    #: variant — D3's "instruct weights + chat template, both or neither" as a
+    #: default. It changes every prompt node's text, so it moves `build_version`.
+    prompt_style: str = None
+    #: Supervise an end-of-text token at the end of a **generative** answer
+    #: (``text`` and ``smiles``; the single-token kinds are teacher-forced and
+    #: have nothing to stop). Off through the arm-2 campaign and the horizon
+    #: probe, and that is a defect those numbers carry — see
+    #: `GENERATIVE_ANSWER_KINDS`. On by default now; the configs that reproduce a
+    #: published number pin it back to ``false``.
+    answer_eos: bool = True
 
     # ── molecule pools ───────────────────────────────────────────────────────
     #: Corpora the Tier-A generators and graph-to-SMILES draw from. The default
@@ -257,6 +315,21 @@ class MoleculeAdapterConfig:
         payload = asdict(self)
         for drop in ("cache_root", "chebi_dir", "max_spd"):
             payload.pop(drop, None)
+        # ``answer_eos: false`` is what every build before 2026-09-10 produced,
+        # so a config that pins it must land on the build it already has rather
+        # than on a new directory holding identical bytes.
+        if payload.get("answer_eos") is False:
+            payload.pop("answer_eos")
+        # The *resolved* style, never the raw field: ``None`` and ``"plain"`` on
+        # base weights are the same bytes and must be one build, and ``None`` on
+        # instruct weights is chat and must not be. Popping the plain case keeps
+        # every hash written before the field existed.
+        from ...experiments.molecules.data import resolve_prompt_style
+
+        style = resolve_prompt_style(payload.pop("prompt_style", None),
+                                     self.model_name)
+        if style != "plain":
+            payload["prompt_style"] = style
         payload["pool"] = sorted(self.pool)
         payload["tier_b_corpora"] = sorted(self.tier_b_corpora)
         payload["regression_corpora"] = sorted(self.regression_corpora)
@@ -710,6 +783,19 @@ def register_molecule_tasks(registry: Registry, config: MoleculeAdapterConfig,
 # The molecules RunConfig this adapter drives the package with
 # ─────────────────────────────────────────────────────────────────────────────
 
+def resolved_prompt_style(config) -> str:
+    """``config``'s prompt style with D3's auto rule applied.
+
+    Takes anything carrying ``prompt_style`` and ``model_name`` — a
+    :class:`MoleculeAdapterConfig` or a generalist ``RunConfig`` — so the run
+    hash and the build hash cannot disagree about which format a run used.
+    """
+    from ...experiments.molecules.data import resolve_prompt_style
+
+    return resolve_prompt_style(getattr(config, "prompt_style", None),
+                                config.model_name)
+
+
 def _run_config(config: MoleculeAdapterConfig, task: str, arm: str):
     """A molecules ``RunConfig`` for one (task, arm).
 
@@ -724,8 +810,10 @@ def _run_config(config: MoleculeAdapterConfig, task: str, arm: str):
 
     return RunConfig(
         task=task, arm=arm, encoding=config.encoding,
+        notation=_notation_for(arm, task),
         stereo_tags=config.stereo_tags, question_node=config.question_node,
-        bias="none" if arm == "flat" else "spd+magnetic",
+        prompt_style=config.prompt_style,
+        bias="none" if arm in FLAT_NOTATIONS else "spd+magnetic",
         max_spd=config.max_spd, magnetic_q=config.magnetic_q,
         magnetic_m=config.magnetic_m, model_name=config.model_name,
         ordering=config.ordering, data_seed=config.data_seed,
@@ -1053,8 +1141,9 @@ def _draw_g2s(config, split, pass_id, pool):
 # Building — draws become graphs, graphs become a TextGraphDataset
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _flat_graph(question: str, smiles: str, answer: str):
-    """The flat arm's single-node graph, for a SMILES this adapter chose itself.
+def _flat_graph(question: str, smiles: str, answer: str, notation: str = "smiles",
+                fmt=None):
+    """The flat arm's single-node graph, for a string this adapter chose itself.
 
     Byte-identical to `dataset.build_flat_example`; it exists only because that
     function serializes the *canonical* SMILES, and graph-to-SMILES needs a
@@ -1064,33 +1153,114 @@ def _flat_graph(question: str, smiles: str, answer: str):
     """
     import networkx as nx
 
+    from ...experiments.molecules.data import NOTATION_HEADERS, PLAIN_FORMAT
+
+    fmt = fmt or PLAIN_FORMAT
+    body = f"{question}\n{NOTATION_HEADERS[notation]}: {smiles}"
     graph = nx.DiGraph()
-    graph.add_node(0, text=f"{question}\nSMILES: {smiles}\nA:{answer}",
+    graph.add_node(0, text=f"{fmt.question(body)}{fmt.answer_prefix}{answer}",
                    kind="prompt")
     graph.graph["prompt_node"] = 0
     return graph
 
 
-def _graphs_for(config, task, arm, draws, pass_id):
-    """Turn draws into arm-appropriate nx graphs, through the molecules package."""
-    from ...experiments.molecules.data import flat_serialize
+def _graphs_for(config, task, arm, draws, pass_id, answer_kind: str = ""):
+    """Turn draws into arm-appropriate nx graphs, through the molecules package.
+
+    The **answer terminator** is applied here rather than inside the builders,
+    because it is the one part of the format that depends on the answer *kind*
+    and the builders take a molecules `RunConfig` that has no notion of one. A
+    generative answer closes its turn; a ``token`` or ``yesno`` answer does not,
+    or the margin readout would score the terminator instead of the answer.
+    """
+    from ...experiments.molecules.data import flat_serialize, prompt_format
     from ...experiments.molecules.dataset import build_flat_example, build_graph_example
 
     cfg = _run_config(config, task, arm)
+    fmt = prompt_format(config.prompt_style, config.model_name)
+    terminated = answer_kind in GENERATIVE_ANSWER_KINDS
+    suffix = fmt.answer_suffix if terminated else ""
+
     graphs = []
-    for i, (mol, question, answer, named, _key, _meta) in enumerate(draws):
+    for i, (mol, question, raw_answer, named, _key, _meta) in enumerate(draws):
+        answer = f"{raw_answer}{suffix}"
         if arm == "graph":
             graphs.append(build_graph_example(mol, question, answer, named, cfg))
         elif task == G2S_TASK:
-            # A fresh randomization every pass, so the flat twin cannot memorise
-            # one spelling of a molecule it will see again (§5).
-            smiles = flat_serialize(
-                mol, canonical=False,
-                seed=(config.data_seed * 1_000_003 + pass_id * 7919 + i))
-            graphs.append(_flat_graph(question, smiles, answer))
+            notation = _notation_for(arm, task)
+            if notation == "smiles":
+                # A fresh randomization every pass, so the flat twin cannot
+                # memorise one spelling of a molecule it will see again (§5). The
+                # canonical string would make this a copy task.
+                text = flat_serialize(
+                    mol, canonical=False,
+                    seed=(config.data_seed * 1_000_003 + pass_id * 7919 + i),
+                    notation=notation)
+            else:
+                # SELFIES and InChI have no randomised form, and they do not need
+                # one: the target is canonical *SMILES*, so a canonical SELFIES or
+                # InChI input already makes this a translation between notations
+                # rather than the copy that a canonical SMILES input would be.
+                # It is a different task from the SMILES arm's canonicalization,
+                # which is one more reason §5's rule holds — the g2s column is
+                # never an arm comparison.
+                text = flat_serialize(mol, canonical=True, notation=notation)
+            graphs.append(_flat_graph(question, text, answer, notation, fmt))
         else:
             graphs.append(build_flat_example(mol, question, answer, cfg))
     return graphs
+
+
+#: The answer kinds that are scored by **generating** rather than by reading a
+#: logit at a known position — the only two that need to know where to stop.
+#:
+#: **The stop token was missing until 2026-09-10, and it cost the graph arm its
+#: whole graph-to-SMILES column.** `schema.render` supervises the answer's tokens
+#: and nothing after them, so a model trained on this data was never shown an
+#: end-of-text token and had no reason to emit one. On the single-token kinds
+#: that is invisible: the readout is a margin at one position and generation
+#: never runs. On `smiles` it is fatal. Measured on the 2x anneal, graph arm,
+#: over the whole 1,000-molecule test split:
+#:
+#:   * `exact_match` **0.0000**, and the target is a **prefix of the prediction
+#:     46.5 %** of the time — the model writes the correct canonical SMILES and
+#:     then keeps writing.
+#:   * 98.7 % of predictions run past twice the target's length, to a mean of
+#:     365 characters against a 45-character target, usually a repeating fragment
+#:     until the 256-token generation cap.
+#:
+#: So the campaign's g2s numbers measure stopping, not serialization, and the
+#: flat twin scored higher partly because a randomized SMILES input gives it a
+#: length cue the graph arm has nothing to match (33.5 % runaway against 98.7 %).
+#: ChEBI-20's caption metrics ride on the same defect.
+#:
+#: `TextGraphDataset.tokenize` has always taken ``add_eos``; this adapter simply
+#: never passed it.
+#:
+#: **Which token, and why it is `tokenizer.eos_token_id` and not a literal.**
+#: Llama-3 vocabularies carry both `<|end_of_text|>` (128001) and `<|eot_id|>`
+#: (128009) whether the checkpoint is a base or an Instruct one, so the vocabulary
+#: cannot tell you which to use — the checkpoint's own ``eos_token_id`` can, and
+#: it is 128001 on the base weights every config here names and 128009 on
+#: Instruct. Three things have to agree, and `tools/stop_token_check.py` asserts
+#: all three:
+#:
+#:   * it is the token ``generation_config.eos_token_id`` stops on (128001 for
+#:     Llama-3.2-1B), or a correct answer still runs to the generation cap;
+#:   * `tie_word_embeddings` is true and the LoRA recipe targets the attention
+#:     and MLP projections only, so the output head is **frozen** — the token has
+#:     to be one the pretrained head can already produce;
+#:   * measured on the base checkpoint, `<|end_of_text|>` has an embedding row of
+#:     norm 0.9683, 0.98x an ordinary token's. `<|eot_id|>` sits at 0.5449 —
+#:     identical to `<|reserved_special_token_0|>`, `<|eom_id|>`,
+#:     `<|finetune_right_pad_id|>` and `<|python_tag|>`, which is initialisation
+#:     and not training. **Supervising `<|eot_id|>` on base weights would ask a
+#:     frozen head to emit a token it has never emitted, and reproduce this
+#:     defect rather than fix it.**
+#:
+#: Reading ``eos_token_id`` keeps that correct through a backbone change instead
+#: of pinning a number that is right for one checkpoint family.
+GENERATIVE_ANSWER_KINDS = ("text", "smiles")
 
 
 def _answer_kind(task: str) -> str:
@@ -1103,8 +1273,16 @@ def _answer_kind(task: str) -> str:
     return "yesno"
 
 
-def _labels_fn(tokenizer, answer_kind: str, max_length: int):
+def _labels_fn(tokenizer, answer_kind: str, max_length: int, add_eos: bool = False,
+               answer_prefix: str = ""):
     """The dataset's ``labels`` column: `schema.render`'s span, not a copy of it.
+
+    ``add_eos`` mirrors the token `TextGraphDataset.tokenize` appended to the
+    prompt node, so the two columns stay the same length and the stop token is
+    *supervised* rather than merely present. Appending here rather than inside
+    `render` keeps `render` a pure function of the text — it is also what the
+    `perm_spread` and `leakage` validators rebuild an item's ids with, and those
+    two read single-token kinds, which never carry the token.
 
     `dataset.get_prompt_node_labels` supervises the prompt node's *last* token,
     which is right for the single-token kinds and wrong for a caption. So the
@@ -1124,20 +1302,32 @@ def _labels_fn(tokenizer, answer_kind: str, max_length: int):
     """
     from ..schema import ANSWER_PREFIX
 
+    prefix = answer_prefix or ANSWER_PREFIX
+
     def get_labels(example):
         """One row -> its ``labels`` list, aligned to the prompt node's tokens."""
         text = example["text"][example["prompt_node"]]
-        index = text.rfind(ANSWER_PREFIX)
+        index = text.rfind(prefix)
         if index < 0:
             raise SchemaError(
-                f"prompt node {text[:80]!r} has no {ANSWER_PREFIX!r}; the "
+                f"prompt node {text[:80]!r} has no {prefix!r}; the "
                 "supervised span cannot be located")
-        answer = text[index + len(ANSWER_PREFIX):]
+        # Everything after the prefix, terminator included — which is how the
+        # chat format's `<|eot_id|>` ends up *inside* the supervised span
+        # instead of needing a second append.
+        answer = text[index + len(prefix):]
         stub = Example(
             task="_", domain=DOMAIN, split="train", arm="flat",
             graph={"text": [text], "prompt_node": 0, "num_nodes": 1},
             question="_", answer=answer, answer_kind=answer_kind, key="_")
-        return render(stub, tokenizer, max_length=max_length).labels
+        labels = render(stub, tokenizer, max_length=max_length).labels
+        if add_eos:
+            # `TextGraphDataset.tokenize`'s rule, so the two columns stay the
+            # same length on a node that was already at the cap.
+            if len(labels) >= max_length:
+                del labels[max_length - 1:]
+            labels.append(tokenizer.eos_token_id)
+        return labels
 
     return get_labels
 
@@ -1151,16 +1341,33 @@ def _materialise(config, task, split, arm, pass_id, draws, spec):
     arm they are 1x1 tensors, which is free and keeps the two arms' pipelines
     byte-identical downstream.
     """
+    from ...experiments.molecules.data import prompt_format
     from ...utils import TextGraphDataset
 
     tokenizer = _tokenizer(config.model_name)
     answer_kind = spec.answer_kind
-    graphs = _graphs_for(config, task, arm, draws, pass_id)
+    fmt = prompt_format(config.prompt_style, config.model_name)
+    graphs = _graphs_for(config, task, arm, draws, pass_id, answer_kind)
+
+    # The stop token, on the two kinds that are scored by generating. See
+    # `GENERATIVE_ANSWER_KINDS` for what its absence did to the g2s column.
+    #
+    # **A format that closes its own turn owns the terminator.** Under
+    # `CHAT_FORMAT` the assistant turn already ends in `<|eot_id|>`, written into
+    # the text by `_graphs_for` and supervised because it falls inside the span
+    # after `answer_prefix`. Appending a second one here would train the model to
+    # emit the stop token twice, which costs nothing to train through and shows
+    # up only as a metric that will not move — the same shape as the defect this
+    # fixes. So the append is for formats that do *not* terminate.
+    add_eos = (bool(config.answer_eos) and answer_kind in GENERATIVE_ANSWER_KINDS
+               and not fmt.answer_suffix)
 
     ds = TextGraphDataset(graphs, rcm_ordering=(config.ordering == "rcm"))
-    ds.tokenize(tokenizer, max_length=config.max_length)
-    ds.compute_labels(_labels_fn(tokenizer, answer_kind, config.max_length),
-                      num_proc=1)
+    ds.tokenize(tokenizer, max_length=config.max_length, add_eos=add_eos)
+    ds.compute_labels(
+        _labels_fn(tokenizer, answer_kind, config.max_length, add_eos,
+                   fmt.answer_prefix),
+        num_proc=1)
     ds.compute_shortest_path_distances()
     ds.compute_magnetic_lap(q=config.magnetic_q, m=config.magnetic_m)
     ds.cast_float_features_to_fp32()
@@ -1197,6 +1404,25 @@ def _materialise(config, task, split, arm, pass_id, draws, spec):
 
 def _sidecar_path(path: str) -> str:
     return path + ".schema.json"
+
+
+def built_arms(config: MoleculeAdapterConfig, task: str, split: str,
+               pass_id: int = 0) -> tuple:
+    """Which arms of ``(task, split, pass_id)`` this build actually holds.
+
+    A build carries the arms it was asked for and no others — the campaign built
+    all four notation arms, the instruct campaign builds two — so a tool that
+    wants "every arm" has to ask rather than assume, or it dies on a build that
+    is complete for its own purpose.
+    """
+    from ..schema import ARMS
+
+    name = task if task.startswith(MOLECULE_PREFIX) else f"{MOLECULE_PREFIX}{task}"
+    bare = name[len(MOLECULE_PREFIX):]
+    return tuple(
+        arm for arm in ARMS
+        if os.path.exists(_sidecar_path(
+            config.source_path(bare, split, arm, pass_id))))
 
 
 def _item(ds, i: int, task: str) -> dict:

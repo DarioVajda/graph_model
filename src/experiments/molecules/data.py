@@ -289,7 +289,8 @@ def mol_to_graph(mol, encoding: str = "rich_levi", stereo_tags: bool = True,
 def attach_question(graph: nx.DiGraph, question: str, answer: str,
                     named_atoms=(), prompt_edges: str = "named",
                     question_node: str = "on",
-                    answer_prefix: str = "\nA:") -> nx.DiGraph:
+                    answer_prefix: str = "\nA:",
+                    fmt: "PromptFormat | None" = None) -> nx.DiGraph:
     """Attach the QUESTION prefix node and the PROMPT node.
 
     Mirrors `graphqa/process_dataset.py::example_to_graph` so the supervised span
@@ -317,6 +318,13 @@ def attach_question(graph: nx.DiGraph, question: str, answer: str,
     `dataset.build_flat_example`. The two arms must agree byte-for-byte on the
     tokens preceding the supervised one, or the comparison carries an uncontrolled
     difference at the only position that is scored.
+
+    ``fmt`` is a :class:`PromptFormat` and supersedes ``answer_prefix`` when given.
+    Under ``CHAT_FORMAT`` the question node carries the **user turn** and the
+    prompt node the **assistant turn** — which is the only faithful reading of a
+    chat template for a graph, since the graph's other nodes are a *set* with no
+    linear order to place a turn marker in. ``answer`` arrives already terminated
+    (or not) by the caller, which is the half that depends on the answer kind.
     """
     if prompt_edges not in PROMPT_EDGE_MODES:
         raise ValueError(f"prompt_edges must be one of {PROMPT_EDGE_MODES}, "
@@ -328,17 +336,22 @@ def attach_question(graph: nx.DiGraph, question: str, answer: str,
             "that synonym — see attach_question's docstring.)")
 
     graph = graph.copy()
+    if fmt is None:
+        fmt = PromptFormat("plain", "", "", answer_prefix, "")
 
     if question_node == "on":
         q_node = ("question", 0)
-        graph.add_node(q_node, text=question, kind="question")
+        graph.add_node(q_node, text=fmt.question(question), kind="question")
         graph.graph["question_node"] = q_node
         prompt_node = ("prompt", 0)
-        graph.add_node(prompt_node, text=f"{answer_prefix}{answer}", kind="prompt")
+        graph.add_node(prompt_node, text=f"{fmt.answer_prefix}{answer}",
+                       kind="prompt")
     else:
         prompt_node = ("prompt", 0)
-        graph.add_node(prompt_node, text=f"{question}{answer_prefix}{answer}",
-                       kind="prompt")
+        graph.add_node(
+            prompt_node,
+            text=f"{fmt.question(question)}{fmt.answer_prefix}{answer}",
+            kind="prompt")
     graph.graph["prompt_node"] = prompt_node
 
     if prompt_edges == "named":
@@ -383,9 +396,180 @@ def relabel_for_dataset(graph: nx.DiGraph) -> nx.DiGraph:
 # The flat control
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: The flat arm's notations. All three determine the same molecule, so a
+#: difference between them is not an information difference — which is what makes
+#: them an axis along which the *pretraining* prior varies while expressiveness
+#: does not (`generalist/MOLECULE_GENERALIST.md` §9 Tier 0). ``smiles`` is the
+#: settled default and the one every number before 2026-09-06 was measured on.
+NOTATIONS = ("smiles", "selfies", "inchi")
+
+#: Notations whose string is canonical by construction, so there is no randomised
+#: form to draw and no atom-order spread to measure. InChI *is* a canonical
+#: serialization; SELFIES is derived from a canonical SMILES here.
+CANONICAL_ONLY_NOTATIONS = ("selfies", "inchi")
+
+#: SELFIES' semantic constraints, and this is a decision rather than a default.
+#:
+#: The constraints are what make SELFIES' guarantee true — every string decodes to
+#: a *valid* molecule — so they are a valence table. Measured over all 53,921
+#: molecules of the five Tier-B corpora, encode failures by preset:
+#:
+#: =============  =============  ================
+#: preset         encode failed  round-trip failed
+#: =============  =============  ================
+#: ``octet_rule``  6,863 (12.7%)  0
+#: ``default``        40 (0.07%)  0
+#: ``hypervalent``    22 (0.04%)  0
+#: this one            0          0
+#: =============  =============  ================
+#:
+#: ``hypervalent`` plus a catch-all of 12. The twenty-two molecules the stock
+#: preset still refuses are all organometallics — ferrocenes, molybdenum and
+#: tungsten carbonyls — whose metal centre carries nine or ten bonds against the
+#: preset's catch-all cap of eight. They are real rows of HIV and one of them is
+#: test-role, so the alternative to raising the cap is scoring the three notations
+#: on three different sets of molecules, which is the one thing the ladder cannot
+#: survive. The cap buys the encoding *and* keeps the round trip: every molecule
+#: in the pool decodes back to itself, which is what
+#: ``tests/generalist/test_notations.py`` asserts rather than assumes.
+#:
+#: Recorded because the constraint set changes the string: it is part of what
+#: "SELFIES" means in these results, and it goes in the probe's run record.
+SELFIES_CONSTRAINTS = {"preset": "hypervalent", "catch_all": 12}
+
+#: Written into the flat prompt in place of a molecule the notation cannot
+#: express, so the row survives to be *excluded from every arm* instead of
+#: shortening one of them (`dataset.build_flat_example`). It is deliberately not
+#: a valid string in any notation: a row carrying it must never be scored, and a
+#: reader who finds one in a metric has found a bug rather than a molecule.
+UNENCODABLE = "<<unencodable>>"
+
+
+class EncodeUnsupported(ValueError):
+    """This notation cannot express this molecule at all.
+
+    Distinct from the refusals `flat_serialize` raises for ``atom_labels`` and
+    ``canonical=False``, which are caller errors and must keep propagating. This
+    one is a property of the molecule, and the ladder handles it by dropping the
+    molecule from every arm.
+    """
+
+
+_SELFIES = None
+
+
+def _selfies():
+    """The ``selfies`` module with `SELFIES_CONSTRAINTS` applied, set once.
+
+    ``set_semantic_constraints`` is global state in that library, so it is set at
+    first use rather than per call, and never anywhere else in this package.
+    """
+    global _SELFIES
+    if _SELFIES is None:
+        import selfies as sf
+
+        sf.set_semantic_constraints(SELFIES_CONSTRAINTS["preset"])
+        constraints = dict(sf.get_semantic_constraints())
+        constraints["?"] = SELFIES_CONSTRAINTS["catch_all"]
+        sf.set_semantic_constraints(constraints)
+        _SELFIES = sf
+    return _SELFIES
+
+
+#: What the flat prompt calls the string it is about to show. The prompt shape is
+#: held identical across notations — ``{question}\n{header}: {string}\nA:`` — so
+#: the only thing that moves between the three arms is the notation itself. The
+#: InChI header is redundant against a string that already begins ``InChI=1S/``,
+#: and it stays anyway: matching the prompt shape is worth more than removing a
+#: repeated word from one of the three.
+NOTATION_HEADERS = {"smiles": "SMILES", "selfies": "SELFIES", "inchi": "InChI"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt format — the one place that knows how a turn is spelled
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class PromptFormat:
+    """How a question and an answer are marked up in a node's text.
+
+    `generalist/PLAN.md` D3: chat formatting is "non-negotiably paired with
+    instruct weights — both together, neither alone". This is that pairing made
+    into data, so the two arms cannot drift apart and so a build records which
+    spelling it used.
+
+    ``answer_suffix`` closes the assistant turn and is applied to the
+    **generative kinds only** (`generalist/adapters/molecules.py::
+    GENERATIVE_ANSWER_KINDS`). A ``token`` or ``yesno`` answer is read as a logit
+    margin at the prompt node's *last* token, so a terminator after it would move
+    the scored position onto the terminator and read the wrong logits.
+    """
+
+    style: str
+    question_prefix: str
+    question_suffix: str
+    answer_prefix: str
+    answer_suffix: str
+
+    def question(self, text: str) -> str:
+        return f"{self.question_prefix}{text}{self.question_suffix}"
+
+    def answer(self, text: str, terminated: bool) -> str:
+        return f"{self.answer_prefix}{text}{self.answer_suffix if terminated else ''}"
+
+
+#: ``"\nA:"`` and nothing else — the shape every number before 2026-09-10 was
+#: measured under. No trailing space: answers carry their own leading one.
+PLAIN_FORMAT = PromptFormat("plain", "", "", "\nA:", "")
+
+#: Llama-3's turn markup, as `tokenizer.apply_chat_template` writes it, with two
+#: deliberate departures:
+#:
+#: * **No `<|begin_of_text|>`.** The graph arm has no first node — `ordering:
+#:   rcm` permutes them and Property 1 says the model must not care — so there is
+#:   no well-defined place to put a sequence-initial token. Putting one on the
+#:   flat arm alone would break the matching that makes the arms comparable.
+#: * **No system turn.** The stock template injects a "Cutting Knowledge Date"
+#:   block with *today's date* in it, which would make a build's bytes depend on
+#:   the day it ran.
+#:
+#: The answer keeps its leading space (``"\n\n Yes"`` rather than ``"\n\nYes"``),
+#: which the stock template would not write. That space is what makes the
+#: supervised token ``" Yes"`` — the same id the margin readout has always scored
+#: — so keeping it is what lets a chat-format number be compared to a plain one.
+CHAT_FORMAT = PromptFormat(
+    "chat",
+    "<|start_header_id|>user<|end_header_id|>\n\n", "<|eot_id|>",
+    "<|start_header_id|>assistant<|end_header_id|>\n\n", "<|eot_id|>")
+
+PROMPT_FORMATS = {"plain": PLAIN_FORMAT, "chat": CHAT_FORMAT}
+PROMPT_STYLES = tuple(PROMPT_FORMATS)
+
+
+def resolve_prompt_style(style: str | None, model_name: str) -> str:
+    """``"auto"``/``None`` -> ``"chat"`` iff the backbone is an Instruct variant.
+
+    The auto rule is `kgqa/config.py::resolved_prompt_style`'s, for the reason
+    D3 gives: a chat template on base weights is a format the model has never
+    seen, and instruct weights without one throw away what they were tuned for.
+    Naming a style explicitly still wins, which is what the weights-vs-formatting
+    control arm needs.
+    """
+    if style and style != "auto":
+        if style not in PROMPT_FORMATS:
+            raise ValueError(
+                f"prompt_style must be one of {PROMPT_STYLES + ('auto',)}, got {style!r}")
+        return style
+    return "chat" if "instruct" in str(model_name).lower() else "plain"
+
+
+def prompt_format(style: str | None, model_name: str = "") -> PromptFormat:
+    return PROMPT_FORMATS[resolve_prompt_style(style, model_name)]
+
+
 def flat_serialize(mol, canonical: bool = True, seed: int | None = None,
-                   atom_labels: bool = False) -> str:
-    """The flat twin's input: a SMILES string.
+                   atom_labels: bool = False, notation: str = "smiles") -> str:
+    """The flat twin's input: the molecule as a string, in ``notation``.
 
     ``canonical=False`` with a ``seed`` produces a *randomised* SMILES for the same
     molecule — the permutation-invariance experiment of PLAN.md §6. GTLM's answer is
@@ -398,11 +582,61 @@ def flat_serialize(mol, canonical: bool = True, seed: int | None = None,
     question it has no way to parse, which would make Tier A a rigged comparison
     rather than a measurement. Labels are **1-based** in both arms, because RDKit
     reads map number 0 as "unmapped" and would drop atom 0's label here only.
+
+    ``notation`` selects SMILES, SELFIES or InChI. The two non-SMILES notations
+    **refuse** the two options they cannot honour rather than ignoring them: a
+    silently dropped ``atom_labels`` would leave a Tier-A question naming an atom
+    the string does not mark, which is the rigged comparison the paragraph above
+    exists to prevent, and a silently canonical answer to ``canonical=False`` would
+    report a permutation spread of exactly zero for a notation that simply has no
+    randomised form — a Property-1 pass that measured nothing.
     """
+    if notation not in NOTATIONS:
+        raise ValueError(f"notation must be one of {NOTATIONS}, got {notation!r}")
+    if notation != "smiles":
+        if atom_labels:
+            raise ValueError(
+                f"notation {notation!r} has no atom-map form, so it cannot carry "
+                "atom_labels. Atom-level Tier-A questions name an atom the string "
+                "would not mark; build them on the smiles notation or hold them out.")
+        if not canonical:
+            raise ValueError(
+                f"notation {notation!r} is canonical by construction, so there is "
+                "no randomised form to draw. A permutation sweep over it would "
+                "report a spread of zero without having measured anything.")
+
     if atom_labels:
         mol = Chem.Mol(mol)
         for atom in mol.GetAtoms():
             atom.SetAtomMapNum(atom.GetIdx() + 1)
+
+    if notation == "inchi":
+        # RDKit logs InChI's own warnings to stderr per molecule; they are not
+        # errors and there are ~130k molecules. An empty string is the failure,
+        # and it is raised rather than passed on as an empty prompt.
+        from rdkit import RDLogger
+
+        RDLogger.DisableLog("rdApp.*")
+        try:
+            text = Chem.MolToInchi(mol)
+        finally:
+            RDLogger.EnableLog("rdApp.*")
+        if not text:
+            raise EncodeUnsupported(
+                f"InChI generation failed for {Chem.MolToSmiles(mol)!r}")
+        return text
+
+    if notation == "selfies":
+        # SELFIES encodes from a SMILES, so the canonical SMILES is the input and
+        # the result is a function of the molecule alone.
+        sf = _selfies()
+        try:
+            return sf.encoder(Chem.MolToSmiles(mol, canonical=True))
+        except sf.exceptions.EncoderError as exc:
+            raise EncodeUnsupported(
+                f"SELFIES cannot encode {Chem.MolToSmiles(mol)!r} under the "
+                f"{SELFIES_CONSTRAINTS!r} constraints: {exc}") from exc
+
     if canonical:
         return Chem.MolToSmiles(mol, canonical=True)
     if seed is None:

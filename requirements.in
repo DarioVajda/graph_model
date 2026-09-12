@@ -22,7 +22,18 @@ scipy
 # Chemistry (src/experiments/molecules) — self-contained wheel, depends only on
 # numpy + Pillow, both already pinned above. Installed with --no-deps so it cannot
 # move torch.
-rdkit
+#
+# PINNED, and the pin is load-bearing. RDKit decides canonical SMILES, the
+# stereo-free partition key and the Murcko scaffold split, and *none* of those
+# enter `MoleculeAdapterConfig.build_version` — a silent minor bump can therefore
+# move roles and canonical strings under a cached build with nothing in the run
+# record to show it. 2026.03.5 is the version every build to date was made with,
+# including `42f7a14bed21f876`. Moving it is a deliberate act that revalidates
+# the partition, not something a recompile does on its own.
+rdkit==2026.3.5
+# The SELFIES notation, for the flat arm's notation ladder
+# (`generalist/MOLECULE_GENERALIST.md` §9 Tier 0). Pure Python, no dependencies.
+selfies
 --find-links https://data.pyg.org/whl/torch-2.10.0+cu128.html
 torch-sparse
 torch-scatter

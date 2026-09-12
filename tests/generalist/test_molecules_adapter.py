@@ -538,6 +538,176 @@ def test_the_graph_arm_supervises_more_than_one_token_for_a_caption(built):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The stop token on a generative answer (GENERATIVE_ANSWER_KINDS)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Missing until 2026-09-10, and it is the reason the graph arm's g2s
+# `exact_match` was 0.0000 with the target a prefix of the prediction 46.5 % of
+# the time: nothing ever showed the model where a string ends. These tests are
+# over the built bytes rather than over `render`, because the append happens in
+# `TextGraphDataset.tokenize` and the labels have to follow it there.
+
+
+@pytest.mark.parametrize("task", ("chebi20", "g2s"))
+@pytest.mark.parametrize("arm", ("graph", "flat"))
+def test_a_generative_answer_ends_in_a_supervised_stop_token(built, task, arm):
+    config, _manifest = built
+    eos = M._tokenizer(config.model_name).eos_token_id
+    source = M.load(f"{MOLECULE_PREFIX}{task}", "train", arm, config=config)
+
+    for i in range(len(source)):
+        item = source[i]
+        ids = list(item["input_ids"][item["prompt_node"]])
+        labels = item["labels"].tolist()
+        assert ids[-1] == eos, "the prompt node must end where the answer ends"
+        assert len(labels) == len(ids)
+        # Supervised, not merely present: an unsupervised stop token teaches
+        # nothing, which is exactly the state the campaign trained in.
+        assert labels[-1] == eos
+        assert eos not in ids[:-1], "one stop token, at the end"
+
+
+@pytest.mark.parametrize("task", ("tox21", "ring_membership"))
+@pytest.mark.parametrize("arm", ("graph", "flat"))
+def test_a_teacher_forced_answer_carries_no_stop_token(built, task, arm):
+    """``token`` and ``yesno`` are read at a known position and never generate.
+
+    A stop token on those would be one more thing to learn for no readout, and
+    it would move the supervised position the margin is read at.
+    """
+    config, _manifest = built
+    eos = M._tokenizer(config.model_name).eos_token_id
+    source = M.load(f"{MOLECULE_PREFIX}{task}", "train", arm, config=config)
+
+    for i in range(len(source)):
+        item = source[i]
+        assert eos not in list(item["input_ids"][item["prompt_node"]])
+
+
+def test_answer_eos_false_reproduces_the_campaign_shape(tmp_path):
+    """Pinning it off must give back the data arm 2 trained on, exactly.
+
+    `runs/molecule_generalist.jsonc` pins ``answer_eos: false`` so it still
+    reproduces its own numbers; if the flag stopped reaching the build, that
+    config would silently start training on different bytes under an unchanged
+    hash.
+    """
+    config = _config(tmp_path / "cache", answer_eos=False)
+    M.build(config, tasks=("g2s",), arms=("graph",), splits=("train",))
+    eos = M._tokenizer(config.model_name).eos_token_id
+    source = M.load(f"{MOLECULE_PREFIX}g2s", "train", "graph", config=config)
+
+    for i in range(len(source)):
+        item = source[i]
+        assert eos not in list(item["input_ids"][item["prompt_node"]])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat formatting on instruct weights (PLAN.md D3)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# D3: "instruct weights + chat template, both or neither". These assert the
+# *both* branch, over built bytes rather than over the format constants, because
+# the interesting failures are all at the seams — the terminator that must not be
+# appended twice, and the scored position that must not move.
+
+INSTRUCT = "meta-llama/Llama-3.2-1B-Instruct"
+CHAT_TASKS = ("ring_membership", "chebi20", "g2s")
+
+
+@pytest.fixture(scope="module")
+def chat_built(tmp_path_factory):
+    """One chat-format build: a ``token``, a ``text`` and a ``smiles`` task."""
+    config = _config(tmp_path_factory.mktemp("chat"), model_name=INSTRUCT)
+    manifest = M.build(config, tasks=CHAT_TASKS, arms=("graph", "flat"),
+                       splits=("train",))
+    return config, manifest
+
+
+def test_instruct_weights_select_chat_formatting_on_their_own(tmp_path):
+    """D3's pairing is the default, not something to remember per config."""
+    assert M.resolved_prompt_style(_config(tmp_path)) == "plain"
+    assert M.resolved_prompt_style(_config(tmp_path, model_name=INSTRUCT)) == "chat"
+    # Naming it explicitly still wins — that is the control arm.
+    assert M.resolved_prompt_style(
+        _config(tmp_path, model_name=INSTRUCT, prompt_style="plain")) == "plain"
+
+
+def test_chat_formatting_is_a_different_build(tmp_path):
+    """It changes every prompt node's text, so it cannot share a build."""
+    assert (_config(tmp_path, model_name=INSTRUCT).build_version()
+            != _config(tmp_path).build_version())
+
+
+@pytest.mark.parametrize("arm", ("graph", "flat"))
+def test_chat_format_puts_the_question_in_a_user_turn(chat_built, arm):
+    config, _manifest = chat_built
+    source = M.load(f"{MOLECULE_PREFIX}g2s", "train", arm, config=config)
+    item = source[0]
+    # The graph arm's question node carries the turn; the flat arm is one node,
+    # so its single node opens the user turn and closes it after the molecule.
+    node = item["question_node"] if arm == "graph" else item["prompt_node"]
+    text = item["text"][node]
+    assert text.startswith("<|start_header_id|>user<|end_header_id|>\n\n")
+    assert "<|eot_id|>" in text
+    # The validator's invariant survives the wrapping rather than being relaxed.
+    spec = M.task_specs(config)[f"{MOLECULE_PREFIX}g2s"]
+    validate(Example.from_item(item, spec, split="train"), spec)
+
+
+@pytest.mark.parametrize("task", ("chebi20", "g2s"))
+@pytest.mark.parametrize("arm", ("graph", "flat"))
+def test_chat_format_closes_a_generative_turn_exactly_once(chat_built, task, arm):
+    """The terminator is in the text AND supervised, and there is only one.
+
+    Two ways to get this wrong, and both are silent: leaving `answer_eos` to
+    append on top of the template writes `<|eot_id|><|eot_id|>`, and letting the
+    template write it outside the supervised span teaches the model nothing.
+    """
+    config, _manifest = chat_built
+    eos = M._tokenizer(config.model_name).eos_token_id
+    source = M.load(f"{MOLECULE_PREFIX}{task}", "train", arm, config=config)
+
+    for i in range(len(source)):
+        item = source[i]
+        ids = list(item["input_ids"][item["prompt_node"]])
+        labels = item["labels"].tolist()
+        assert ids[-1] == eos
+        assert ids[-2] != eos, "the template's terminator was appended twice"
+        assert len(labels) == len(ids)
+        assert labels[-1] == eos, "the terminator is present but not supervised"
+
+
+@pytest.mark.parametrize("arm", ("graph", "flat"))
+def test_chat_format_leaves_the_scored_position_alone(chat_built, arm):
+    """A ``token``/``yesno`` answer is read at the prompt node's LAST token.
+
+    Terminating those turns too would move the readout onto the terminator and
+    score the wrong logits — the margin would be measured at a position whose
+    answer is always the same token, which reads as a model that has learned
+    nothing rather than as a broken instrument.
+    """
+    config, _manifest = chat_built
+    tokenizer = M._tokenizer(config.model_name)
+    source = M.load(f"{MOLECULE_PREFIX}ring_membership", "train", arm,
+                    config=config)
+
+    for i in range(len(source)):
+        item = source[i]
+        ids = list(item["input_ids"][item["prompt_node"]])
+        labels = item["labels"].tolist()
+        assert ids[-1] != tokenizer.eos_token_id
+        assert labels[-1] == ids[-1]
+        assert sum(1 for label in labels if label != -100) == 1
+        # And it is the answer, spelled the way the plain format spells it — the
+        # leading space is what keeps the supervised id the one the margin
+        # readout has always scored.
+        assert tokenizer.decode([ids[-1]]).strip() == \
+            Example.from_item(item, M.task_specs(config)[
+                f"{MOLECULE_PREFIX}ring_membership"], split="train").answer.strip()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The partition, at both enforcement points (D3.3)
 # ─────────────────────────────────────────────────────────────────────────────
 

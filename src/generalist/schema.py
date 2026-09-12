@@ -35,6 +35,20 @@ neither" therefore resolves to *neither* here. When an instruct backbone lands,
 the template goes in this function and the version bumps — that is the whole
 reason the version exists.
 
+**And when it lands, `answer_eos` has to be reconciled with it, not merely
+retargeted.** The build supervises a stop token on the generative kinds
+(`adapters/molecules.py::GENERATIVE_ANSWER_KINDS`). Reading it off the tokenizer
+is enough to *retarget* — base weights give ``<|end_of_text|>``, an Instruct
+checkpoint gives ``<|eot_id|>``, and on Instruct that row is trained, so the
+frozen-head objection that rules it out on base weights does not apply there.
+What retargeting does not solve is that a chat template **already closes the
+assistant turn with that same token**. Appending on top of it writes the token
+twice, and a doubled stop token is exactly the kind of defect this one was: it
+costs nothing to train through and shows up only as a metric that will not move.
+So the template and the append are one decision — whichever emits the token, the
+other must not — and the answer boundary this function locates stops being
+``ANSWER_PREFIX`` at the same moment.
+
 Free of torch at import time: this module is imported by everything else in the
 harness, including the CPU-only ``validate`` mode. RDKit and the molecules
 label words are imported lazily, inside the checks that need them.
@@ -59,7 +73,22 @@ ANSWER_KINDS = ("token", "yesno", "text", "smiles")
 SINGLE_TOKEN_KINDS = ("token", "yesno")
 
 SPLITS = ("train", "val", "test", "held_out")
-ARMS = ("graph", "flat")
+
+#: The input representations an example can be written in. ``flat_selfies`` and
+#: ``flat_inchi`` are the same single-node flat arm in a different molecular
+#: notation (`adapters/molecules.py` FLAT_NOTATIONS), for the notation ladder in
+#: `MOLECULE_GENERALIST.md` §9 Tier 0.
+#:
+#: **This is the definition; `config.ARMS` re-exports it.** The list lived in
+#: three places when the ladder was added and the build failed at the third,
+#: which is the cheap version of the failure it could have been — an arm legal
+#: to a config, legal to the adapter and rejected by the schema *after* the
+#: dataset was materialised. One tuple, imported.
+ARMS = ("graph", "flat", "flat_selfies", "flat_inchi")
+
+#: Every arm that is a one-node graph, so every structural bias on it is
+#: identically zero (Property 2) and its config must carry ``bias: none``.
+FLAT_ARMS = ("flat", "flat_selfies", "flat_inchi")
 
 #: The prompt node's answer prefix, as `molecules/data.py::attach_question` writes
 #: it: no trailing space, because every answer carries its own leading space and
@@ -217,6 +246,14 @@ def render(example: Example, tokenizer, max_length: int = 512) -> Rendered:
     EOS), so a dataset built through that path and an example rendered here
     produce identical ``input_ids``.
 
+    **One exception, and it is the caller's to apply.** A generative answer
+    (``text``, ``smiles``) needs a stop token or the model never learns to end
+    the string, and `adapters.molecules` builds those two kinds with
+    ``tokenize(add_eos=True)``. This function stays a pure function of the text:
+    it renders the span, and the adapter appends the same token to the labels it
+    appended to the ids. So on those tasks the built ``input_ids`` are this
+    function's plus one trailing EOS on the prompt node.
+
     The answer span:
 
     * ``token`` / ``yesno`` — the prompt node's **last** token. This is
@@ -339,6 +376,44 @@ def validate(example: Example, spec, yes_no_words=None) -> None:
         _validate_smiles(example.answer)
 
 
+def _unwrap_question(text: str) -> str:
+    """The question node's text with any known turn markup taken back off.
+
+    The invariant is "the question node holds exactly the question, and nothing
+    else" — worth keeping, because a question node that has quietly picked up
+    part of the prompt is a leak the graph arm cannot be scored through. Chat
+    formatting wraps it in a user turn without changing that, so the check
+    strips the wrapping rather than being relaxed to a substring test, which
+    would stop catching the thing it is for.
+    """
+    from ..experiments.molecules.data import PROMPT_FORMATS
+
+    for fmt in PROMPT_FORMATS.values():
+        if not fmt.question_prefix and not fmt.question_suffix:
+            continue
+        if text.startswith(fmt.question_prefix) and text.endswith(fmt.question_suffix):
+            return text[len(fmt.question_prefix): len(text) - len(fmt.question_suffix)]
+    return text
+
+
+def _untermined(text: str) -> str:
+    """The prompt node's text with a trailing turn terminator taken off.
+
+    The invariant "the answer is the tail of the prompt node" is what stops an
+    adapter supervising a span that is not the answer, so it is kept rather than
+    dropped. A chat format ends the assistant turn after the answer, and the
+    *stored* answer is the clean one — the string `smiles_scores` compares
+    against — so the terminator is stripped here rather than smuggled into the
+    answer, which would put `<|eot_id|>` into every metric's target.
+    """
+    from ..experiments.molecules.data import PROMPT_FORMATS
+
+    for fmt in PROMPT_FORMATS.values():
+        if fmt.answer_suffix and text.endswith(fmt.answer_suffix):
+            return text[: len(text) - len(fmt.answer_suffix)]
+    return text
+
+
 def _validate_graph(example: Example) -> None:
     """The graph/metadata agreement checks: shape, prompt node, question node."""
     graph = example.graph
@@ -359,10 +434,10 @@ def _validate_graph(example: Example) -> None:
             raise SchemaError(
                 f"graph: question_node {question_node!r} is not a node index in "
                 f"[0, {len(texts)})")
-        if texts[question_node] != example.question:
+        if _unwrap_question(texts[question_node]) != example.question:
             raise SchemaError(
                 f"question: the question node holds {texts[question_node]!r}, not "
-                f"{example.question!r}")
+                f"{example.question!r} in any known prompt format")
     elif example.question not in texts[prompt_node]:
         # No question node (the flat arm is one node; `question_node: off` folds
         # the question into the prompt), so the question has to be in the prompt.
@@ -370,10 +445,10 @@ def _validate_graph(example: Example) -> None:
             f"question: {example.question!r} does not appear in the prompt node's "
             f"text {texts[prompt_node]!r}")
 
-    if not texts[prompt_node].endswith(example.answer):
+    if not _untermined(texts[prompt_node]).endswith(example.answer):
         raise SchemaError(
             f"answer: {example.answer!r} is not the tail of the prompt node's "
-            f"text {texts[prompt_node]!r}")
+            f"text {texts[prompt_node]!r}, with any turn terminator taken off")
 
 
 def _validate_smiles(answer: str) -> None:

@@ -29,11 +29,15 @@ from ...utils import TextGraphDataset
 from .data import (
     HELD_OUT_DATASETS,
     HELD_OUT_TIER_A_TASKS,
+    NOTATION_HEADERS,
     TIER_B,
+    UNENCODABLE,
+    EncodeUnsupported,
     attach_question,
     flat_serialize,
     load_tier_b,
     mol_to_graph,
+    prompt_format,
     relabel_for_dataset,
     scaffold_split,
 )
@@ -43,7 +47,12 @@ from .tier_b import TIER_B_TASKS, build_tier_b_examples
 EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASETS_DIR = os.path.join(EXPERIMENT_DIR, "datasets")
 
-ARMS = ("graph", "flat")
+#: The notation arms are flat arms in a different molecular string
+#: (`data.NOTATIONS`); the generalist builds them for §9's ladder and the
+#: specialist campaign never used them. They are listed so a config carrying one
+#: validates rather than failing on an arm this package can serialise perfectly
+#: well.
+ARMS = ("graph", "flat", "flat_selfies", "flat_inchi")
 
 #: One task axis over both tiers. A Tier-A name selects a generator; a Tier-B
 #: name selects a MoleculeNet corpus. Keeping them on one axis is what lets a
@@ -79,6 +88,7 @@ def build_graph_example(mol, question, answer, named_atoms, cfg):
                          atom_labels=atom_level)
     graph = attach_question(
         graph, question, answer,
+        fmt=prompt_format(getattr(cfg, "prompt_style", None), cfg.model_name),
         named_atoms=named_atoms,
         # Atom-level questions wire the prompt to the atoms they name; molecule-
         # level ones wire to every atom, because a prompt node with no edges has a
@@ -90,12 +100,41 @@ def build_graph_example(mol, question, answer, named_atoms, cfg):
 
 
 def build_flat_example(mol, question, answer, cfg):
-    """Flat arm: ONE node holding question + SMILES + answer. Exactly base Llama."""
+    """Flat arm: ONE node holding question + the molecule string + answer.
+
+    Exactly base Llama: one node, so every structural bias is identically zero.
+    ``cfg.notation`` picks the string (`data.NOTATIONS`); the header names it, so
+    a model reading InChI is not told it is reading SMILES and the three
+    notations of §9's ladder differ in the string *and* in what they claim to be.
+    """
     import networkx as nx
 
-    smiles = flat_serialize(mol, atom_labels=(cfg.task in ATOM_LEVEL_TASKS))
+    notation = getattr(cfg, "notation", "smiles")
+    try:
+        text = flat_serialize(mol, atom_labels=(cfg.task in ATOM_LEVEL_TASKS),
+                              notation=notation)
+    except EncodeUnsupported:
+        # A molecule this notation cannot express at all. Measured on the five
+        # Tier-B corpora: 22 of 53,921 for SELFIES under `SELFIES_CONSTRAINTS`
+        # (all in HIV — 9 train, 12 val, 1 test), 0 for InChI.
+        #
+        # **The row is kept, and it is kept so it can be dropped from every arm
+        # rather than from one.** The notation ladder compares three strings for
+        # the same molecules; dropping a row here and nowhere else would silently
+        # shorten one arm's dataset and shift every index after it, so the arms
+        # would no longer be scored on the same molecules. Keeping an unscoreable
+        # placeholder preserves the alignment and makes the exclusion something a
+        # reader can see and count (`notation_probe` drops `UNENCODABLE` rows from
+        # all arms and reports how many).
+        text = UNENCODABLE
+    # The molecule string is part of the *user* turn: the flat arm's whole input
+    # is that one node, so the turn has to close after the molecule and the
+    # assistant turn opens where the answer does.
+    fmt = prompt_format(getattr(cfg, "prompt_style", None), cfg.model_name)
+    body = f"{question}\n{NOTATION_HEADERS[notation]}: {text}"
     graph = nx.DiGraph()
-    graph.add_node(0, text=f"{question}\nSMILES: {smiles}\nA:{answer}", kind="prompt")
+    graph.add_node(0, text=f"{fmt.question(body)}{fmt.answer_prefix}{answer}",
+                   kind="prompt")
     graph.graph["prompt_node"] = 0
     return graph
 

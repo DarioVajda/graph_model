@@ -363,7 +363,8 @@ class TextGraphDataset(Dataset):
     def tokenize(self, tokenizer, max_length=512, add_eos=False):
         """
         Tokenizes text and adds the 'input_ids' column.
-        If add_eos is True, append the tokenizer's EOS token to the prompt node's text after tokenization.
+        If add_eos is True, append the tokenizer's EOS token id to the prompt
+        node's token sequence, within `max_length` (see below).
         """
         if 'input_ids' in self._hf_dataset.column_names:
             print("Warning: Dataset already tokenized. Retokenization will overwrite the existing 'input_ids' column.")
@@ -387,12 +388,19 @@ class TextGraphDataset(Dataset):
             
             if add_eos:
                 prompt_node = example.get('prompt_node', None)
-                
+
                 # Check if a valid prompt node exists for this specific graph
                 if prompt_node is not None:
-                    # Append the EOS token ID to that specific node's sequence
-                    graph_input_ids[prompt_node].append(tokenizer.eos_token_id)
-                    
+                    ids = graph_input_ids[prompt_node]
+                    # `max_length` is a cap on the node, and appending must not
+                    # lift it: a node already at the cap gives up its last token
+                    # so the stop token fits. That row is truncated and has lost
+                    # its answer either way, and a node one token over the cap
+                    # would be a silent shape the collator never sees elsewhere.
+                    if len(ids) >= max_length:
+                        del ids[max_length - 1:]
+                    ids.append(tokenizer.eos_token_id)
+
             return {"input_ids": graph_input_ids}
 
         # Set batched=False to process exactly one graph at a time

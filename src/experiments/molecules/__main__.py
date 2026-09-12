@@ -16,7 +16,7 @@ import argparse
 import os
 
 from .config import RunConfig
-from .data import ENCODINGS, QUESTION_NODE_MODES
+from .data import ENCODINGS, NOTATIONS, PROMPT_STYLES, QUESTION_NODE_MODES
 from .dataset import ALL_TASKS, ARMS, run_data_prep_mode
 from .train import run_train_mode
 
@@ -111,6 +111,11 @@ def build_parser():
                    help="a Tier-A generator name or a Tier-B corpus name.")
     p.add_argument("--arm", choices=ARMS, default=d.arm,
                    help="graph = atoms + Levi bonds; flat = single-node SMILES (the control).")
+    p.add_argument("--notation", choices=NOTATIONS, default=d.notation,
+                   help="flat arm only: which string notation serialises the "
+                        "molecule. SMILES is settled and is what every number "
+                        "before 2026-09-06 was measured on; the other two vary "
+                        "pretraining exposure while holding expressiveness fixed.")
     p.add_argument("--encoding", choices=ENCODINGS, default=d.encoding,
                    help="graph arm only; 'terse_atom_only' is rejected by construction.")
     p.add_argument("--stereo-tags", action=B, default=d.stereo_tags,
@@ -123,6 +128,12 @@ def build_parser():
                    help="'on' (default, and settled) = own edge-free prefix node, so the graph "
                         "attends to the question; 'off' = inside the prompt node, which leaves "
                         "the prefix query-blind. Do not move without a concrete reason.")
+    p.add_argument("--prompt-style", choices=PROMPT_STYLES + ("auto",),
+                   default=d.prompt_style,
+                   help="how a turn is spelled. Omit for the auto default — 'chat' iff "
+                        "the backbone is an Instruct variant, which is `generalist/PLAN.md` "
+                        "D3's 'instruct weights + chat template, both or neither'. Explicit "
+                        "'plain' on an Instruct model is the weights-vs-formatting control arm.")
     p.add_argument("--seed", type=int, default=d.seed)
     p.add_argument("--held-out-eval", action=B, default=d.held_out_eval,
                    help="build a permanently held-out task for EVALUATION only (PLAN.md §4.1).")
@@ -188,7 +199,7 @@ def config_from_args(args):
         task=args.task, arm=args.arm, encoding=args.encoding,
         stereo_tags=args.stereo_tags, bias=args.bias,
         k_hop=args.k_hop, k_hop_directed=args.k_hop_directed, seed=args.seed,
-        question_node=args.question_node,
+        question_node=args.question_node, prompt_style=args.prompt_style,
         held_out_eval=args.held_out_eval,
         model_name=args.model_name, impl=args.impl,
         flex_compile_mode=args.flex_compile_mode,

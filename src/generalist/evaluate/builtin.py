@@ -858,7 +858,14 @@ class _PermutedSource:
         item = self._source[self._indices[i]]
         if self._perm == 0:
             return item
-        if self._arm == "flat":
+        # Every flat arm goes to the flat path, including the notation arms of
+        # §9's ladder. Falling through to the graph path would relabel a
+        # *one-node* graph, which changes nothing, so the spread would read 0 and
+        # Property 1 would "pass" on an arm that never had it — a pass that
+        # measured nothing. `_rewritten_flat_item` refuses instead.
+        from ..config import FLAT_ARMS
+
+        if self._arm in FLAT_ARMS:
             return _rewritten_flat_item(item, self._tokenizer, self._perm)
         return _relabelled_graph_item(item, self._perm)
 
@@ -866,6 +873,70 @@ class _PermutedSource:
 #: The flat prompt's SMILES sits between these, as `dataset.build_flat_example`
 #: writes it: ``"{question}\nSMILES: {smiles}\nA:{answer}"``.
 SMILES_MARKER = "\nSMILES: "
+
+
+def _flat_molecule_span(text: str) -> tuple:
+    """``(start, end, notation)`` of the molecule string in a flat prompt.
+
+    The prompt shape is held identical across notations —
+    ``"{question}\\n{HEADER}: {string}\\nA:{answer}"`` — so the header is what
+    says which notation the string is in. Returns ``(-1, -1, "")`` when no header
+    is present, and leaves the raising to the caller, which knows what it wanted
+    the molecule for.
+    """
+    from ...experiments.molecules.data import NOTATION_HEADERS, PROMPT_FORMATS
+
+    # What ends the molecule string. Plain formatting puts the answer prefix on
+    # its own line, so a newline is the terminator; chat formatting closes the
+    # user turn instead and there is no newline to find. Taking the earliest of
+    # them keeps one code path for both, and keeps working if the answer prefix
+    # ever stops starting with a newline.
+    enders = ["\n"] + [f.question_suffix for f in PROMPT_FORMATS.values()
+                       if f.question_suffix]
+    for notation, header in NOTATION_HEADERS.items():
+        marker = f"\n{header}: "
+        start = text.find(marker)
+        if start >= 0:
+            start += len(marker)
+            stops = [i for i in (text.find(e, start) for e in enders) if i >= 0]
+            return start, (min(stops) if stops else len(text)), notation
+    return -1, -1, ""
+
+
+def _parse_notation(text: str, notation: str):
+    """One molecule string in ``notation`` back to an RDKit mol, or ``None``."""
+    from rdkit import Chem
+
+    if notation == "smiles":
+        return Chem.MolFromSmiles(text)
+    if notation == "inchi":
+        return Chem.MolFromInchi(text)
+    from ...experiments.molecules.data import _selfies
+
+    try:
+        return Chem.MolFromSmiles(_selfies().decoder(text))
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+def _write_notation(mol, notation: str, *, stereo: bool) -> str:
+    """``mol`` written in ``notation``, with stereochemistry kept or dropped.
+
+    Stripping is done on the SMILES and the result re-encoded, so "without
+    stereo" means the same thing in all three notations: the parity information
+    is gone from the string rather than merely spelled differently.
+    """
+    from rdkit import Chem
+
+    from ...experiments.molecules.data import _selfies
+
+    smiles = Chem.MolToSmiles(mol, isomericSmiles=stereo)
+    if notation == "smiles":
+        return smiles
+    flat = Chem.MolFromSmiles(smiles)
+    if notation == "inchi":
+        return Chem.MolToInchi(flat) or smiles
+    return _selfies().encoder(smiles)
 
 
 def _rewritten_flat_item(item, tokenizer, perm_id) -> dict:
@@ -883,7 +954,11 @@ def _rewritten_flat_item(item, tokenizer, perm_id) -> dict:
     if start < 0:
         raise EvalError(
             f"perm_spread: the flat prompt {text[:60]!r} carries no "
-            f"{SMILES_MARKER!r}; there is no SMILES to re-write")
+            f"{SMILES_MARKER!r}; there is no SMILES to re-write. A SELFIES or "
+            "InChI arm lands here by design: both notations are canonical by "
+            "construction, so they have no re-ordered form and no atom-order "
+            "spread to measure. Drop perm_spread from those runs rather than "
+            "reading a zero as a Property-1 pass.")
     start += len(SMILES_MARKER)
     end = text.find("\n", start)
     mol = Chem.MolFromSmiles(text[start:end])
@@ -1275,20 +1350,24 @@ def _restereo_item(item, arm, keep_stereo, tokenizer, pairs, max_length):
 
         RDLogger.DisableLog("rdApp.*")
         text = item["text"][prompt_node]
-        start = text.find(SMILES_MARKER)
+        # Notation-aware, unlike `perm_spread`'s rewrite, and for a reason:
+        # stripping stereochemistry is expressible in every notation, whereas
+        # re-ordering the atoms is expressible only in SMILES. So the leakage
+        # detector — the control that caught §3.2.10 and the one thing the suite
+        # cannot afford to lose — keeps working on the notation arms, while
+        # `perm_spread` correctly refuses.
+        start, end, notation = _flat_molecule_span(text)
         if start < 0:
             raise EvalError(
-                f"leakage: the flat prompt {text[:60]!r} carries no "
-                f"{SMILES_MARKER!r}; there is no SMILES to re-write")
-        start += len(SMILES_MARKER)
-        end = text.find("\n", start)
-        mol = Chem.MolFromSmiles(text[start:end])
+                f"leakage: the flat prompt {text[:60]!r} carries no molecule "
+                f"header; there is nothing to re-write")
+        mol = _parse_notation(text[start:end], notation)
         if mol is None:
             raise EvalError(
-                f"leakage: the flat prompt's SMILES {text[start:end]!r} does not "
-                "parse, so its stereochemistry cannot be removed")
-        with_stereo = Chem.MolToSmiles(mol, isomericSmiles=True)
-        without = Chem.MolToSmiles(mol, isomericSmiles=False)
+                f"leakage: the flat prompt's {notation} {text[start:end]!r} does "
+                "not parse, so its stereochemistry cannot be removed")
+        with_stereo = _write_notation(mol, notation, stereo=True)
+        without = _write_notation(mol, notation, stereo=False)
         changed = int(with_stereo != without)
         written = with_stereo if keep_stereo else without
         new_text = text[:start] + written + text[end:]
