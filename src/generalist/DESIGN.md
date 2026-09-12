@@ -114,11 +114,24 @@ batch can be scored without a registry lookup. A task has exactly one kind.
 
 ### D1.2 Formatting is the schema's job, not the adapter's
 
-Chat formatting (D3: instruct weights + chat template, both or neither) and the answer-boundary
-convention live in `schema.render(example, tokenizer)`, which returns `input_ids`, `labels` with
-the loss span masked, and the answer start offset. Adapters emit *text*; the schema decides how
-text becomes tokens. This is the single biggest lever found on KGQA (format v3, +4.6 F1) and it
-must be one function, version-stamped, not eight copies.
+The answer-boundary convention lives in `schema.render(example, tokenizer)`, which returns
+`input_ids`, `labels` with the loss span masked, and the answer start offset. Adapters emit *text*;
+the schema decides how text becomes tokens. This is the single biggest lever found on KGQA (format
+v3, +4.6 F1) and it must be one function, version-stamped, not eight copies.
+
+**Chat formatting (D3: instruct weights + chat template, both or neither) landed in
+`molecules/data.py::PROMPT_FORMATS`, not here, and the reason is worth stating.** The turn markup has
+to be *in the node text*, and node text is built by `attach_question` and `build_flat_example` — by
+the time `render` sees an example the text is finished, so putting the template here would mean
+rewriting text this function was handed rather than formatting it. One `PromptFormat` object carries
+the four affixes, both builders take it, and `render` locates the span inside whatever it produced.
+That keeps D1.2's actual requirement — one place, not eight copies — while leaving `render` a pure
+function of the text.
+
+What stayed here is everything that depends on the *answer kind* rather than the format: the span
+rule, and the fact that only the generative kinds carry a terminator. `_unwrap_question` and
+`_untermined` are the two places `validate` had to learn that a known wrapping is not a corrupted
+example.
 
 ### D1.3 The validator
 
@@ -169,6 +182,29 @@ shares, the budget in examples (from the finite sources' pass caps, `MOLECULE_GE
 §2), and the step count at the configured tokens-per-step. It fails if any task's share would
 round to fewer than one example per 1000 steps — a task silently contributing nothing is the
 `--magnetic-groups` class of bug (`PLAN.md` §10) and it is caught here rather than in a report.
+
+**`budget_scale` makes the budget an input.** The pass-cap rule has a defect it cannot fix from
+inside: within-block weight goes as `size ** 0.5` while availability goes as `size`, so the
+*smallest* corpus always sets the horizon and the large ones are cut short by it. `budget_scale`
+multiplies that rule's own feasible budget, and a corpus that cannot sustain its share for that
+long is **down-weighted rather than allowed to end the run** — it contributes the same
+`passes × train_size` examples, spread thinner. Three rules keep this from quietly becoming a
+different experiment:
+
+* a clamped task's share is redistributed **within its `block`** first, so the block composition
+  stays put wherever the block has a member with headroom;
+* a block that cannot absorb its own deficit — a block of one, like ChEBI-20 — is allowed to
+  **shrink and spill** the remainder across the mixture, but no block may fall below
+  `BLOCK_SHARE_FLOOR` (0.8) of its design share. Unbounded, a deficit always lands on the
+  generators, since they are the only tasks with infinite headroom;
+* past that bound it is a **refusal naming the block**, and the way through is an explicit per-task
+  `passes` override (`task_passes`), which enters the hash;
+* an optional per-task `floor` refuses a budget that would thin a *reported* benchmark below it.
+
+At `budget_scale` 1.0 nothing clamps, and neither `block`, `floor` nor the scale itself enters
+`config_hash` or `Mixture.hash()` — a run resolves to exactly the digest it did before the
+mechanism existed. `Mixture.table()` prints the resolved share beside the preset's, and the
+realised epochs per corpus, so a thinned task is visible before submission rather than after.
 
 ---
 
@@ -499,6 +535,77 @@ chaining adds `chain: {chunks: N, dependency: afterany}` which the runner expand
 jobs. Shared inductor cache across chunks (`project-ddp-flex-bucketing`).
 
 Job scripts live under `/shared`, never in the node-local scratch (`feedback-submit-to-slurm`).
+
+---
+
+## D9. What running the first campaign changed
+
+D1–D8 were designed on one GPU with a single-corpus mixture. The molecule generalist was the first
+thing to run a full multi-task evaluation, generate at a milestone, and fork distributed, and each of
+those found something. The contracts below are the result; the narrative and the measurements behind
+them are in `results/BUILD_LOG.md` §T12.
+
+**Evaluation generates in batches, left-padded.** `GraphCollatorV2(padding_side="left")` in
+`evaluate/scorers.py`. The prompt node must stay last in the packed sequence, which constrains the
+padding *side*, not the batch size — under `pad_to_block` a 200-token prompt already carries 312 pads
+at batch size one. Right padding was also silently wrong: `prepare_inputs_for_generation` numbers each
+new token `position_ids[:, -1] + 1`, and under right padding that reads a pad, so every continuation
+was numbered from 1 and RoPE placed it *before* the prompt it answered. Teacher-forced metrics were
+unaffected; every generative metric was understated. **Any generative number produced before
+2026-09-06 is not comparable with one produced after.**
+
+**Flex stays on for the generation prefill.** A bucketed prompt batch satisfies `q_len == kv_len` and
+block alignment, so the fused kernel applies to the one quadratic pass in the evaluation. It is
+neutral on the clock — decode falls back to eager either way — and it is what keeps the peak at
+10.5 GB instead of 23.8 GB, beside a training step already at 100.6 GB. Batching without it would have
+raised the evaluation's peak above the path it replaced.
+
+**The compile cache is sized for evaluation, not training.** `wiring.FLEX_CACHE_SIZE_LIMIT = 128`.
+Training walks a handful of `(L, N)` pairs; one milestone sweeps sixteen tasks over two splits and
+touches more distinct shapes than the whole of training. Past the cap `torch._dynamo` does not raise —
+it drops `flex_attention` to the unfused eager path and reports a warning. Eval batches also keep
+their row counts on a power-of-two ladder so `B` stops contributing shape variety of its own.
+
+**Evaluation shards across ranks by whole scoring target** (`evaluate/parallel.py`). The unit is a
+`(task, split)` pair, one stereo view, or one task's permutation sweep — never a slice of one — so a
+rank scores the same rows in the same batches it would have alone and the metric is *identical*, not
+close. Verified 889/889 keys at four ranks against one. Placement is longest-processing-time-first
+against a cost estimate pricing a generated row at `max_new_tokens` forwards and a teacher-forced one
+at one. With one rank there is no process group and no gather.
+
+**Fork setup and result writes are rank 0 only.** `prepare_fork` and `_write_result` run on every
+rank and both touch the filesystem. `if not os.path.exists(...)` around the parent-checkpoint copy is
+check-then-act and lost the race; `result.json` is an `open(path, "w")` every rank reaches, and four
+ranks tore the file. Both are rank 0 with the others waiting on a marker rank 0 writes last.
+`append_line` needs no guard, being `O_APPEND` under `flock`. The rank must come from `RANK` in the
+environment — the process group does not exist yet at `prepare_fork`, so `evaluate.parallel.world()`
+would answer 0 everywhere.
+
+**`max_length` truncates a flat prompt from the right, and takes the answer with it.** The limit is
+per *node*. A graph example is hundreds of short atom texts and never approaches it; a flat example is
+one node holding the whole prompt, so a long molecule is cut — and what is cut is the tail, which is
+the answer. `render` supervises "the prompt node's last token" for the single-token kinds, so a
+truncated row is supervised on whatever the cut landed in (`@@`, `][`, `1`), and the yes/no margin
+readout reports `y_true` = No with the margin read at a meaningless position. Nothing raises, and the
+error is *arm-asymmetric*: it can only ever hit a flat arm, and hits the longer notations hardest
+(SIDER test: 0 graph rows, 162 SMILES, 270 InChI, 297 SELFIES). Any yes/no scoring must therefore
+exclude rows whose prompt node hit `max_length`, from **every** arm rather than the one that noticed,
+or raise `max_length` for all of them — and either choice is a disclosure, because both change which
+molecules a number is over. `MOLECULE_GENERALIST.md` §8 records the exposure of the arm-2 results.
+
+**Detect it with `pos_rate`.** It is `y_true.mean()` over the scored rows, so for arms scoring the same
+molecules it is a property of the task and cannot differ. When it does, rows are being scored at the
+wrong position. `tools/notation_probe.py::check_arms_agree_on_labels` asserts it and refuses to print
+a table that fails; anything else scoring one dataset through several arms should do the same.
+
+**Training batches should bucket `B`, and do not yet.** Splitting a step across ranks changes which
+examples share a micro-batch, so the collator emits `(B, L, N)` triples a single-rank run never
+produced and each pays a full Triton autotune — one logged at 330 s. About 45 such stalls per graph
+cell were **96 % of the anneal's wall clock**, which made four ranks slower than one against a warm
+cache. The stalls saturate and land in the shared inductor cache, so the cost is bounded and paid
+once, but bucketing `B` on the same ladder as `L` and `N` for *training* batches — as
+`evaluate/scorers.py` already does for evaluation — would make the shape set independent of the rank
+count. Owed; carried into the next campaign.
 
 ---
 
