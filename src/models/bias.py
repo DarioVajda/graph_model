@@ -237,6 +237,13 @@ class MagneticBias(BaseBias):
         hidden is emitted directly; ``real``/``imag`` and the cat never exist,
         halving the largest per-layer intermediates. Uses the same parameters —
         ``proj[0]``'s weight is just split into its real/imag column halves.
+
+        The operands are ordered ``V_i, phi, V_j`` so that phi is contracted
+        first. ``torch.einsum`` contracts pairwise, left to right: written
+        ``V_i, V_j, phi`` it first builds ``(B, N, N, M)`` — cubic in the node
+        count, 42.7 GiB for one step at B=4, N≈1,420 — and only then sums out M.
+        This order peaks at ``(B, N, N, out)``, the output itself. Same result
+        to rounding (~1e-7 relative).
         """
         W1, b1 = self.proj[0].weight, self.proj[0].bias           # (out, 2m), (out)
         # Split at HALF THE INPUT width — the real/imag halves of proj[0]'s input
@@ -247,10 +254,10 @@ class MagneticBias(BaseBias):
         phiR = phi @ W1[:, :m].T                                  # (B, M, out)
         phiI = phi @ W1[:, m:].T                                  # (B, M, out)
         return (
-            torch.einsum('bil,bjl,blk->bijk', V_real, V_real, phiR)
-            + torch.einsum('bil,bjl,blk->bijk', V_imag, V_imag, phiR)
-            + torch.einsum('bil,bjl,blk->bijk', V_imag, V_real, phiI)
-            - torch.einsum('bil,bjl,blk->bijk', V_real, V_imag, phiI)
+            torch.einsum('bil,blk,bjl->bijk', V_real, phiR, V_real)
+            + torch.einsum('bil,blk,bjl->bijk', V_imag, phiR, V_imag)
+            + torch.einsum('bil,blk,bjl->bijk', V_imag, phiI, V_real)
+            - torch.einsum('bil,blk,bjl->bijk', V_real, phiI, V_imag)
         ) + b1                                                    # (B, N, N, m)
 
     # ── Magnitude channel (MagneticMagnitudeBias / MagneticHybridBias) ────────
