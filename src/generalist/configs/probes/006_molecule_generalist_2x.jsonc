@@ -1,0 +1,185 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // §9 Tier 2 — the graph and SMILES arms over TWICE the horizon.
+  //
+  // Six cells: two arms x three seeds, 11,140 steps each against the campaign's
+  // 5,599. It answers one question — **does §8's property-prediction gap survive
+  // once HIV and Tox21 train past one epoch?** — and if it does, the gap is not
+  // a budget artifact and the backbone ladder is worth paying for.
+  //
+  //   python3 -m src.generalist validate --config <this file> --cells
+  //   src/generalist/tools/chain.sh <this file> <cell>
+  //
+  // A PROBE, NOT A CAMPAIGN. It reads `configs/runs/molecule_generalist.jsonc`'s
+  // recipe and changes exactly the horizon, so every field below that is not
+  // about the budget is that file's value and its reasoning lives there. When
+  // the scaling study is designed, this and the backbone ladder get merged and
+  // promoted into `runs/` as one campaign config that reproduces a published
+  // number; until then it has answered a question and nobody re-runs it.
+  //
+  // ── WHAT THE BUDGET DOES ───────────────────────────────────────────────────
+  //
+  // `budget_scale` 2.0 is §2's sampling fix in use. The old rule let the
+  // SMALLEST corpus set the horizon — 1,244 BBBP molecules capped the campaign
+  // at 5,599 steps while Tox21 saw 0.86 epochs and HIV 1.04 — because
+  // within-block weight goes as `size ** 0.5` while availability goes as `size`.
+  // Now the budget is an input and a corpus that cannot sustain its share is
+  // DOWN-WEIGHTED instead of ending the run. Resolved:
+  //
+  //   chebi20 .1930 (capped, preset .2000)   6.00 epochs
+  //   tox21   .1564 (.1465)                  1.85   <- was 0.86
+  //   g2s     .1513 (.1500)                  generator
+  //   hiv     .1134 (.1062)                  2.21   <- was 1.04
+  //   sider   .1106 (.1036)                  4.57
+  //   tier-A  .0280 each (.0278)             generator
+  //   bbbp    .0117 (capped, .0235)          6.00
+  //   bace    .0114 (capped, .0203)          6.00
+  //
+  // Blocks land at tier_b .403 / tier_a .252 / chebi .193 / g2s .151, so this is
+  // the campaign's mixture over a longer run rather than a different mixture.
+  // **Every corpus is still at six repeats or fewer** — nothing is seen more
+  // often than the campaign saw it; the three that run out are drawn less.
+  //
+  // ChEBI-20's 0.7-point shortfall is the block-of-one case resolving itself: it
+  // has nobody to hand a clamped share to, so it shrinks and the remainder
+  // spills, bounded by the 80 % block floor. Holding it at exactly .2000 would
+  // need `task_passes: "mol/chebi20=7"`, and buying 0.7 points of share by
+  // showing every caption a seventh time is the worse trade.
+  //
+  // ── DISCLOSURE: g2s EXCEEDS THE SIX-REPEAT CAP, SLIGHTLY ────────────────────
+  //
+  // `mol/g2s` is a generator, so the cap does not apply to it by construction
+  // (`registry._max_passes` returns None) — each pass is a fresh 4,000-molecule
+  // sample of the train pool, not a re-walk. That reasoning holds while the pass
+  // count is small against pool/cap = 41,038/4,000 ≈ 10, and this run's 25
+  // passes are not. Measured over the built passes:
+  //
+  //   trunk at 1x, 12 passes: 30,006 molecules, mean 1.60 draws, max 6, none over
+  //   trunk at 2x, 25 passes: 39,996 molecules, mean 2.50 draws, max 9,
+  //                           246 molecules over 6, 301 excess draws (0.30 %)
+  //
+  // A repeated draw is the identical example (verified: zero of the 41,038
+  // molecules have two draws differing in question or answer). It cannot bias
+  // the arm comparison — `_draw_rng` is seeded on (data_seed, task, split,
+  // pass_id) with no arm, so both arms see the same molecules in the same
+  // passes — so it is a uniform property of the mixture rather than a confound,
+  // and it is disclosed rather than fixed here. The fix is disjoint passes
+  // (partition the shuffled pool into blocks, pass k takes block k mod 11, which
+  // would put the max at 3), and it changes what a pass CONTAINS without moving
+  // `build_version`, so it has to ride along with the next version bump rather
+  // than land silently under a build two campaigns already quote.
+  //
+  // ── WHAT ELSE MOVES, AND WHY ───────────────────────────────────────────────
+  //
+  //   * `tokens_per_step` 4689 -> 4683 on the flat arm. The arms are matched in
+  //     EXAMPLES and the water-filled shares shift the mean example length, so
+  //     the campaign's value no longer matches them. 4683 puts this arm at
+  //     57.1291 examples/step against the graph arm's 57.1316.
+  //   * `max_steps` 11140, pinned. The graph arm resolves to 11,140 steps and
+  //     the flat arm to 11,141; no integer token budget lands both on one
+  //     number, so the horizon is pinned and the flat arm takes the short side.
+  //   * `chunks`, because the trunk is twice as long: the graph arm is ~20 h of
+  //     wall clock on one card and 12 h is the window.
+  //
+  // Only graph and SMILES run. The notation ladder answered its question at 1x,
+  // and this horizon is a graph-vs-SMILES question.
+  //
+  // AN ANNEAL FORK IS OWED PER CELL and is not part of the chain
+  // (`configs/forks/anneal_molecule_generalist.jsonc`). Note that at this budget
+  // BACE, BBBP *and* ChEBI-20 all end at exactly 6.00 epochs, where the campaign
+  // exhausted only BBBP — so all three need the fork's `passes` bump to pay for
+  // the decay segment, and the fork config's `passes` of 7 covers each of them.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "molecule_generalist_2x",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "12:00:00",
+      "inductor_cache": ".inductor_cache/generalist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 4,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "molecule_generalist_graph_2x",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 16
+    },
+    {
+      "run_name": "molecule_generalist_flat_2x",
+      "arm": "flat",
+      "bias": "none",
+      "tokens_per_step": 4683,
+      "accumulation_steps": 8,
+      "chunks": 3
+    }
+  ],
+
+  "seed": [0, 1, 2],
+
+  // ── the horizon: the only thing this probe changes ─────────────────────────
+  "budget_scale": 2.0,
+  "max_steps": 11140,
+
+  // ── everything below is `runs/molecule_generalist.jsonc`, unchanged ────────
+  "mixture": "molecule_generalist",
+  "validators": "default",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  // The campaign's value, and its defect: no stop token on a generative answer.
+  // Pinned so this probe still reproduces; see `runs/molecule_generalist.jsonc`.
+  "answer_eos": false,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

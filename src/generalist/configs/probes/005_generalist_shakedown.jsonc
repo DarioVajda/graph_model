@@ -32,8 +32,8 @@
   //
   //   src/generalist/tools/chain.sh src/generalist/configs/probes/005_generalist_shakedown.jsonc
   //
-  // Everything else is `configs/runs/001_molecule_generalist_graph_s0.jsonc`
-  // unchanged, so the numbers transfer. `max_steps: 300` overrides the §2 budget
+  // Everything else is the `molecule_generalist_graph_s0` cell of
+  // `configs/runs/molecule_generalist.jsonc` unchanged, so the numbers transfer. `max_steps: 300` overrides the §2 budget
   // rule; `milestone_steps: 100` is what makes the milestone validators fire
   // three times instead of never.
   //
@@ -118,6 +118,8 @@
   "question_node": "on",
   "ordering": "rcm",
   "max_length": 512,
+  // Pinned to what this shakedown ran under, so its cost numbers stay reachable.
+  "answer_eos": false,
   "tier_a_cap_per_pass": 4000,
   "g2s_cap_per_pass": 4000,
   "held_out_size": 1000,

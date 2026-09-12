@@ -1,0 +1,170 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE MOLECULE GENERALIST CAMPAIGN — every cell of it, in one file.
+  //
+  // One 1B model over every molecule task, trained four ways: as a graph, and as
+  // a flat string in each of three molecular notations (SMILES, SELFIES, InChI).
+  // Twelve cells — the `arms` bundle x the `seed` axis — and they are one
+  // experiment, because the whole result is a *difference between arms* measured
+  // at a recipe every arm holds fixed. That recipe is written once here, at the
+  // top level, so a cell can differ from its siblings only in what `arms` and
+  // `seed` actually vary.
+  //
+  //   python3 -m src.generalist validate --config <this file> --cells
+  //   python3 -m src.generalist data_prep --config <this file> --cell <cell>
+  //   src/generalist/tools/chain.sh <this file> <cell>
+  //
+  // A cell's name is its `run_name` plus `_s<seed>` (`config.py::config_cells`),
+  // and the campaign is a loop over `--cells`. An anneal fork is a separate
+  // submission per cell and is NOT part of the chain: the trunk stops
+  // mid-WSD-stable-phase by construction, so the reportable checkpoint is the
+  // fork's (`configs/forks/anneal_molecule_generalist.jsonc`).
+  //
+  // **`molecule_generalist.md`, beside this file, is the campaign's write-up**:
+  // what the twelve cells found, the disclosures that travel with every number,
+  // and — under "The recipe, and why" — the argument behind each value below.
+  // This file states what was run; that one states why. All twelve cells resolve
+  // to the `config_hash` their run records carry.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "molecule_generalist",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 12,
+      "partition": "frida",
+      "account": "povejmo",
+      // Renders as `GPU_BRD:B300|GPU_BRD:B200`. Pinned in list form because
+      // frida's node weights are inverted with respect to speed; H100 is off it
+      // on the graph arm's measured 100.6 GB peak.
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 1,             // per cell in `arms`; the notation arms take 2
+      "cpus": 16,
+      "mem": "128G",                    // measured: 50.7 GB cgroup peak, flat across the run
+      "time": "12:00:00",               // the window, not the workload
+      // Shared across chunks and cells: they compile the same flex kernels, and
+      // that work is CPU-bound and byte-identical between them. Used only if the
+      // directory exists, so a fresh clone just compiles.
+      "inductor_cache": ".inductor_cache/generalist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  // Read by the chain script, ignored by the sweep runner. Chunk 1 should finish
+  // a cell outright and the spares cost nothing — a chunk that opens on a run
+  // already at its horizon exits without training.
+  "chain": {
+    "chunks": 3,
+    "dependency": "afterany"
+  },
+
+  // ── the experiment: four arms x three seeds ────────────────────────────────
+  // A list of objects is a BUNDLE — keys that vary together, one cell per object
+  // (`sweep/README.md`); a list of scalars is an AXIS. Their product is twelve.
+  //
+  // Every key here has to vary, and nothing else may. `arm`/`bias`: Property 2
+  // refuses a flat arm carrying a bias. `tokens_per_step`: the arms are matched
+  // in EXAMPLES, not tokens, at 56.83 examples/step, and a graph example is
+  // 288.28 tokens against the SMILES arm's 82.51. `accumulation_steps` with
+  // `gpus_per_config`: the memory knob only (D4.4) — every cell lands on a
+  // ~1024-token micro-batch. `validators`: the notation arms drop `perm_spread`,
+  // which needs a notation that can express a non-canonical atom ordering.
+  //
+  // The extended-horizon rerun of the graph and SMILES arms is a probe until it
+  // reports: `configs/probes/006_molecule_generalist_2x.jsonc`.
+  "arms": [
+    {
+      "run_name": "molecule_generalist_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 16,         // 8 OOMed a 178 GB B200 at step 20
+      "validators": "default"
+    },
+    {
+      "run_name": "molecule_generalist_flat",
+      "arm": "flat",
+      "bias": "none",
+      "tokens_per_step": 4689,          // 4690 would overrun the pass budget
+      "accumulation_steps": 8,
+      "validators": "default"
+    },
+    {
+      "run_name": "notation_selfies",
+      "arm": "flat_selfies",
+      "bias": "none",
+      "tokens_per_step": 8241,
+      // 4 at two ranks is a 1030-token micro-batch; 8 at one rank is the same
+      // number and the same optimizer step, half as fast.
+      "accumulation_steps": 4,
+      "gpus_per_config": 2,
+      "chunks": 2,
+      "validators": "notation"
+    },
+    {
+      "run_name": "notation_inchi",
+      "arm": "flat_inchi",
+      "bias": "none",
+      "tokens_per_step": 7912,
+      "accumulation_steps": 4,
+      "gpus_per_config": 2,
+      "chunks": 2,
+      "validators": "notation"
+    }
+  ],
+
+  // Initialisation and example order. `data_seed` stays 0: all twelve cells read
+  // one build, so a difference between two seeds is the run's own spread.
+  "seed": [0, 1, 2],
+
+  // ── the recipe, identical in all twelve cells ──────────────────────────────
+  "mixture": "molecule_generalist",   // §2, computed from its own rule in config.py
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "max_spd": 32,                      // settled at molecules/PLAN.md §8.4.9; the clamp ablation is null
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,                       // the r32 axis is closed (§8.4.5)
+  "lora_dropout": 0.05,               // the molecules value, so the specialists and this campaign match
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",              // routed by the question alone
+  "ordering": "rcm",
+  "max_length": 512,                  // truncates flat prompts; see the write-up's caveat 1
+  // No stop token on the generative answers, which is how this campaign was
+  // trained and is a DEFECT it carries: nothing taught the model to end a
+  // string, so g2s `exact_match` scores whether it stopped rather than whether
+  // it wrote the molecule (the graph arm's target is a prefix of its prediction
+  // 46.5 % of the time and its `exact_match` is 0.0000). Pinned false so this
+  // file still reproduces the numbers it reports; every new config leaves it at
+  // the default. See `adapters/molecules.py::GENERATIVE_ANSWER_KINDS`.
+  "answer_eos": false,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",         // §2: captions would otherwise be the gradient
+  "max_steps": 5599,                  // pinned, because no token budget puts every arm on one horizon
+  "lr": 1e-4,                         // settled 2026-09-04, matched across arms
+  "bias_lr": 1e-2,                    // reaches no tensor on a flat arm; equal so the cells differ in `arm` alone
+  "lr_min": 1e-5,                     // §7: the anneal decays to lr/10
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,                  // what a chunk boundary costs when Slurm kills a job
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,            // held_out + base_exact cadence during training
+
+  "wandb_project": null
+}

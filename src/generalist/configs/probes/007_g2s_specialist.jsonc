@@ -1,0 +1,179 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // §9 Tier 2b — CAN THE GRAPH ARM WRITE A MOLECULE AT ALL?
+  //
+  // Two cells: graph and SMILES, seed 0, `mol/g2s` and nothing else, over the
+  // same 11,140 steps the 2x horizon probe ran.
+  //
+  //   python3 -m src.generalist validate --config <this file> --cells
+  //   src/generalist/tools/chain.sh <this file> <cell>
+  //
+  // ── THE QUESTION ───────────────────────────────────────────────────────────
+  //
+  // §8 reports the graph arm's graph-to-SMILES `exact_match` as 0.0000 — 0 of
+  // 1500 attempts across three seeds — and the horizon probe left it at exactly
+  // 0.0000 while validity fell 0.056 -> 0.040. Read straight, that says the arm
+  // cannot serialize a graph.
+  //
+  // **It says no such thing.** Dumping the predictions themselves
+  // (`tools/g2s_report.py`, 2x anneal, graph arm, whole 1,000-molecule test
+  // split) shows the arm writing the exactly-correct canonical SMILES and then
+  // failing to stop:
+  //
+  //   target is a PREFIX of the prediction      0.4650   (0.4632 on targets >=10 chars)
+  //   `exact_match`                             0.0000
+  //   prediction over twice the target's length 0.9870
+  //   mean prediction 365 characters against a 45-character target
+  //
+  // The cause is a defect, not the arm: nothing in the built data ever carried a
+  // stop token, so no model trained here was shown where a string ends
+  // (`adapters/molecules.py::GENERATIVE_ANSWER_KINDS`). The campaign's g2s
+  // column measures stopping. Fixed on 2026-09-10, which is why this probe
+  // builds its own data — `answer_eos` defaults on now and moves
+  // `build_version`.
+  //
+  // So the question this run answers is no longer "can it at all". It is **what
+  // is the graph arm's graph-to-SMILES ceiling on a correct instrument?** The
+  // 46.5 % prefix rate is a floor on it, earned with 15 % of a sixteen-task
+  // mixture and 2.2 epochs; this run gives the task the whole budget and a stop
+  // token and reads the number off the metric §5 actually defines.
+  //
+  // ── WHAT THE BUDGET BUYS ───────────────────────────────────────────────────
+  //
+  // A mixture of one generator has no finite source to bound it, so `max_steps`
+  // sets the budget rather than the other way round (`registry.resolve` refuses
+  // a corpus-free mixture without one). At 11,140 steps and 56.13 examples/step
+  // that is **625,299 g2s examples, against 96,300 at 2x and 47,700 at 1x** —
+  // 6.5x the horizon probe's exposure and 13x the campaign's, over 157 passes of
+  // the 44,088-molecule train pool, so about 14 draws per molecule.
+  //
+  // Every adapter field below is `runs/molecule_generalist.jsonc`'s value except
+  // the stop token, so **the molecules are the campaign's**: `_draw_rng` is
+  // seeded on (data_seed, task, split, pass_id) and knows nothing about the
+  // mixture or the build, so the test split here is the same 1,000 molecules §8
+  // and §9 were scored on and the numbers drop straight into their tables. What
+  // the new `build_version` costs is the 25 g2s passes already on disk — they
+  // hold the same molecules without the stop token, and every pass is rebuilt.
+  //
+  // ── THE SMILES CELL IS A RECIPE CHECK, NOT AN ARM COMPARISON ───────────────
+  //
+  // §5 stands: the flat twin's matched task is CANONICALIZATION, its input is a
+  // randomized SMILES that already spells out every atom of the answer in the
+  // answer's own alphabet, and the two columns must never be quoted against each
+  // other. It runs here for a different reason — it is the control that says
+  // whether a specialist at this budget drives these metrics at all, and it is
+  // the arm whose stopping the defect hurt least (33.5 % runaway against the
+  // graph arm's 98.7 %), so it is also the cheapest read on how much of the fix
+  // is the fix. It costs about a quarter of the graph cell.
+  //
+  // ── WHAT ELSE MOVES ────────────────────────────────────────────────────────
+  //
+  //   * `validators: "g2s_specialist"`. Six of the nine defaults have nothing to
+  //     measure on a one-task `smiles` mixture; the set's docstring in
+  //     `config.py` says which and why. `in_mixture` goes back to a step cadence
+  //     because the curve — whether validity leaves the floor, and when — is the
+  //     point of the run and not a diagnostic here.
+  //   * `tokens_per_step`. The arms are matched in EXAMPLES (§7), and a
+  //     g2s-only mixture has a different mean example length than the campaign's
+  //     sixteen-task one: 291.89 tokens on the graph arm, 76.83 on the flat one,
+  //     each the old build's mean plus the one stop token. 16384 puts the graph
+  //     arm at 56.1310 examples/step and 4313 puts the flat arm at 56.1361.
+  //   * One seed. This asks for a ceiling, and a ceiling is either reached or it
+  //     is not; seeds are what a *small* effect needs, and nothing here is small
+  //     — the floor it has to beat is a 46.5 % prefix rate.
+  //   * `answer_eos` is left at its default, which is the whole point.
+  //
+  // AN ANNEAL FORK IS OWED PER CELL and is not part of the chain
+  // (`configs/forks/anneal_molecule_generalist.jsonc`). g2s is a generator, so
+  // nothing here is near a repeat cap and the fork's `passes` bump is inert —
+  // but the decay segment needs its own passes built, which `validate` on the
+  // fork will say.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "g2s_specialist",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "12:00:00",
+      "inductor_cache": ".inductor_cache/generalist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 4,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "g2s_specialist_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 16
+    },
+    {
+      "run_name": "g2s_specialist_flat",
+      "arm": "flat",
+      "bias": "none",
+      "tokens_per_step": 4313,
+      "accumulation_steps": 8,
+      "chunks": 2
+    }
+  ],
+
+  "seed": 0,
+
+  // ── the specialist: one task, and the step count that has to bound it ──────
+  "mixture": "g2s_specialist",
+  "validators": "g2s_specialist",
+  "max_steps": 11140,
+
+  // ── everything below is `runs/molecule_generalist.jsonc`, unchanged ────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

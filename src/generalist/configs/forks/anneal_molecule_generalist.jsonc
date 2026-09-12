@@ -1,13 +1,16 @@
 {
   // ───────────────────────────────────────────────────────────────────────────
-  // The `anneal` fork that closes an arm-2 trunk. One file for all six cells.
+  // The `anneal` fork that closes a molecule-generalist trunk. One file for all
+  // twelve cells — a fork is a separate submission per cell and is not part of
+  // the chain, so this is run once per cell of `runs/molecule_generalist.jsonc`.
   //
   //   GPU=1 INDUCTOR_CACHE=.inductor_cache/generalist \
   //   src/generalist/tools/run_cli.sh fork \
   //     --from src/generalist/results/runs/molecule_generalist_graph_s0/checkpoint-5599 \
   //     --mode anneal \
   //     --fork-config src/generalist/configs/forks/anneal_molecule_generalist.jsonc \
-  //     --config src/generalist/configs/runs/001_molecule_generalist_graph_s0.jsonc
+  //     --config src/generalist/configs/runs/molecule_generalist.jsonc \
+  //     --cell molecule_generalist_graph_s0
   //
   // WHAT IT PRODUCES. The reportable model. The trunk runs WSD's stable phase at
   // a flat LR, so its last checkpoint is mid-schedule by construction and is not
@@ -17,21 +20,33 @@
   //
   // WHY `passes` IS RAISED, and why to 7. A corpus hands out `passes x
   // train_size` examples in total, and the trunk's budget rule spends the whole
-  // allowance sizing its own step count — `mol/bbbp` ends at exactly its six-pass
-  // cap, which is what makes it the binding task in the first place (§2). An
-  // anneal appended to that has nothing left to draw. 560 decay steps at 56.83
-  // examples/step is 31,825 examples, of which BBBP's 2.35 % share is 746 against
-  // the 1,244 that one more pass buys — so 7 covers the decay on every corpus
-  // with margin, and BBBP, the tightest, still ends ~500 examples inside its cap.
+  // allowance sizing its own step count, so a corpus that ends at its cap has
+  // nothing left for an anneal appended to it. The fork's `passes` buys one more
+  // pass of each, and one is enough on both horizons this file serves:
+  //
+  //   * The 5,599-step campaign (`runs/molecule_generalist.jsonc`). `mol/bbbp`
+  //     ends at exactly its six-pass cap — that is what makes it the binding
+  //     task (§2) — and no other corpus does. 560 decay steps at 56.83
+  //     examples/step is 31,825 examples, of which BBBP's 2.35 % share is 746
+  //     against the 1,244 one more pass buys.
+  //   * The 11,140-step rerun (`probes/006_molecule_generalist_2x.jsonc`). Here
+  //     **BACE, BBBP and ChEBI-20 all end at exactly 6.00 epochs**, because
+  //     `budget_scale` thins a corpus to what it can sustain rather than stopping
+  //     when the first one runs out — so three corpora need the bump where the
+  //     campaign needed one. 1,114 decay steps at 57.13 examples/step is 63,644
+  //     examples: ChEBI's 19.30 % share is 12,283 against 20,477, BBBP's 1.17 %
+  //     is 745 against 1,244, BACE's 1.14 % is 726 against 1,208. Every one is
+  //     inside a single extra pass, ChEBI with the least margin.
   //
   // The trunk's `passes` sizes the run and the fork's `passes` pays for the tail,
   // which is the same shape `anneal_cross_check.jsonc` uses.
   //
   // NOTE — g2s passes. `mol/g2s` is a *generator*, so its passes are files on
-  // disk rather than a re-walk of one corpus, and `load` never generates. Trunk
-  // plus anneal is ~350k examples, of which g2s's 15 % over a 4,000 cap is 14
-  // passes against the trunk's 12. Both arms are built to 14 so this fork is not
-  // blocked on a data build at the moment it is wanted.
+  // disk rather than a re-walk of one corpus, and `load` never generates — an
+  // anneal that runs off the end of the built passes fails at the moment it is
+  // wanted. The campaign needed 14 against its trunk's 12; the 2x rerun needs
+  // ~27 against its trunk's 25, and both arms are built to 28
+  // (`tools/build_g2s_tail.py`), so neither fork is blocked on a data build.
   // ───────────────────────────────────────────────────────────────────────────
 
   "passes": {

@@ -1,0 +1,186 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // §9 Tier 2c — THE SAME EXPERIMENT ON INSTRUCT WEIGHTS, IN CHAT FORMAT.
+  //
+  // Six cells: graph and SMILES, three seeds, 11,140 steps — `006`'s horizon and
+  // `006`'s mixture, with three things changed together because D3 says they
+  // cannot be changed apart.
+  //
+  //   python3 -m src.generalist validate --config <this file> --cells
+  //   src/generalist/tools/chain.sh <this file> <cell>
+  //
+  // ── WHY IT MOVES NOW ───────────────────────────────────────────────────────
+  //
+  // `generalist/PLAN.md` D4 targets a 7-12B **instruction-tuned** backbone for
+  // the trunk, and D3 — decided — pairs instruct weights with chat formatting,
+  // "both together, neither alone". Everything measured so far is base
+  // `Llama-3.2-1B` in `Q:/A:` formatting, which was right while the question was
+  // what the prefix nodes contribute (`molecules/PLAN.md` §8.4.4) and is the
+  // wrong paradigm to still be in when the ladder starts. Moving at 1B, where a
+  // full campaign costs ~80 GPU-h, is how the trunk's format gets debugged
+  // before it is expensive to debug.
+  //
+  // Three changes, one decision:
+  //
+  //   1. `model_name` -> `meta-llama/Llama-3.2-1B-Instruct`.
+  //   2. `prompt_style: "chat"`. The question node carries the **user turn** and
+  //      the prompt node the **assistant turn** (`molecules/data.py::
+  //      CHAT_FORMAT`). For the graph arm that is the only faithful reading of a
+  //      chat template: its other nodes are a *set*, with no linear order to put
+  //      a turn marker into.
+  //   3. The stop token follows the backbone. On base weights it is
+  //      `<|end_of_text|>`; here the assistant turn closes with `<|eot_id|>`,
+  //      which is written into the text and therefore supervised inside the
+  //      answer span — so `answer_eos` does NOT also append one
+  //      (`_materialise`: a format that closes its own turn owns the terminator).
+  //
+  // Two departures from the stock template, both forced and both recorded in
+  // `CHAT_FORMAT`: no `<|begin_of_text|>` (the graph arm has no first node, and
+  // adding one to the flat arm alone would unmatch the arms) and no system turn
+  // (the stock one injects today's date, which would make a build's bytes depend
+  // on the day it ran).
+  //
+  // ── WHAT IT IS COMPARED AGAINST ────────────────────────────────────────────
+  //
+  // `006` exactly: same mixture, same budget rule, same 11,140 steps, same
+  // seeds, same molecules — `_draw_rng` is seeded on (data_seed, task, split,
+  // pass_id) and knows nothing about the backbone or the format, so every split
+  // here holds the same molecules in the same order as the base-weight run. The
+  // difference between the two campaigns is the backbone and the formatting, and
+  // nothing else.
+  //
+  // It also carries the stop-token fix, which `006` did not, so the g2s and
+  // ChEBI-20 columns become readable for the first time (§8, "A stop-token
+  // defect found on 2026-09-10"). The base-weight g2s numbers are a floor, not a
+  // baseline: the graph arm's 0.4650 prefix rate there is what it managed while
+  // being scored on whether it stopped.
+  //
+  // ── WHAT THE FORMAT COSTS, MEASURED ────────────────────────────────────────
+  //
+  // Chat markup lengthens every example, so `tokens_per_step` is re-measured
+  // against the new build rather than carried over. Across all nineteen tasks on
+  // both arms the overhead is **+6 tokens an example, and +7 on exactly the two
+  // generative tasks** — six for the turn markup that replaces `\nA:`, and a
+  // seventh for the `<|eot_id|>` that only `text` and `smiles` carry. That the
+  // split falls precisely on the generative kinds is the terminator rule visible
+  // in the data.
+  //
+  // Mean example length is therefore 293.12 tokens on the graph arm and 88.40 on
+  // the flat one. 16384 puts the graph arm at 55.8927 examples/step and 4941
+  // puts the flat arm at 55.8937 — matched to a thousandth of an example, which
+  // is what §7's "matched in EXAMPLES, not tokens" requires and what
+  // `tools/tokens_per_step.py` is for.
+  //
+  // ── COST AND SHAPE ─────────────────────────────────────────────────────────
+  //
+  // `gpus_per_config: 2` on **both** arms, with `accumulation_steps` halved from
+  // `006`'s one-card values (graph 16 -> 8, flat 8 -> 4) so the micro-batch is
+  // unchanged: `micro_batch_tokens = tokens_per_step / (accumulation_steps x
+  // world_size)`. The optimizer step is identical to `006`'s and only the wall
+  // clock moves. That is also what closes the gap between the arms — the graph
+  // arm is ~4x the flat arm's cost per step, so putting both on two cards keeps
+  // six cells finishing together rather than three finishing and three running
+  // on alone.
+  //
+  // `chunks: 1` at a 24 h window. `006` ran four chained 12 h chunks because the
+  // queue was tight; a single job that certainly finishes is worth more than a
+  // chain that has to be resumed, and every resume re-compiles the flex kernels.
+  //
+  // AN ANNEAL FORK IS OWED PER CELL and is not part of the chain
+  // (`configs/forks/anneal_molecule_generalist.jsonc`). At this budget BACE,
+  // BBBP and ChEBI-20 all end at exactly 6.00 epochs, so all three need the
+  // fork's `passes` bump to pay for the decay segment; the fork config's 7
+  // covers each.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "molecule_generalist_instruct",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      "inductor_cache": ".inductor_cache/generalist_instruct",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "molecule_generalist_instruct_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 8
+    },
+    {
+      "run_name": "molecule_generalist_instruct_flat",
+      "arm": "flat",
+      "bias": "none",
+      "tokens_per_step": 4941,
+      "accumulation_steps": 4
+    }
+  ],
+
+  "seed": [0, 1, 2],
+
+  // ── the switch ─────────────────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+
+  // ── the horizon, `006`'s ───────────────────────────────────────────────────
+  "budget_scale": 2.0,
+  "max_steps": 11140,
+
+  // ── everything below is `runs/molecule_generalist.jsonc`, unchanged ────────
+  "mixture": "molecule_generalist",
+  "validators": "default",
+
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}
