@@ -324,7 +324,7 @@ def test_smiles_scores_survives_an_empty_generation_set():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ChEBI-20 (MOLECULE_GENERALIST.md §6)
+# ChEBI-20 (MOLECULE_GENERALIST.md §5)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_chebi_cap_and_disconnected_screens(tmp_path):

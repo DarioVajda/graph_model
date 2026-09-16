@@ -29,7 +29,7 @@ quietly if it does not:
 ``anneal``
     Appends a ``decay`` segment to the parent's schedule, trains on the parent's
     mixture, and runs the full validator set at the end. This is the reportable
-    model for a milestone (`MOLECULE_GENERALIST.md` §7: no best-val selection,
+    model for a milestone (`MOLECULE_GENERALIST.md` §6: no best-val selection,
     the annealed checkpoint is the number). A leg that continues the parent's
     corpora usually has to raise their ``passes``: see :func:`_with_passes`.
 
@@ -90,7 +90,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DECAY_FRACTION = 0.10
 
 #: Where an anneal decays to, as a fraction of the run's LR.
-#: `MOLECULE_GENERALIST.md` §7: "decays to lr/10".
+#: `MOLECULE_GENERALIST.md` §6: "decays to lr/10".
 DEFAULT_MIN_FACTOR = 0.1
 
 DEFAULT_DECAY_SHAPE = "cosine"

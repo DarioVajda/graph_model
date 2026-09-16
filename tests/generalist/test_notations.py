@@ -1,4 +1,4 @@
-"""The flat arm's notation ladder — `MOLECULE_GENERALIST.md` §9 Tier 0.
+"""The flat arm's notation ladder — `MOLECULE_GENERALIST.md` §8.3.
 
 Three notations serialise the same molecule (SMILES, SELFIES, InChI), so the
 ladder's whole premise is that a difference between them is a *pretraining*
@@ -45,7 +45,7 @@ from src.generalist.config import ARMS, FLAT_ARMS
 #: amine — enough that a notation dropping any of them shows up in the round trip.
 MOL = "CN(C)C(=O)c1ccc(cc1)O[C@@H](C)C(=O)O"
 
-#: The build every arm-2 cell read. `MOLECULE_GENERALIST.md` §7.
+#: The build every arm-2 cell read. `MOLECULE_GENERALIST.md` §8.2.
 ARM2_BUILD_VERSION = "42f7a14bed21f876"
 
 

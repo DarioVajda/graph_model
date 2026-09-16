@@ -6,8 +6,8 @@ the built passes fails at the moment it is wanted rather than building what it
 needs. The trunk's `data_prep` builds exactly the passes the *trunk* consumes;
 the decay adds ~10 % more examples on top, of which g2s takes its 0.15 share, so
 one or two more passes are owed. Arm 2 covered this by building both arms to 14
-(`configs/forks/anneal_molecule_generalist.jsonc`); the notation arms of §9 Tier
-0.2 came out of their build at 12, and this closes the gap.
+(`configs/forks/anneal_molecule_generalist.jsonc`); the notation arms of
+`MOLECULE_GENERALIST.md` §8.3 came out of their build at 12, and this closes the gap.
 
 Cheap and idempotent: `build` skips every pass already on disk.
 

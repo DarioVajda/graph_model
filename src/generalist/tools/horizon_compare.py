@@ -1,6 +1,6 @@
 """The doubled horizon against the campaign it doubles, task by task.
 
-§9 Tier 2 asks one question: **does §8's property-prediction gap survive once HIV
+`MOLECULE_GENERALIST.md` §8.4 asks one question: **does the arm-2 property-prediction gap survive once HIV
 and Tox21 train past one epoch?** Answering it needs the two horizons side by
 side on every task, not just on the five-set mean — a gap that closes because the
 graph arm improved is a different finding from one that closes because the flat

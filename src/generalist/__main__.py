@@ -447,7 +447,7 @@ def load_fork_config(path, args, config: RunConfig) -> dict:
     """The fork's own config, with the CLI's overrides and the run's defaults.
 
     ``min_factor`` comes from the run config's ``lr_min`` unless the fork sets
-    one: `MOLECULE_GENERALIST.md` §7 says an anneal decays to ``lr/10`` and that
+    one: `MOLECULE_GENERALIST.md` §6 says an anneal decays to ``lr/10`` and that
     is a property of the *recipe*, so it should not have to be restated in every
     fork config.
     """

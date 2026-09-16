@@ -116,7 +116,8 @@ def _notation_for(arm: str, task: str) -> str:
     So the notation ladder holds those four families at SMILES for all three flat
     arms, which keeps the **mixture identical** across arms — same families, same
     shares, same rows — and confines the notation manipulation to everything
-    else: all five Tier-B property sets (which are what §9 Tier 0.2 measures), the
+    else: all five Tier-B property sets (which are what the notation ladder,
+    `MOLECULE_GENERALIST.md` §8.3, measures), the
     five molecule-level Tier-A families, ChEBI-20 and graph-to-SMILES. The
     alternative, dropping those families from the notation arms, would have made
     the arms differ in their training distribution as well as their notation, and
@@ -486,7 +487,7 @@ def _endpoint_label_counts(records, spec) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ChEBI-20 (MOLECULE_GENERALIST.md §6)
+# ChEBI-20 (MOLECULE_GENERALIST.md §5)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CHEBI_FILES = {"train": "train.txt", "val": "validation.txt", "test": "test.txt"}

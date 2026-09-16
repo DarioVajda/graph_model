@@ -63,7 +63,7 @@
   // the number that matters is scored at the end of the leg regardless.
   //
   // That firing is now ~12 minutes on one card and ~4 on four
-  // (`MOLECULE_GENERALIST.md` §7), so 50 would cost roughly two hours rather than
+  // (`MOLECULE_GENERALIST.md` §6), so 50 would cost roughly two hours rather than
   // twenty-four and is affordable for the first time. Left at 280 anyway: what a
   // finer cadence buys is resolution on a curve that closes a leg of 560 steps,
   // and two points already show whether the decay is behaving. Lower it when

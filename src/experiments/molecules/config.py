@@ -41,7 +41,7 @@ class RunConfig:
     # in data.py). Flat arm only; the graph arm never serialises a molecule to a
     # string. "smiles" is settled and is what every number before 2026-09-06 was
     # measured on; the other two exist for the notation ladder in
-    # `generalist/MOLECULE_GENERALIST.md` §9 Tier 0, which varies pretraining
+    # `generalist/MOLECULE_GENERALIST.md` §8.3, which varies pretraining
     # exposure while holding expressiveness fixed.
     notation: str = "smiles"
     encoding: str = "rich_levi"             # PLAN.md §3.2 (graph arm only)

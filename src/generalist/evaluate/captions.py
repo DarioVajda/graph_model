@@ -1,5 +1,5 @@
 """
-Caption metrics for ChEBI-20 (`MOLECULE_GENERALIST.md` §6): BLEU-2/4, ROUGE-L, METEOR.
+Caption metrics for ChEBI-20 (`MOLECULE_GENERALIST.md` §5): BLEU-2/4, ROUGE-L, METEOR.
 
 **Why these are implemented here rather than imported.** The environment has no
 `nltk`, no `rouge_score`, no `sacrebleu` and no `evaluate` — checked, not assumed.

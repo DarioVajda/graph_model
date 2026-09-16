@@ -399,7 +399,7 @@ def relabel_for_dataset(graph: nx.DiGraph) -> nx.DiGraph:
 #: The flat arm's notations. All three determine the same molecule, so a
 #: difference between them is not an information difference — which is what makes
 #: them an axis along which the *pretraining* prior varies while expressiveness
-#: does not (`generalist/MOLECULE_GENERALIST.md` §9 Tier 0). ``smiles`` is the
+#: does not (`generalist/MOLECULE_GENERALIST.md` §8.3). ``smiles`` is the
 #: settled default and the one every number before 2026-09-06 was measured on.
 NOTATIONS = ("smiles", "selfies", "inchi")
 

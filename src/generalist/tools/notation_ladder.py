@@ -1,8 +1,8 @@
-"""Tier 0.2's read-out — the notation gradient, assembled from per-run scorings.
+"""The notation ladder's read-out — the notation gradient, assembled from per-run scorings.
 
-`MOLECULE_GENERALIST.md` §9 Tier 0.2. `notation_probe.py --checkpoint` scores one
+`MOLECULE_GENERALIST.md` §8.3. `notation_probe.py --checkpoint` scores one
 trained run and writes `trained_<run>.json`; this merges those, adds the SMILES
-leg from arm 2 and the graph arm from §8, and prints the table the section asks
+leg from arm 2 and the graph arm from §8.2, and prints the table the section asks
 for — property ROC-AUC per notation, and the flat-minus-graph gap that is the
 actual deliverable.
 
@@ -30,7 +30,7 @@ import statistics as st
 TASKS = ("bace", "bbbp", "hiv", "tox21", "sider")
 
 #: Notation exposure, high to low, as the corpus-frequency argument orders it —
-#: SMILES is vastly more common in text than SELFIES or InChI. Tier 0.1 could not
+#: SMILES is vastly more common in text than SELFIES or InChI. The zero-shot probe could not
 #: measure this ordering (every arm read at chance), so it rests on that argument
 #: and the write-up says so rather than implying a measurement.
 ARM_ORDER = ("flat", "flat_inchi", "flat_selfies", "graph")
@@ -80,7 +80,7 @@ def aggregate(rows) -> dict:
 def table(agg: dict) -> str:
     arms = [a for a in ARM_ORDER if any(k[0] == a for k in agg)]
     width = 16
-    lines = ["", "Tier 0.2 — property ROC-AUC by notation (mean over seeds)",
+    lines = ["", "Notation ladder — property ROC-AUC by notation (mean over seeds)",
              f"{'set':8s}" + "".join(f"{ARM_LABEL[a]:>{width}s}" for a in arms)]
     lines.append("-" * len(lines[-1]))
     for task in TASKS:

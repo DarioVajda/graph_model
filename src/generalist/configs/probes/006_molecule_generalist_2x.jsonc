@@ -1,6 +1,6 @@
 {
   // ───────────────────────────────────────────────────────────────────────────
-  // §9 Tier 2 — the graph and SMILES arms over TWICE the horizon.
+  // THE DOUBLED HORIZON (`MOLECULE_GENERALIST.md` §8.4) — the graph and SMILES arms over TWICE the horizon.
   //
   // Six cells: two arms x three seeds, 11,140 steps each against the campaign's
   // 5,599. It answers one question — **does §8's property-prediction gap survive

@@ -232,7 +232,7 @@ Wraps the molecules package. Tier-A generation goes through `generate_examples`,
   drop. Molecules whose graph fails `roundtrip_check` at the `exact` level are excluded from this
   task and counted.
 * **ChEBI-20** — a corpus loader with its own three splits, a heavy-atom cap, and the
-  disconnected-graph check (`MOLECULE_GENERALIST.md` §6).
+  disconnected-graph check (`MOLECULE_GENERALIST.md` §5).
 
 The adapter imports the scoring helpers from `molecules/evaluate.py`; it does not re-implement
 them. The margin readout and its bf16 quantisation caveat (`project-gtlm-margin-quantization`)
@@ -472,7 +472,8 @@ report. This is `PLAN.md` §3.4's "eval protocol, version-stamped as files".
 | `held_out` | zero-shot on every `held_out` task | same scorers; never trains |
 | `bias_norm` | L2 norm of the bias tensors | `feedback-verify-nulls-are-real`; also the resume fingerprint |
 | `grad_share` | measured per-task gradient share vs configured weight | D4.3; the smoke run asserts on it |
-| `base_exact` | adapters off, logits on a fixed text batch equal base Llama's to bf16 tolerance | Property 2; meaningless under D4 arm B/C and says so |
+| `base_exact` | adapters off, every backbone **weight** equal to base Llama's exactly | Property 2; meaningless under D4 arm B/C and says so. Weights, not logits — see its docstring |
+| `text_behaviour` | 48 fixed text prompts, adapter-on against adapter-off: `caption_rate`, length, stop rate, KL to the backbone | what the adapter costs the assistant; `MOLECULE_GENERALIST.md` §7.6 |
 | `perm_spread` | flat arm: AUROC spread over 10 randomized SMILES per test molecule, stratified by symmetry class; graph arm: asserted ≤ 1e-4 | `molecules/PLAN.md` §6 |
 | `throughput` | wall-clock s/it, peak GB, tokens/s | `feedback-throughput-metric`: s/it, not `step_ms_mean` |
 | `per_example` | the molecules per-example error / geometry report on `test` | wraps `analysis.write_per_example_report` |
@@ -659,7 +660,7 @@ Estimated at roughly a week of building before T10, on the strength of how much 
 
 | deferred | seam already in the design |
 |---|---|
-| `forgetting.py` (KL-to-base on text batches) | a `text` domain adapter emitting single-node graphs is just another task; the teacher is `base_exact`'s adapters-off path |
+| `forgetting.py` (KL-to-base on text batches) | a `text` domain adapter emitting single-node graphs is just another task, and `text_behaviour` already builds and scores exactly those items — its `kl_mean` is the loss this would minimise, measured before it is optimised |
 | the admission regression gate | `admit` mode exists; the four suites are validators registered by name |
 | adapters for graphqa / kgqa / tag / relbench / clrs | the `Adapter` protocol; each is a `build / load / partition` triple |
 | D4 arm B/C (unfrozen `W_q`/`W_k`, full fine-tune) | `active_params` and the optimizer groups; `base_exact` reports itself meaningless when the backbone moves |

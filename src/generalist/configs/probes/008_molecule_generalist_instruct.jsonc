@@ -1,6 +1,6 @@
 {
   // ───────────────────────────────────────────────────────────────────────────
-  // §9 Tier 2c — THE SAME EXPERIMENT ON INSTRUCT WEIGHTS, IN CHAT FORMAT.
+  // THE REPORTABLE CAMPAIGN (`MOLECULE_GENERALIST.md` §7) — THE SAME EXPERIMENT ON INSTRUCT WEIGHTS, IN CHAT FORMAT.
   //
   // Six cells: graph and SMILES, three seeds, 11,140 steps — `006`'s horizon and
   // `006`'s mixture, with three things changed together because D3 says they

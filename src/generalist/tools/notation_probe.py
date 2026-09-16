@@ -1,9 +1,9 @@
-"""Tier 0.1 — what each input representation is worth before any training.
+"""The zero-shot notation probe — what each input representation is worth before any training.
 
-`MOLECULE_GENERALIST.md` §9 Tier 0.1. Scores the **untrained** backbone on the
+`MOLECULE_GENERALIST.md` §8.3. Scores the **untrained** backbone on the
 five Tier-B property sets, once per flat notation (SMILES, SELFIES, InChI) and
 once on the graph arm, and reports ROC-AUC from the same yes/no margin readout
-every number in §8 was produced by.
+every property number in that document was produced by.
 
 **What it is for.** §8 reads the flat arm's property-prediction lead as a SMILES
 pretraining prior the graph arm cannot reach. The three notations determine the
@@ -275,8 +275,8 @@ def score(config, tasks, arms, model, tokenizer, collator, device,
             with torch.no_grad():
                 out = _score_indices(model, tokenizer, collator, source, spec,
                                      indices, device, batch_tokens)
-            # Tokens per example is a required disclosure for this ladder (§9
-            # Tier 0.2): a notation can score low because the backbone read less
+            # Tokens per example is a required disclosure for this ladder
+            # (`MOLECULE_GENERALIST.md` §8.3): a notation can score low because the backbone read less
             # of it, or because it is simply longer to attend over, and the two
             # are different causes.
             _nodes, tokens = source.lengths()
@@ -348,7 +348,7 @@ def _fmt(value, places: int = 4) -> str:
 
 
 def table(rows) -> str:
-    """The §9 Tier 0.1 read-out, arms as columns."""
+    """The zero-shot read-out (`MOLECULE_GENERALIST.md` §8.3), arms as columns."""
     arms = sorted({r["arm"] for r in rows}, key=lambda a: (a != "flat", a))
     # DEFAULT_TASKS order where known, then anything a caller added, so a custom
     # --tasks does not make the read-out raise.
@@ -442,8 +442,8 @@ def main(argv=None) -> int:
 
     record = {
         "probe": "notation_trained" if args.checkpoint else "notation_zero_shot",
-        "section": ("MOLECULE_GENERALIST.md §9 Tier 0.2" if args.checkpoint
-                    else "MOLECULE_GENERALIST.md §9 Tier 0.1"),
+        "section": ("MOLECULE_GENERALIST.md §8.3 (trained)" if args.checkpoint
+                    else "MOLECULE_GENERALIST.md §8.3 (zero-shot)"),
         "build_version": config.build_version(),
         "partition_version": config.partition_version(),
         "model_name": args.model_name,

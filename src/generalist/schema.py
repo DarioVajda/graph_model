@@ -28,26 +28,30 @@ guarantees is the whole answer. For the multi-token kinds (``text``, ``smiles``)
 the span is found by tokenizing the prompt node's text with the answer removed
 and taking the common prefix — see :func:`render`.
 
-**No chat template.** The molecules runs are on base ``meta-llama/Llama-3.2-1B``
-(`molecules/config.py::MODEL_NAME`), and a chat template on base weights is a
-format the model has never seen. D3's "instruct weights + chat template, both or
-neither" therefore resolves to *neither* here. When an instruct backbone lands,
-the template goes in this function and the version bumps — that is the whole
-reason the version exists.
+**The chat template is not here, and that is the design.** D3 pairs instruct
+weights with chat formatting, "both together, neither alone", and since 2026-09-10
+the campaign is on ``meta-llama/Llama-3.2-1B-Instruct``
+(`MOLECULE_GENERALIST.md` §6). The markup itself lives in one object —
+`molecules/data.py::PromptFormat`, resolved from the backbone name by
+`resolve_prompt_style` — because it is a property of the *text* an adapter emits,
+and this module's job starts once the text exists. What changes here is only that
+the answer boundary is the format's ``answer_prefix`` rather than a literal
+:data:`ANSWER_PREFIX`, and that a prompt node may arrive already terminated; both
+are handled below and neither moved :data:`SCHEMA_VERSION`, because the token
+layout of a *given* text did not change.
 
-**And when it lands, `answer_eos` has to be reconciled with it, not merely
-retargeted.** The build supervises a stop token on the generative kinds
+**`answer_eos` is reconciled with the format, not merely retargeted.** The build
+supervises a stop token on the generative kinds
 (`adapters/molecules.py::GENERATIVE_ANSWER_KINDS`). Reading it off the tokenizer
 is enough to *retarget* — base weights give ``<|end_of_text|>``, an Instruct
 checkpoint gives ``<|eot_id|>``, and on Instruct that row is trained, so the
 frozen-head objection that rules it out on base weights does not apply there.
 What retargeting does not solve is that a chat template **already closes the
-assistant turn with that same token**. Appending on top of it writes the token
-twice, and a doubled stop token is exactly the kind of defect this one was: it
-costs nothing to train through and shows up only as a metric that will not move.
-So the template and the append are one decision — whichever emits the token, the
-other must not — and the answer boundary this function locates stops being
-``ANSWER_PREFIX`` at the same moment.
+assistant turn with that same token**. Appending on top of it would write the
+token twice, and a doubled stop token is exactly the kind of defect the missing
+one was: it costs nothing to train through and shows up only as a metric that
+will not move. So the two are one decision, and `_materialise` takes it in one
+place — it appends only when ``fmt.answer_suffix`` is empty.
 
 Free of torch at import time: this module is imported by everything else in the
 harness, including the CPU-only ``validate`` mode. RDKit and the molecules
@@ -77,7 +81,7 @@ SPLITS = ("train", "val", "test", "held_out")
 #: The input representations an example can be written in. ``flat_selfies`` and
 #: ``flat_inchi`` are the same single-node flat arm in a different molecular
 #: notation (`adapters/molecules.py` FLAT_NOTATIONS), for the notation ladder in
-#: `MOLECULE_GENERALIST.md` §9 Tier 0.
+#: `MOLECULE_GENERALIST.md` §8.3.
 #:
 #: **This is the definition; `config.ARMS` re-exports it.** The list lived in
 #: three places when the ladder was added and the build failed at the third,
