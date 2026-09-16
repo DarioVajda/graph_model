@@ -642,3 +642,4 @@ def check_selection(selection, *, mode: str = "train"):
 # The built-ins register themselves on import. Bottom of the file so the module's
 # protocol and registry are fully defined by the time they do.
 from . import builtin as _builtin        # noqa: E402,F401  (import for side effect)
+from . import text_behaviour as _text    # noqa: E402,F401  (import for side effect)

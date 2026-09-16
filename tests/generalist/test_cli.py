@@ -212,6 +212,43 @@ CAMPAIGN_HASHES = {
 }
 
 
+#: The same pin for the campaign the write-up now reports — `probes/008`, six
+#: cells on instruct weights in chat formatting (`MOLECULE_GENERALIST.md` §7).
+#: Every digest here is read off that cell's own line in `results/runs.jsonl`,
+#: not off the config as it stands today, which is the only way the pin means
+#: anything.
+#:
+#: A probe config rather than a `runs/` one, and pinned all the same: what makes a
+#: config a result artifact is that a quoted number came out of it, not which
+#: directory it sits in.
+INSTRUCT_HASHES = {
+    "molecule_generalist_instruct_graph_s0": "d9c37cf143837e32",
+    "molecule_generalist_instruct_graph_s1": "e9696da0e0eb5e07",
+    "molecule_generalist_instruct_graph_s2": "a21e0ae903631f67",
+    "molecule_generalist_instruct_flat_s0": "bf34e59c2c8fd378",
+    "molecule_generalist_instruct_flat_s1": "8f4cca0fffe08b5b",
+    "molecule_generalist_instruct_flat_s2": "0ebe079768037ad0",
+}
+
+
+def test_the_instruct_campaign_still_resolves_to_the_runs_that_were_measured():
+    """The six reportable cells hash to what their run records carry.
+
+    This is the campaign `MOLECULE_GENERALIST.md` §7 reports and the one the document's headline
+    numbers come from, so it gets the same guard the notation ladder has. It also
+    catches the specific way a validator gets added wrong: ``validator_specs`` is
+    inside `hash_payload`, so putting a new validator into an existing preset
+    renames every cell that used it — which is why `text_behaviour` ships as its
+    own set.
+    """
+    cells = config_cells(os.path.join(
+        CONFIGS_DIR, "probes", "008_molecule_generalist_instruct.jsonc"))
+    assert set(INSTRUCT_HASHES) <= set(cells)
+    for name, digest in INSTRUCT_HASHES.items():
+        assert RunConfig(**cells[name]).config_hash()[:16] == digest, (
+            f"{name} no longer resolves to the run that was measured")
+
+
 def test_the_campaign_still_resolves_to_the_runs_that_were_measured():
     """The twelve cells hash to what their run records carry.
 

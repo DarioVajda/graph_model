@@ -326,7 +326,7 @@ MIXTURES = {
 #: **The hour is now eight minutes, and the cadence should go back on the next
 #: campaign.** The firing was slow because generation ran one example per
 #: `generate` call, and it ran one at a time because a right-padded batch cannot
-#: be continued (`MOLECULE_GENERALIST.md` §7). Batched, left-padded and on the
+#: be continued (`MOLECULE_GENERALIST.md` §6). Batched, left-padded and on the
 #: flex prefill it is 8.5x faster on the graph arm and 11.2x on the flat one,
 #: and sharded across four ranks another 3.4x on top — so the 133-minute flat
 #: firing measured here is about 12 minutes on one card. At that price
@@ -395,7 +395,7 @@ SHAKEDOWN_VALIDATORS = (
 )
 
 #: The default set minus `perm_spread`, for the canonical-only notation arms of
-#: `MOLECULE_GENERALIST.md` §9 Tier 0.2 (`flat_selfies`, `flat_inchi`).
+#: `MOLECULE_GENERALIST.md` §8.3 (`flat_selfies`, `flat_inchi`).
 #:
 #: **Dropped because it cannot be measured there, not because it is inconvenient.**
 #: Property 1 is read as the spread of the margin across *re-orderings* of the
@@ -434,12 +434,34 @@ G2S_SPECIALIST_VALIDATORS = (
     {"name": "throughput", "cadence": "steps:50"},
 )
 
+#: `text_behaviour` alone, for `eval` mode over a checkpoint that is already
+#: trained — the six instruct cells of `MOLECULE_GENERALIST.md` §7, which were trained before this
+#: validator existed.
+#:
+#: **A separate set rather than an entry in `DEFAULT_VALIDATORS`, and that is not
+#: a stylistic choice.** ``validator_specs`` is inside ``config_hash``
+#: (`hash_payload` keeps the resolved list, not the preset name), so adding a
+#: validator to the default set renames every run that used it and refuses their
+#: own resume. A new key adds a set without touching the ones already spent.
+#: `eval` mode reaches it through the generated ``--validators`` flag, which
+#: overrides the field for that one job; the record it writes carries both the
+#: config's hash and the checkpoint's, so the override is visible rather than
+#: silent.
+#:
+#: Fold `text_behaviour` into the default set with the **next** campaign's
+#: configs, the way `in_mixture`'s cadence is waiting to be — same rule, same
+#: reason.
+TEXT_VALIDATORS = (
+    {"name": "text_behaviour", "cadence": "manual"},
+)
+
 VALIDATOR_SETS = {
     "default": DEFAULT_VALIDATORS,
     "smoke": SMOKE_VALIDATORS,
     "shakedown": SHAKEDOWN_VALIDATORS,
     "notation": NOTATION_VALIDATORS,
     "g2s_specialist": G2S_SPECIALIST_VALIDATORS,
+    "text": TEXT_VALIDATORS,
     "none": (),
 }
 
@@ -473,7 +495,7 @@ class RunConfig:
     k_hop: int = 0
     k_hop_directed: bool = False
     lora: bool = True
-    #: `MOLECULE_GENERALIST.md` §7: r16, the r32 axis is closed.
+    #: `MOLECULE_GENERALIST.md` §6: r16, the r32 axis is closed.
     lora_r: int = 16
     #: The molecules value, so arm 1 and arm 2 match. The trunk's 0.15 is not
     #: used here — a different regulariser would be an uncontrolled difference
