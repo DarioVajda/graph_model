@@ -215,6 +215,34 @@ def molecule_generalist_mixture() -> tuple:
     return tuple(entries)
 
 
+#: `MOLECULE_GENERALIST.md` §9.1: the replay share, pre-registered.
+REPLAY_SHARE = 0.15
+
+
+def molecule_generalist_replay_mixture() -> tuple:
+    """§2's mixture at 0.85x, plus `text/replay` as a block of its own at 0.15.
+
+    Every molecule weight is scaled rather than one block being cut, so the four
+    blocks keep the ratios §2 justifies and the molecule gradient loses exactly
+    the replay share and nothing else.
+
+    **The ``budget_scale`` that reproduces `008` is 1.7, not 2.0.** The scale
+    multiplies the mixture's own feasible budget, ``min(available / share)``,
+    and scaling every corpus share by 0.85 raises that base by 1 / 0.85. At 2.0
+    the budget would be 2.35x §2's instead of 2x, BACE would be thinned to 0.0097
+    and refused at its 0.01 floor. At 1.7 the corpora are asked for exactly what
+    `008` asked of them, so BACE and BBBP sit at the same pass caps.
+
+    ``floor`` stays at 0.01 for the same reason: at 1.7 the thinned corpora land
+    on `008`'s absolute shares, not 0.85x of them.
+    """
+    entries = [dict(e, weight=e["weight"] * (1.0 - REPLAY_SHARE))
+               for e in molecule_generalist_mixture()]
+    entries.append({"name": "text/replay", "weight": REPLAY_SHARE,
+                    "block": "replay"})
+    return tuple(entries)
+
+
 #: The smoke mixture: three maximally different tasks (D8/T10). ``mol/bace`` is
 #: ``yesno`` and a corpus, ``mol/ring_size`` is ``token`` and a generator,
 #: ``mol/g2s`` is ``smiles`` and a generator — so one 200-step run exercises the
@@ -285,6 +313,7 @@ SMOKE_PROBE_MIXTURE = SMOKE_MIXTURE + (
 
 MIXTURES = {
     "molecule_generalist": molecule_generalist_mixture(),
+    "molecule_generalist_replay": molecule_generalist_replay_mixture(),
     "smoke": SMOKE_MIXTURE,
     "smoke_probe": SMOKE_PROBE_MIXTURE,
     "cross_check": CROSS_CHECK_MIXTURE,
@@ -533,6 +562,17 @@ class RunConfig:
     #: Generator passes ``data_prep`` materialises. 0 means "as many as the
     #: resolved mixture will consume", which ``validate`` prints per task.
     generator_passes: int = 0
+
+    # ── data: the text adapter (`adapters/text.py`) ──────────────────────────
+    #: Only read when the mixture names a ``text/`` task, and only hashed then,
+    #: so every molecules-only config keeps its hash.
+    #:
+    #: The node length for ``text/`` tasks. A prompt of up to 256 tokens and an
+    #: answer of up to 768 do not fit the molecule nodes' 512, and ``max_length``
+    #: is inside every molecule build hash, so the text task has its own.
+    text_max_length: int = 1024
+    #: The versioned prompts-and-answers directory under ``results/replay``.
+    replay_version: str = "v1"
 
     # ── mixture (D2, D4) ─────────────────────────────────────────────────────
     mixture: str = "molecule_generalist"
@@ -807,6 +847,23 @@ class RunConfig:
             cache_root=self.cache_root or DEFAULT_CACHE_ROOT,
         )
 
+    def has_text_tasks(self) -> bool:
+        """Whether the mixture names a ``text/`` task, which is what brings the
+        text adapter into the registry, the build and the hash."""
+        from .registry import TEXT_PREFIX
+
+        return any(e["name"].startswith(TEXT_PREFIX) for e in self.mixture_entries())
+
+    def text_adapter_config(self):
+        """The :class:`TextAdapterConfig` for this run's backbone and format."""
+        from .adapters.text import DEFAULT_CACHE_ROOT, TextAdapterConfig
+
+        return TextAdapterConfig(
+            model_name=self.model_name, prompt_style=self.prompt_style,
+            max_length=self.text_max_length, magnetic_q=self.magnetic_q,
+            magnetic_m=self.magnetic_m, replay_version=self.replay_version,
+            cache_root=self.cache_root or DEFAULT_CACHE_ROOT)
+
     # ── derived: the schedule ────────────────────────────────────────────────
 
     def decay_min_factor(self) -> float:
@@ -857,6 +914,11 @@ class RunConfig:
         # finished cells and refuse their own resume.
         if payload.get("answer_eos") is False:
             payload.pop("answer_eos")
+        # The text adapter's knobs change nothing a run without a `text/` task
+        # draws, so they are hashed only when one is in the mixture.
+        if not self.has_text_tasks():
+            payload.pop("text_max_length", None)
+            payload.pop("replay_version", None)
         # Same rule as `MoleculeAdapterConfig.build_version`: hash the *resolved*
         # prompt style, and only when it is not the plain one every run before
         # this field existed used.

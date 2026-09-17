@@ -89,6 +89,13 @@ def build_registry(config: RunConfig, adapter_config=None):
     Every ``mol/`` task is registered, not just the ones in the mixture: the
     ``held_out`` validator picks its tasks up from the registry (D7.3), and a
     fork's ``adapt`` mode resolves a held-out task's spec from it.
+
+    **``text/`` tasks are registered only when the mixture names one.** The
+    registry hash is inside the mixture hash a checkpoint records, so
+    registering them everywhere would make every molecules-only run resume under
+    a different mixture than it trained on. ``adapter_config`` stays the
+    molecules one; the text config is a pure function of the run config
+    (:meth:`RunConfig.text_adapter_config`), so it is rebuilt where needed.
     """
     from .adapters import molecules
 
@@ -96,7 +103,30 @@ def build_registry(config: RunConfig, adapter_config=None):
     adapter_config.validate()
     registry = Registry()
     molecules.register_molecule_tasks(registry, adapter_config, arm=config.arm)
+    if config.has_text_tasks():
+        from .adapters import text
+
+        text_config = config.text_adapter_config()
+        if text_config.generated():
+            text_config.validate()
+        text.register_text_tasks(registry, text_config, arm=config.arm)
     return registry, adapter_config
+
+
+def load_source(config: RunConfig, task: str, split: str, pass_id: int = 0,
+                adapter_config=None):
+    """The built source for ``task``, from whichever adapter owns its prefix."""
+    from .adapters import adapter_for
+
+    if adapter_for(task) == "text":
+        from .adapters import text
+
+        return text.load(task, split, config.arm, pass_id=pass_id,
+                         config=config.text_adapter_config())
+    from .adapters import molecules
+
+    return molecules.load(task, split, config.arm, pass_id=pass_id,
+                          config=adapter_config)
 
 
 def unbuilt_tasks(registry: Registry, config: RunConfig) -> list:
@@ -160,9 +190,31 @@ def generator_passes(config: RunConfig, mixture=None, registry: Registry = None)
         return int(config.generator_passes)
     if mixture is None or registry is None:
         return 1
+    from .registry import TEXT_PREFIX
+
     needed = [n for name, n in passes_needed(mixture, registry).items()
-              if registry.get(name).kind == "generator"]
+              if registry.get(name).kind == "generator"
+              and not name.startswith(TEXT_PREFIX)]
     return max(needed) if needed else 1
+
+
+def text_passes(mixture=None, registry: Registry = None) -> int:
+    """Replay passes ``data_prep`` should build: what the run consumes, plus one.
+
+    Counted apart from :func:`generator_passes` because the two are sized
+    against different pools: a molecule generator runs to twenty-odd passes of
+    4,000, and building twenty-odd passes of 35k replay examples for it would
+    be most of a day of tokenizing for nothing. The extra pass covers two
+    things: the sampler opens a generator's next pass the moment the current one
+    is spent, and the anneal's decay tail draws past the trunk's last step.
+    """
+    if mixture is None or registry is None:
+        return 1
+    from .registry import TEXT_PREFIX
+
+    needed = [n for name, n in passes_needed(mixture, registry).items()
+              if name.startswith(TEXT_PREFIX)]
+    return (max(needed) + 1) if needed else 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,15 +252,13 @@ def build_eval_sets(config: RunConfig, registry: Registry, mixture, splits,
     that a measurement never loses a run that has already cost GPU-hours; the
     validator then simply has nothing to score for that task and says so.
     """
-    from .adapters import molecules
-
     adapter_config = adapter_config or config.adapter_config()
     splits = set(splits or ())
     out: dict = {}
 
     def add(task, split):
         try:
-            source = molecules.load(task, split, config.arm, config=adapter_config)
+            source = load_source(config, task, split, adapter_config=adapter_config)
         except Exception as exc:                                   # noqa: BLE001
             log(f"[eval-sets] {task}/{split}: not loaded ({type(exc).__name__}: "
                 f"{exc}); the validators that wanted it will report nothing for it")
@@ -283,15 +333,13 @@ def make_get_source(config: RunConfig, registry: Registry, adapter_config):
     axis over, and the same rule fixes it: the pass id is only a filename for a
     source that has more than one file.
     """
-    from .adapters import molecules
-
     def get_source(task: str, pass_id: int):
         spec = registry.get(task)
         held_out = is_held_out(spec)
         split = "held_out" if held_out else "train"
         built = int(pass_id) if (spec.kind == "generator" and not held_out) else 0
-        return molecules.load(task, split, config.arm, pass_id=built,
-                              config=adapter_config)
+        return load_source(config, task, split, pass_id=built,
+                           adapter_config=adapter_config)
 
     return get_source
 

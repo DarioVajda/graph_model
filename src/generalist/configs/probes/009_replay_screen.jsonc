@@ -1,0 +1,147 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE REPLAY SCREEN (`MOLECULE_GENERALIST.md` §9.1) — `008`'S GRAPH CELL, SEED 0, WITH 15 % OF EVERY STEP SPENT ON THE BACKBONE'S OWN ANSWERS.
+  //
+  //   python3 -m src.generalist validate --config <this file>
+  //   src/generalist/tools/run_cli.sh data_prep --config <this file>
+  //   src/generalist/tools/chain.sh <this file> replay_screen_graph
+  //
+  // ── THE HYPOTHESIS ─────────────────────────────────────────────────────────
+  //
+  // `008`'s annealed graph trunk answers 13.9 % of the 48 text probes with a
+  // ChEBI-20-shaped caption (§7.6). The trunk has never seen a single-node graph
+  // that was not a molecule question, so the adapter has no reason to leave a
+  // plain prompt alone. `text/replay` is that example: a user turn and the answer
+  // `Llama-3.2-1B-Instruct` itself sampled for it, on one node, where every
+  // structural bias is zero (Property 2) and the target is exactly what the
+  // backbone would have said.
+  //
+  // ── ONE CHANGE, AND WHAT IT FORCES ─────────────────────────────────────────
+  //
+  //   1. `mixture: molecule_generalist_replay`. Every molecule weight x0.85,
+  //      `text/replay` at 0.15 in a block of its own.
+  //   2. `budget_scale` 2.0 -> **1.7**. The scale multiplies the mixture's own
+  //      feasible budget, which the 0.85x shares raise by 1/0.85, so 1.7 is the
+  //      value that asks each corpus for what `008` asked of it. At 2.0 BACE is
+  //      thinned under its 0.01 floor and the config is refused.
+  //   3. `tokens_per_step` 16384 -> **17013**, so examples/step stays at `008`'s
+  //      55.89 (`tools/tokens_per_step.py`). A replay example averages 364.1
+  //      tokens against the molecule mixture's 293, which moves the weighted
+  //      mean to 304.39; at 16384 the run would take 53.83 examples a step and
+  //      the molecule gradient would lose 18 % rather than the pre-registered
+  //      15 %. `accumulation_steps` stays 8 on two cards, so the micro-batch is
+  //      1,063 tokens and a replay example of up to 1,024 still fits in one.
+  //
+  // ── WHAT THE BUILD HOLDS ───────────────────────────────────────────────────
+  //
+  // `replay/v1`: 38,656 train examples a pass from 37,492 prompts, 445 val.
+  // The run draws 93,396 of them, 2.42 passes, and `data_prep` builds four.
+  // The total budget is 622,642 examples against `008`'s 622,671. Answers
+  // repeat only for prompts that kept fewer than three terminated answers:
+  // 1,459 repeated draws in pass 1 and 4,221 in all of pass 2, of which the
+  // trunk takes 42 %, so about 3.5 % of its draws are an answer it has already
+  // seen.
+  //
+  // Everything else is `008`'s graph cell, seed 0: backbone, chat format,
+  // recipe, horizon (11,140 steps), cadence, and the same molecule builds (the
+  // text task's 1,024-token node length lives in its own build and hash).
+  //
+  // ── WHAT IS READ, AND AGAINST WHAT ─────────────────────────────────────────
+  //
+  // After the standard anneal (`configs/forks/anneal_molecule_generalist.jsonc`),
+  // against `008` graph seed 0 annealed:
+  //
+  //   * `text_behaviour` (`eval --validators text`): `caption_rate` <= 0.03 from
+  //     0.139, and a lower `kl_mean`.
+  //   * the molecule suite within noise: five-set property mean within one
+  //     seed-sd, every in-mixture probe within +-0.02, g2s `exact_match` within
+  //     0.03.
+  //
+  // `text/replay` has no evaluation split (`adapters/text.py::task_specs`), so
+  // `in_mixture` scores exactly the tasks it scores on `008`.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "replay_screen",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      "inductor_cache": ".inductor_cache/generalist_instruct",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "replay_screen_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 17013,
+      "accumulation_steps": 8
+    }
+  ],
+
+  "seed": [0],
+
+  // ── the change ─────────────────────────────────────────────────────────────
+  "mixture": "molecule_generalist_replay",
+  "replay_version": "v1",
+  "text_max_length": 1024,
+  "budget_scale": 1.7,
+  "max_steps": 11140,
+
+  // ── everything below is `008`'s, unchanged ─────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+  "validators": "default",
+
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

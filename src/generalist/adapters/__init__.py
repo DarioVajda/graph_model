@@ -37,13 +37,27 @@ from __future__ import annotations
 import importlib
 from typing import Protocol, runtime_checkable
 
-#: Adapter module names, resolved under this package. One entry per domain; the
-#: trunk's graphqa / kgqa / relbench adapters join it as they land (DESIGN.md §9).
-ADAPTERS = ("molecules",)
-
 
 class AdapterError(ValueError):
     """An adapter that cannot be resolved, or one asked for a task it does not own."""
+
+
+#: Adapter module names, resolved under this package. One entry per domain; the
+#: trunk's graphqa / kgqa / relbench adapters join it as they land (DESIGN.md §9).
+ADAPTERS = ("molecules", "text")
+
+#: Task-name prefix -> the adapter that owns it. A task's name is the only thing
+#: every caller holds, so dispatch reads it rather than a spec lookup.
+PREFIXES = {"mol/": "molecules", "text/": "text"}
+
+
+def adapter_for(task: str) -> str:
+    """The adapter name owning ``task``, by its prefix."""
+    for prefix, name in PREFIXES.items():
+        if task.startswith(prefix):
+            return name
+    raise AdapterError(
+        f"{task!r}: no adapter owns this name (prefixes {sorted(PREFIXES)})")
 
 
 @runtime_checkable

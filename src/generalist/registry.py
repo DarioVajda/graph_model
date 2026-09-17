@@ -202,6 +202,9 @@ def _hash(obj) -> str:
 #: Prefix the molecules adapter registers its tasks under.
 MOLECULE_PREFIX = "mol/"
 
+#: Prefix the text adapter registers its tasks under (`adapters/text.py`).
+TEXT_PREFIX = "text/"
+
 
 def molecule_held_out_names() -> set:
     """The molecules package's held-out declaration, as registry names.

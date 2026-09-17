@@ -270,6 +270,10 @@ def mode_validate(config: RunConfig, args) -> int:
     print(f"output_dir    {config.run_dir()}")
     print(f"config_hash   {config.config_hash()}")
     print(f"build_version {adapter_config.build_version()}")
+    if config.has_text_tasks():
+        text_config = config.text_adapter_config()
+        print(f"text build    {text_config.build_version()}  (replay "
+              f"{text_config.replay_version}, max_length {text_config.max_length})")
     print(f"registry      {len(registry)} tasks, hash {registry.hash()[:16]}")
     print()
     _print_partition(config, adapter_config)
@@ -291,6 +295,8 @@ def mode_validate(config: RunConfig, args) -> int:
         needed = wiring.generator_passes(config, mixture, registry)
         print(f"  generator passes to build: {needed} "
               f"({', '.join(f'{k}={v}' for k, v in sorted(passes.items()))})")
+        if config.has_text_tasks():
+            print(f"  replay passes to build: {wiring.text_passes(mixture, registry)}")
     print()
 
     from .evaluate import build_validators
@@ -311,7 +317,7 @@ def mode_validate(config: RunConfig, args) -> int:
 
 def mode_data_prep(config: RunConfig, args) -> int:
     from .adapters import molecules
-    from .registry import MOLECULE_PREFIX, is_held_out
+    from .registry import MOLECULE_PREFIX, TEXT_PREFIX, is_held_out
 
     registry, adapter_config = wiring.build_registry(config)
     arms = _names(args.arms) or (config.arm,)
@@ -321,14 +327,32 @@ def mode_data_prep(config: RunConfig, args) -> int:
     else:
         names = [e["name"] for e in config.mixture_entries()]
         names += [spec.name for spec in registry if is_held_out(spec)]
-    bare = tuple(dict.fromkeys(
+    names = tuple(dict.fromkeys(names))
+    text_names = tuple(n for n in names if n.startswith(TEXT_PREFIX))
+    bare = tuple(
         n[len(MOLECULE_PREFIX):] if n.startswith(MOLECULE_PREFIX) else n
-        for n in names))
+        for n in names if n not in text_names)
+    text_config = config.text_adapter_config() if text_names else None
 
-    print(f"data_prep: {len(bare)} tasks x {len(arms)} arms -> "
+    print(f"data_prep: {len(bare)} molecule tasks x {len(arms)} arms -> "
           f"{adapter_config.build_dir()}")
+    if text_names:
+        print(f"data_prep: {len(text_names)} text tasks x {len(arms)} arms -> "
+              f"{text_config.build_dir()}")
     part = molecules.partition(adapter_config)
     print(part.summary())
+
+    def build_text(passes):
+        if not text_names:
+            return
+        from .adapters import text
+
+        manifest = text.build(text_config, tasks=text_names, arms=tuple(arms),
+                              passes=passes, rebuild=args.rebuild)
+        for name in text_names:
+            print(f"data_prep: {name} {json.dumps(manifest['tasks'][name]['splits'])}")
+        print(f"data_prep: answers dropped before the build "
+              f"{json.dumps(manifest['answers_dropped'])}")
 
     # Two rounds, because the two quantities depend on each other: the number of
     # generator passes a run consumes comes from the resolved mixture, and the
@@ -339,6 +363,8 @@ def mode_data_prep(config: RunConfig, args) -> int:
     passes = wiring.generator_passes(config)
     molecules.build(adapter_config, roles=part, tasks=bare, arms=tuple(arms),
                     passes=passes, rebuild=args.rebuild)
+    text_built = 1
+    build_text(text_built)
 
     registry, _ = wiring.build_registry(config, adapter_config)
     if not wiring.unbuilt_tasks(registry, config):
@@ -350,6 +376,11 @@ def mode_data_prep(config: RunConfig, args) -> int:
             molecules.build(adapter_config, roles=part, tasks=bare,
                             arms=tuple(arms), passes=needed,
                             rebuild=args.rebuild)
+        needed_text = wiring.text_passes(mixture, registry)
+        if text_names and needed_text > text_built:
+            print(f"data_prep: the mixture consumes {needed_text - 1} replay "
+                  f"passes; building {needed_text} (one past the last)")
+            build_text(needed_text)
         print()
         print(wiring.resolve_mixture(config, registry).table())
     return 0
