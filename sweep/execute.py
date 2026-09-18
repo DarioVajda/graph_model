@@ -270,6 +270,20 @@ def _launch_env():
     return env
 
 
+#: Flags every container `srun` step carries.
+#:
+#: `MELLANOX_VISIBLE_DEVICES=none` skips enroot's mellanox hook, which fails on
+#: nodes without `rdma_ucm` (ixb7) and kills the container inside seconds with
+#: ``enroot-mount: failed to mount: /dev/infiniband/rdma_cm``. That is not a
+#: broken node and must not be answered with `--exclude`: excluding it costs a
+#: whole B300 node's worth of scheduling for a one-line environment fix
+#: (CLAUDE.md). Single-node jobs need no InfiniBand, which is every job this
+#: runner submits; a multi-node job would have to drop this and arrange its
+#: fabric another way. The `src/generalist/tools/` launchers already pass it, and
+#: a sweep landing on ixb7 is how we found that this one did not.
+_CONTAINER_SRUN_FLAGS = ("--export=ALL,MELLANOX_VISIBLE_DEVICES=none",)
+
+
 def _srun_wrap(label, job_script, sb):
     """``srun --container-image=... slurm_launch.sh <label> <job_script>`` wrap.
 
@@ -278,7 +292,7 @@ def _srun_wrap(label, job_script, sb):
     forwarded so HF/wandb creds + the model cache resolve inside it.
     """
     inner = ["bash", LAUNCHER, label, job_script]
-    srun = ["srun"]
+    srun = ["srun", *_CONTAINER_SRUN_FLAGS]
     if sb.get("container"):
         srun += [f"--container-image={sb['container']}",
                  f"--container-mounts={sb.get('mounts', _SBATCH_DEFAULTS['mounts'])}"]
@@ -304,7 +318,7 @@ def _array_wrap(labels, scripts, sb):
     two indexed args are emitted raw (not shlex-quoted) so the shell expands them;
     everything else is quoted normally.
     """
-    srun = ["srun"]
+    srun = ["srun", *_CONTAINER_SRUN_FLAGS]
     if sb.get("container"):
         srun += [f"--container-image={sb['container']}",
                  f"--container-mounts={sb.get('mounts', _SBATCH_DEFAULTS['mounts'])}"]
