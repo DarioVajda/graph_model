@@ -496,96 +496,21 @@ _CHEBI_FILES = {"train": "train.txt", "val": "validation.txt", "test": "test.txt
 def load_chebi(config: MoleculeAdapterConfig):
     """The three ChEBI-20 splits, screened. Returns ``(splits, stats)``.
 
+    **Delegates to `experiments.molecules.chebi.load_chebi`**, which is where the
+    screening lives now: ChEBI-20 is Tier C of the molecules benchmark suite and
+    its specialist trains in that package, so one implementation serves both and
+    the two cannot drift. The adapter's job here is only to unpack the config.
+
     ``splits`` is ``{"train"|"val"|"test": [{"cid", "mol", "key", "text"}, ...]}``
-    and every drop is a counted number rather than a silent skip, exactly as
-    `load_tier_b` treats its parse and bond-type failures:
-
-    ``parse``              RDKit cannot read the SMILES.
-    ``unsupported_bond``   a bond with no faithful text encoding (`is_encodable`).
-    ``heavy_atom_cap``     over ``chebi_heavy_atom_cap`` heavy atoms (§6).
-    ``disconnected``       more than one fragment, and they are not allowed (§6).
-    ``empty_description``  no caption; nothing to supervise.
-
-    ``RemoveAllHs`` before every check, as `load_tier_b` does: an explicit ``[H]``
-    beside the parent's own hydrogen count double-counts the hydrogen and was the
-    single ``rich_levi`` round-trip failure at M0.
+    and every drop is a counted number rather than a silent skip. The filters and
+    their names are unchanged, so a build made before the move still resolves to
+    the same molecules.
     """
-    from rdkit import Chem, RDLogger
+    from ...experiments.molecules.chebi import load_chebi as _load
 
-    from ...experiments.molecules.data import is_encodable
-
-    RDLogger.DisableLog("rdApp.*")
-
-    splits, stats = {}, {"kept": {}, "dropped": {}, "heavy_atoms": {}}
-    for split, filename in _CHEBI_FILES.items():
-        path = os.path.join(config.chebi_dir, filename)
-        if not os.path.exists(path):
-            raise AdapterBuildError(
-                f"{path} is missing. ChEBI-20 is the three tab-separated files "
-                "(CID, SMILES, description) under ChEBI-20_data/ in the MolT5 "
-                "repository, blender-nlp/MolT5.")
-        dropped = {"parse": 0, "unsupported_bond": 0, "heavy_atom_cap": 0,
-                   "no_heavy_atoms": 0, "disconnected": 0, "empty_description": 0}
-        kept, sizes = [], []
-        with open(path, encoding="utf-8") as f:
-            header = f.readline()
-            if not header.lower().startswith("cid"):
-                raise AdapterBuildError(
-                    f"{path}: expected a 'CID\\tSMILES\\tdescription' header, got "
-                    f"{header[:60]!r}")
-            for line in f:
-                line = line.rstrip("\n")
-                if not line:
-                    continue
-                parts = line.split("\t")
-                if len(parts) < 3:
-                    dropped["empty_description"] += 1
-                    continue
-                cid, smiles, description = parts[0], parts[1], "\t".join(parts[2:])
-                description = description.strip()
-                if not description:
-                    dropped["empty_description"] += 1
-                    continue
-                mol = Chem.MolFromSmiles(smiles)
-                if mol is None:
-                    dropped["parse"] += 1
-                    continue
-                mol = Chem.RemoveAllHs(mol)
-                if not config.chebi_allow_disconnected and \
-                        len(Chem.GetMolFrags(mol)) > 1:
-                    dropped["disconnected"] += 1
-                    continue
-                if mol.GetNumHeavyAtoms() > config.chebi_heavy_atom_cap:
-                    dropped["heavy_atom_cap"] += 1
-                    continue
-                if not mol.GetNumHeavyAtoms():
-                    # ChEBI describes some entries that are hydrogen and nothing
-                    # else — dihydrogen, the hydron. `RemoveAllHs` leaves them
-                    # with no atoms at all, which passes every filter above:
-                    # `GetMolFrags` counts zero fragments rather than two, zero
-                    # is under any cap, and an empty graph is trivially
-                    # encodable. What it is not is a molecule. Its
-                    # `partition_key` is the empty string, and `schema.validate`
-                    # refuses that — correctly, and about 20k examples into the
-                    # build. The floor belongs at the same place as the cap.
-                    dropped["no_heavy_atoms"] += 1
-                    continue
-                if not is_encodable(mol)[0]:
-                    dropped["unsupported_bond"] += 1
-                    continue
-                kept.append({"cid": cid, "mol": mol, "key": partition_key(mol),
-                             "text": description})
-                sizes.append(mol.GetNumHeavyAtoms())
-        splits[split] = kept
-        stats["kept"][split] = len(kept)
-        stats["dropped"][split] = dropped
-        stats["heavy_atoms"][split] = {
-            "mean": (sum(sizes) / len(sizes)) if sizes else 0.0,
-            "max": max(sizes) if sizes else 0,
-        }
-    stats["molecules"] = sum(stats["kept"].values())
-    stats["distinct_keys"] = len({r["key"] for s in splits.values() for r in s})
-    return splits, stats
+    return _load(heavy_atom_cap=config.chebi_heavy_atom_cap,
+                 allow_disconnected=config.chebi_allow_disconnected,
+                 chebi_dir=config.chebi_dir)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
