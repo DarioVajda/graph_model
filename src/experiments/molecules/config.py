@@ -100,6 +100,15 @@ class RunConfig:
     # `data_seed`, never by slicing (see `prepare_tier_b_graphs`).
     max_train_examples: int = 0
     max_eval_examples: int = 0
+    # ── Tier C (ChEBI-20) ──────────────────────────────────────────────────────
+    #: Heavy-atom ceiling on the captioning corpus. 128 admits 3,261 of the
+    #: benchmark's 3,300 test molecules; the 39 it excludes are charged as misses
+    #: when the number is reported, so this changes the denominator and is in the
+    #: dataset path (`chebi.py`, `TODO.md` §3).
+    chebi_heavy_atom_cap: int = 128
+    #: ChEBI-20 contains salts and multi-fragment entries. Admitting them is the
+    #: benchmark's own population; excluding them silently makes the task easier.
+    chebi_allow_disconnected: bool = True
     data_seed: int = 0
     ordering: str = "rcm"
     len_buckets: tuple = None
@@ -113,6 +122,22 @@ class RunConfig:
     # ── training schedule ──────────────────────────────────────────────────────
     lr: float = 1e-5
     bias_lr: float = 1e-3
+    #: ``"cosine"`` is this package's schedule and the one every specialist ran:
+    #: linear warmup then `cosine_with_min_lr` to ``lr/10`` in a single run, with
+    #: the checkpoint selected on a dev metric.
+    #:
+    #: ``"wsd"`` is warmup, a constant stable phase, then a short decay to
+    #: ``lr/10`` — the generalist harness's schedule, available here so a run can
+    #: be compared against one made there without changing two things at once.
+    #: It does not select: the end of the schedule is the answer.
+    #:
+    #: **The two do not want the same peak.** WSD spends almost its whole budget
+    #: at ``lr``; warmup+cosine averages about 0.55 of peak. A config moving from
+    #: one to the other holds the *dose* rather than the peak — see
+    #: `configs/042_chebi_cosine_2x.jsonc`.
+    lr_schedule: str = "cosine"
+    #: Fraction of the run WSD spends decaying. Ignored by ``"cosine"``.
+    wsd_decay_fraction: float = 0.1
     num_epochs: int = 20
     batch_size: int = 4
     accumulation_steps: int = 8

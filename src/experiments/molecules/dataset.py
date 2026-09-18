@@ -41,6 +41,11 @@ from .data import (
     relabel_for_dataset,
     scaffold_split,
 )
+from .chebi import (
+    CHEBI_TASK,
+    DEFAULT_HEAVY_ATOM_CAP,
+    build_chebi_examples,
+)
 from .tasks import ANSWER_VOCAB, ATOM_LEVEL_TASKS, TASK_GENERATORS, TIER_A_TASKS
 from .tier_b import TIER_B_TASKS, build_tier_b_examples
 
@@ -57,10 +62,17 @@ ARMS = ("graph", "flat", "flat_selfies", "flat_inchi")
 #: One task axis over both tiers. A Tier-A name selects a generator; a Tier-B
 #: name selects a MoleculeNet corpus. Keeping them on one axis is what lets a
 #: later multi-task mixture (PLAN.md §4 arm 2) just list task names.
-ALL_TASKS = TIER_A_TASKS + TIER_B_TASKS
+ALL_TASKS = TIER_A_TASKS + TIER_B_TASKS + (CHEBI_TASK,)
+
+
+#: Tier C — ChEBI-20 captioning (`chebi.py`). One task, and it is the only one in
+#: this package whose answer is free text rather than a token or a yes/no.
+TIER_C_TASKS = (CHEBI_TASK,)
 
 
 def tier_of(task):
+    if task in TIER_C_TASKS:
+        return "C"
     return "A" if task in TIER_A_TASKS else "B"
 
 #: The molecule pool Tier A draws from. Deliberately the Tier-B corpus: the same
@@ -79,6 +91,139 @@ def get_prompt_node_labels(example):
     labels = example["input_ids"][example["prompt_node"]].copy()
     labels[:-1] = [-100] * (len(labels) - 1)
     return labels
+
+
+def make_caption_labels(tokenizer, cfg):
+    """Labels for Tier C: supervise the **whole answer span**, mask the prefix.
+
+    Tiers A and B are one supervised token, which is why
+    :func:`get_prompt_node_labels` masks all but the last. A caption is 50-100
+    tokens, so the mask has to fall at the answer boundary instead.
+
+    The boundary is the tokenized length of the prompt node's *prefix* — the
+    ``answer_prefix`` (plain) or the assistant turn header (chat) that
+    `attach_question` puts before the answer. That is a prefix of a longer string
+    being tokenized as a whole, so BPE could in principle merge across the seam
+    and make the count wrong by one. `verify_caption_labels` decodes the
+    supervised span back and refuses the build if it is not exactly the answer,
+    which is the assertion that makes this safe rather than probable.
+    """
+    fmt = prompt_format(getattr(cfg, "prompt_style", None), cfg.model_name)
+    n_prefix = len(tokenizer(fmt.answer_prefix, add_special_tokens=False)["input_ids"])
+
+    def labels(example):
+        ids = example["input_ids"][example["prompt_node"]]
+        out = list(ids)
+        out[:n_prefix] = [-100] * min(n_prefix, len(out))
+        return out
+
+    labels.n_prefix = n_prefix
+    return labels
+
+
+def verify_generative_stop_token(ds, tokenizer, sample=64):
+    """A generated answer must END with the stop token. Refuses the build if not.
+
+    `PLAN.md` §9's rule, applied to the one quantity that has already cost this
+    project two months: **a model never shown an end-of-text token does not learn
+    where its answer stops.** It writes the right thing and runs on to the
+    generation cap, and every generative metric then scores *stopping* rather
+    than correctness — `generalist/MOLECULE_GENERALIST.md` §8.5, where a graph arm
+    emitting the exactly-correct SMILES 46.5 % of the time as a prefix of its
+    output was reported as 0.0000 exact match for two months.
+
+    That defect was reintroduced here on 2026-09-18 by porting Tier C without
+    carrying `add_eos` across: Tiers A and B answer in one teacher-forced token
+    and correctly leave it off, so the default is wrong for exactly one tier. The
+    build-time smoke did not catch it, because the smoke only established that
+    training *ran* — it never looked at what was being supervised. This assert is
+    what makes that impossible to repeat, and it is deliberately not a warning.
+    """
+    import random as _random
+
+    if tokenizer.eos_token_id is None:
+        raise AssertionError("a generative tier needs a tokenizer with an eos_token_id")
+    rng = _random.Random(0)
+    for i in rng.sample(range(len(ds)), min(sample, len(ds))):
+        row = ds[i]
+        ids = row["input_ids"][row["prompt_node"]]
+        if int(ids[-1]) != int(tokenizer.eos_token_id):
+            raise AssertionError(
+                f"example {i}'s prompt node does not end with the stop token "
+                f"({tokenizer.eos_token_id}); it ends with {int(ids[-1])}. A "
+                "generative answer without one trains a model that never stops, "
+                "and every caption metric computed from it scores stopping "
+                "rather than correctness (see this function's docstring).")
+    return True
+
+
+def verify_caption_labels(ds, tokenizer, answers, n_prefix, sample=64):
+    """The supervised span must decode to exactly the answer. Refuses if not.
+
+    `PLAN.md` §9's rule: an instrument that is only ever read has no
+    error-detecting surface. A silently-off-by-one mask trains the model to
+    predict the ``A:`` of its own prompt and drops the caption's first word, and
+    nothing downstream would say so — the loss would simply be a little worse.
+    """
+    import random as _random
+
+    rng = _random.Random(0)
+    n = min(sample, len(ds))
+    for i in rng.sample(range(len(ds)), n):
+        row = ds[i]
+        ids = row["input_ids"][row["prompt_node"]]
+        got = tokenizer.decode(ids[n_prefix:], skip_special_tokens=True)
+        want = answers[i]
+        if got.strip() != want.strip():
+            raise AssertionError(
+                f"caption label boundary is wrong at example {i}: the supervised "
+                f"span decodes to {got[:80]!r} but the answer is {want[:80]!r}. "
+                f"n_prefix={n_prefix} does not split this tokenizer's output.")
+    return n
+
+
+def prepare_chebi_graphs(cfg):
+    """Tier C graphs, ordered [train..., val..., test...], on ChEBI-20's own split.
+
+    **No scaffold split and no cross-source partition.** ChEBI-20 ships three
+    files and the published baselines train and test on exactly those; applying
+    our own split would make the number incomparable, and applying the
+    generalist's D3.3 partition would withhold ChEBI *training* molecules that a
+    MoleculeNet corpus happens to claim as test — a handicap no baseline pays
+    (`chebi.py`).
+
+    Caps subsample randomly under ``data_seed``, as Tier B does.
+    """
+    cap = getattr(cfg, "chebi_heavy_atom_cap", DEFAULT_HEAVY_ATOM_CAP)
+    allow = getattr(cfg, "chebi_allow_disconnected", True)
+    splits, stats = build_chebi_examples(heavy_atom_cap=cap,
+                                         allow_disconnected=allow)
+    rng = random.Random(cfg.data_seed)
+
+    ordered, sizes = [], {}
+    for name in ("train", "val", "test"):
+        items = splits[name]
+        limit = cfg.max_train_examples if name == "train" else cfg.max_eval_examples
+        if limit and len(items) > limit:
+            items = rng.sample(items, limit)
+        ordered.extend(items)
+        sizes[name] = len(items)
+
+    # A caption is free text, so the Tier-A/B answer histogram is meaningless
+    # here; what stands in for it is the caption length distribution, which is
+    # what a reader needs to judge a BLEU against.
+    lengths = [len(a.split()) for _m, _q, a in ordered]
+    stats["answers"] = {}
+    stats["answers_by_split"] = {}
+    stats["caption_words"] = {
+        "mean": (sum(lengths) / len(lengths)) if lengths else 0.0,
+        "min": min(lengths) if lengths else 0,
+        "max": max(lengths) if lengths else 0,
+    }
+    stats["used_split_sizes"] = sizes
+    stats["heavy_atom_cap"] = cap
+    stats["allow_disconnected"] = allow
+    return _build_split_graphs(ordered, cfg), stats, sizes, ordered
 
 
 def build_graph_example(mol, question, answer, named_atoms, cfg):
@@ -308,7 +453,24 @@ def prepare_tier_b_graphs(cfg):
 
 def dataset_path(cfg):
     """Artifact path encoding everything that changes the generated content."""
-    if tier_of(cfg.task) == "B":
+    if tier_of(cfg.task) == "C":
+        # `own` marks the benchmark's own three files as the split, which is what
+        # distinguishes this artifact from anything built under a scaffold split
+        # or the generalist's cross-source partition. The heavy-atom cap is in the
+        # path because it changes which molecules exist at all, and therefore the
+        # denominator of every metric computed downstream.
+        # `eos` marks a build whose captions carry a stop token. It is in the path
+        # because it changes the supervised content, and an artifact built without
+        # it scores whether the model stopped rather than whether it was right
+        # (§8.5). A build made before the fix therefore cannot be silently reused:
+        # its path lacks the tag, so it simply does not match.
+        tags = [cfg.task, cfg.arm, "own", "eos",
+                f"cap{getattr(cfg, 'chebi_heavy_atom_cap', DEFAULT_HEAVY_ATOM_CAP)}"]
+        if not getattr(cfg, "chebi_allow_disconnected", True):
+            tags.append("conn")
+        if cfg.max_train_examples or cfg.max_eval_examples:
+            tags.append(f"cap{cfg.max_train_examples}-{cfg.max_eval_examples}")
+    elif tier_of(cfg.task) == "B":
         tags = [cfg.task, cfg.arm, "scaffold"]
         if cfg.max_train_examples or cfg.max_eval_examples:
             tags.append(f"cap{cfg.max_train_examples}-{cfg.max_eval_examples}")
@@ -335,7 +497,11 @@ def dataset_path(cfg):
 
 def prepare_dataset(cfg):
     """Generate + featurize the full (train+val+test) dataset. Deterministic."""
-    if tier_of(cfg.task) == "B":
+    caption_answers = None
+    if tier_of(cfg.task) == "C":
+        graphs, stats, sizes, items = prepare_chebi_graphs(cfg)
+        caption_answers = [answer for _m, _q, answer in items]
+    elif tier_of(cfg.task) == "B":
         graphs, stats, sizes = prepare_tier_b_graphs(cfg)
     else:
         # Generate PER SPLIT, from molecule-disjoint pools. Generating one stream and
@@ -364,16 +530,45 @@ def prepare_dataset(cfg):
     stats["split_sizes"] = sizes
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
-    for answer in ANSWER_VOCAB:
-        n = len(tokenizer(answer, add_special_tokens=False)["input_ids"])
-        if n > 2:
-            raise AssertionError(
-                f"answer {answer!r} tokenizes to {n} tokens; last-token "
-                "supervision would not cover it")
+    if tier_of(cfg.task) != "C":
+        # Tier C's answer is a caption, so the single-token vocabulary check does
+        # not apply to it; its boundary is checked by `verify_caption_labels`
+        # after tokenization instead, which is the stronger statement of the same
+        # requirement.
+        for answer in ANSWER_VOCAB:
+            n = len(tokenizer(answer, add_special_tokens=False)["input_ids"])
+            if n > 2:
+                raise AssertionError(
+                    f"answer {answer!r} tokenizes to {n} tokens; last-token "
+                    "supervision would not cover it")
 
     ds = TextGraphDataset(graphs, rcm_ordering=(cfg.ordering == "rcm"))
-    ds.tokenize(tokenizer)
-    ds.compute_labels(get_prompt_node_labels)
+    # ── TIER C MUST CARRY A STOP TOKEN, AND THIS PROJECT HAS PAID FOR IT ONCE ──
+    # Tiers A and B answer in one token read teacher-forced, so where the answer
+    # ends is never in question and `add_eos` stays off. A caption is generated,
+    # and a model never shown an end-of-text token does not learn where a caption
+    # stops: it writes the right thing and runs on to the generation cap, and the
+    # metric then scores *stopping* rather than correctness.
+    #
+    # That is `generalist/MOLECULE_GENERALIST.md` §8.5 verbatim. It voided every
+    # generation row of three campaigns, and for two months it was read as "the
+    # graph arm cannot serialize a molecule" when the arm was in fact writing the
+    # exactly-correct string 46.5 % of the time as a *prefix* of its output.
+    #
+    # On base weights the right token is `<|end_of_text|>` and not `<|eot_id|>`,
+    # whose embedding row sits at the reserved block's norm — initialisation
+    # rather than training, with a frozen output head. `tokenizer.eos_token_id`
+    # resolves to the correct one on both backbones.
+    ds.tokenize(tokenizer, add_eos=(tier_of(cfg.task) == "C"))
+    if tier_of(cfg.task) == "C":
+        labeller = make_caption_labels(tokenizer, cfg)
+        ds.compute_labels(labeller)
+        stats["caption_label_checked"] = verify_caption_labels(
+            ds, tokenizer, caption_answers, labeller.n_prefix)
+        stats["caption_prefix_tokens"] = labeller.n_prefix
+        stats["stop_token_checked"] = verify_generative_stop_token(ds, tokenizer)
+    else:
+        ds.compute_labels(get_prompt_node_labels)
     # Both features always, so ONE artifact serves every bias arm. On the flat
     # arm these are 1x1 tensors — free, and it keeps the two arms' pipelines
     # byte-identical downstream.
@@ -448,11 +643,12 @@ def load_data(cfg):
 def _split_sizes(cfg, ds):
     """Split sizes for this artifact.
 
-    Tier A's are configured; Tier B's are a property of the scaffold split and are
-    read back from the artifact's meta file, so a cap or a corpus change cannot
-    silently shift the boundaries of an already-built dataset.
+    Tier A's are configured; Tier B's and Tier C's are properties of the split
+    (a scaffold split, or ChEBI-20's own three files) and are read back from the
+    artifact's meta file, so a cap or a corpus change cannot silently shift the
+    boundaries of an already-built dataset.
     """
-    if tier_of(cfg.task) != "B":
+    if tier_of(cfg.task) not in ("B", "C"):
         return {"train": cfg.train_size, "val": cfg.val_size, "test": cfg.test_size}
     meta_path = dataset_path(cfg) + ".meta.json"
     if not os.path.exists(meta_path):

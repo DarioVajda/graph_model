@@ -46,6 +46,23 @@ wandb
 tabulate
 pytest
 
+# ChEBI-20 captioning, scored under the PUBLISHED protocol (evaluation only).
+#
+# `generalist/evaluate/captions.py` implements BLEU/ROUGE/METEOR by hand, on
+# purpose — the training image has none of this and three short well-specified
+# metrics cost less than a dependency on a pinned image. That stays true for
+# every number compared between our own arms. It stops being enough the moment a
+# number is quoted against MolT5: their protocol is NLTK `corpus_bleu` and
+# `meteor_score` over SciBERT word-piece tokens plus google-research
+# `rouge_score` over raw strings, and our METEOR is the exact-match stage alone,
+# which is a lower bound on theirs.
+#
+# So these three are here for `tools/chebi_lit_metrics.py`, which rescores dumped
+# predictions offline on CPU. Nothing in the training path imports them.
+nltk
+rouge_score
+absl-py
+
 # Interpretability
 seaborn
 

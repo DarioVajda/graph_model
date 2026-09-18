@@ -38,16 +38,60 @@ ACTIVE_PARAMS = ["graph_bias"]
 #: baselines report — selecting on exact match there would optimise a different
 #: thing than the number we quote (one of the three protocol defects already
 #: recorded in this project: `CLAUDE_CONTEXT.md` §4.1).
-TIER_METRIC = {"A": "eval_em_accuracy", "B": "eval_roc_auc"}
+TIER_METRIC = {"A": "eval_em_accuracy", "B": "eval_roc_auc", "C": "eval_loss"}
 
 
 def _scoring(cfg, tokenizer):
     """``(metric_name, compute_metrics, preprocess_logits)`` for this run's tier."""
+    if cfg.tier() == "C":
+        # Nothing to compute from logits: a caption is scored by generating it,
+        # which happens after the run (`chebi_score.py`). The Trainer still
+        # logs `eval_loss` on its own, which is the convergence curve and not the
+        # selection criterion.
+        return TIER_METRIC["C"], None, None
     if cfg.tier() == "A":
         return TIER_METRIC["A"], make_compute_metrics(), shift_logits_for_metrics
     yes_id, no_id = answer_token_ids(tokenizer)
     return (TIER_METRIC["B"], make_margin_metrics(yes_id),
             make_margin_preprocessor(yes_id, no_id))
+
+
+def _schedule_args(cfg, steps_per_epoch, total_steps):
+    """TrainingArguments fields for ``cfg.lr_schedule``.
+
+    ``cosine`` is this package's default and every specialist's schedule: linear
+    warmup of one epoch, then `cosine_with_min_lr` to ``lr/10``.
+
+    ``wsd`` is warmup / constant / short decay to the same floor, so a run here
+    can be set beside one made in the generalist harness without the schedule
+    being a second uncontrolled difference. HF's ``warmup_stable_decay`` requires
+    the three segments to sum to the total or it silently runs the remainder at
+    the floor, so they are computed to sum exactly and the stable phase absorbs
+    the rounding.
+    """
+    schedule = getattr(cfg, "lr_schedule", "cosine")
+    if schedule == "cosine":
+        return {"lr_scheduler_type": "cosine_with_min_lr",
+                "lr_scheduler_kwargs": {"min_lr": cfg.lr / 10},
+                "warmup_steps": steps_per_epoch}
+    if schedule != "wsd":
+        raise ValueError(f"Unknown lr_schedule {schedule!r} (expected 'cosine' or 'wsd').")
+
+    warmup = min(steps_per_epoch, max(1, total_steps // 10))
+    decay = max(1, int(round(total_steps * cfg.wsd_decay_fraction)))
+    stable = total_steps - warmup - decay
+    if stable < 1:
+        raise ValueError(
+            f"wsd: {total_steps} steps leaves no stable phase after "
+            f"{warmup} warmup and {decay} decay; shorten one or lengthen the run.")
+    # `num_warmup_steps` is NOT in the kwargs: `Trainer.create_scheduler` passes it
+    # itself from `warmup_steps`, and naming it in both places is a duplicate
+    # keyword argument rather than an override.
+    return {"lr_scheduler_type": "warmup_stable_decay",
+            "lr_scheduler_kwargs": {"num_stable_steps": stable,
+                                    "num_decay_steps": decay,
+                                    "min_lr_ratio": 0.1},
+            "warmup_steps": warmup}
 
 
 def _save_train_record(cfg, run_name, results, runs_jsonl, sweep_meta=None):
@@ -70,6 +114,19 @@ def _save_train_record(cfg, run_name, results, runs_jsonl, sweep_meta=None):
         "magnetic_m": cfg.magnetic_m, "max_spd": cfg.max_spd,
         "lora": cfg.lora, "lora_r": cfg.lora_r, "lora_alpha": cfg.lora_r * 2,
         "lr": cfg.lr, "bias_lr": cfg.bias_lr, "num_epochs": cfg.num_epochs,
+        # The schedule is an axis now that Tier C compares two of them, and the
+        # ChEBI screen decides which molecules exist at all — so both belong in
+        # the record rather than only in the config that produced it. A scoring
+        # pass rebuilds its config from here.
+        "lr_schedule": getattr(cfg, "lr_schedule", "cosine"),
+        "prompt_style": cfg.prompt_style,
+        "chebi_heavy_atom_cap": getattr(cfg, "chebi_heavy_atom_cap", None),
+        "chebi_allow_disconnected": getattr(cfg, "chebi_allow_disconnected", None),
+        # The caps pick the artifact, so a scoring pass that rebuilds its config
+        # from this record has to see them or it resolves to a different dataset
+        # than the one the run trained on.
+        "max_train_examples": cfg.max_train_examples,
+        "max_eval_examples": cfg.max_eval_examples,
         "batch_size": cfg.batch_size, "accumulation_steps": cfg.accumulation_steps,
         "eval_steps": cfg.eval_steps, "max_steps": cfg.max_steps,
         # Recorded because it is a memory axis, not just a throughput knob: each
@@ -102,7 +159,7 @@ def _eval_curve(trainer, metric):
     return curve
 
 
-def _convergence(curve, metric):
+def _convergence(curve, metric, greater_is_better=True):
     """Did the metric stop improving, or did the LR schedule simply run out?
 
     `feedback-dont-call-floors-early` applies to ceilings too: an arm still
@@ -130,7 +187,14 @@ def _convergence(curve, metric):
     if len(curve) < 4:
         return {"tail_gain": None, "still_improving": None,
                 "best_eval_index": None, "peak_fraction": None}
-    values = [c[metric] for c in curve]
+    # Tier C's metric is a LOSS, where improvement is downward. Negating it here
+    # keeps `tail_gain > 0` meaning "still getting better" for every tier, which
+    # is the property `still_improving` is read as having. Getting this wrong is
+    # not hypothetical in this package — the flag has already been shipped
+    # inverted once, and it fired hardest on exactly the runs it should have been
+    # quietest on.
+    sign = 1.0 if greater_is_better else -1.0
+    values = [sign * c[metric] for c in curve]
     tail_gain = values[-1] - values[-4]
     best = max(range(len(values)), key=values.__getitem__)
     return {
@@ -340,6 +404,11 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         len_buckets=cfg.len_buckets, node_buckets=cfg.node_buckets)
 
     steps_per_epoch = max(1, len(train_dataset) // cfg.batch_size // cfg.accumulation_steps)
+    # WSD needs its three segments to sum to the run's length, so the length has
+    # to be known here rather than left to the Trainer. `max_steps` wins when set,
+    # exactly as it does inside `TrainingArguments`.
+    total_steps = (cfg.max_steps if cfg.max_steps and cfg.max_steps > 0
+                   else steps_per_epoch * cfg.num_epochs)
     training_args = TrainingArguments(
         num_train_epochs=cfg.num_epochs,
         max_steps=cfg.max_steps,
@@ -368,14 +437,26 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         report_to=report_to,
         run_name=internal_run_name,
         learning_rate=cfg.lr,
-        lr_scheduler_type="cosine_with_min_lr",
-        lr_scheduler_kwargs={"min_lr": cfg.lr / 10},
-        warmup_steps=steps_per_epoch,
+        **_schedule_args(cfg, steps_per_epoch, total_steps),
         weight_decay=0.1,
         eval_strategy="steps", eval_steps=cfg.eval_steps,
         save_strategy="steps", save_steps=cfg.eval_steps,
-        metric_for_best_model=metric, greater_is_better=True,
-        save_total_limit=2, load_best_model_at_end=True,
+        # ── Tier C selects AFTER the run, on the metric it quotes ──────────────
+        # Tiers A and B have a dev metric the Trainer can compute from logits, so
+        # `load_best_model_at_end` picks the checkpoint for them. A caption has
+        # no such metric: BLEU needs generation, which `compute_metrics` never
+        # sees. Selecting on `eval_loss` instead would optimise a different thing
+        # than the number reported — the defect this package already recorded
+        # once (`TIER_METRIC`'s docstring). So Tier C keeps several checkpoints,
+        # scores each on the val split by generating, and picks the best; that is
+        # `chebi_score.py`. `prediction_loss_only` keeps the eval loop from
+        # gathering a caption's worth of logits per row, which is what would
+        # otherwise run the evaluation out of memory.
+        **({"prediction_loss_only": True, "save_total_limit": 6,
+            "load_best_model_at_end": False}
+           if cfg.tier() == "C" else
+           {"metric_for_best_model": metric, "greater_is_better": True,
+            "save_total_limit": 2, "load_best_model_at_end": True}),
     )
 
     trainer = GraphTrainerV2(
@@ -411,14 +492,23 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
     # checkpoint instead — `bias_norm_final` and the per-example report both read
     # the model, not the metrics.
     bias_norm_final = _bias_init_fingerprint(model)
-    per_example = _per_example(trainer, test_dataset, cfg, internal_run_name, runs_jsonl,
-                               yes_id=yes_id)
-    step_mem.mark("per_example_end", trainer.state)
-    best_ckpt = trainer.state.best_model_checkpoint
-    last_checkpoint = _score_last_checkpoint(
-        trainer, test_dataset,
-        int(best_ckpt.rsplit("-", 1)[1]) if best_ckpt else None)
-    step_mem.mark("last_checkpoint_end", trainer.state)
+    if cfg.tier() == "C":
+        # None of the tail applies to a caption. `_per_example` reports the
+        # yes/no margin geometry, and `_score_last_checkpoint` exists to put the
+        # last checkpoint beside a *selected* one — but Tier C does not select
+        # during training (see the `TrainingArguments` note), so there is nothing
+        # to sit it against. Selection and test scoring both happen afterwards,
+        # by generating, in `chebi_score.py`.
+        per_example, last_checkpoint = None, {}
+    else:
+        per_example = _per_example(trainer, test_dataset, cfg, internal_run_name,
+                                   runs_jsonl, yes_id=yes_id)
+        step_mem.mark("per_example_end", trainer.state)
+        best_ckpt = trainer.state.best_model_checkpoint
+        last_checkpoint = _score_last_checkpoint(
+            trainer, test_dataset,
+            int(best_ckpt.rsplit("-", 1)[1]) if best_ckpt else None)
+        step_mem.mark("last_checkpoint_end", trainer.state)
 
     # TAKEN HERE, NOT BEFORE THE TAIL ABOVE. The tail is three more full passes over
     # the test split — the second `evaluate`, the per-example report and the
@@ -470,16 +560,23 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         "bias_norm_final": bias_norm_final,
         # Is the headline a ceiling or an interruption? See `_convergence`.
         "eval_curve": training_curve,
-        **_convergence(training_curve, metric),
+        **_convergence(training_curve, metric,
+                       greater_is_better=(cfg.tier() != "C")),
         # What any score has to beat before it means anything. See `_answer_stats`.
         **_answer_stats(load_dataset_stats(cfg)),
         # Is a mistake explained by the molecule's width? See `analysis.py`.
-        **per_example,
+        **(per_example or {}),
         # What is checkpoint selection worth, given §8.3? See `_score_last_checkpoint`.
         **last_checkpoint,
     }
-    headline = (results["test_accuracy"] if cfg.tier() == "A" else results["test_roc_auc"])
-    last = results["test_accuracy_last"] if cfg.tier() == "A" else results["test_roc_auc_last"]
+    headline = (results.get("test_loss") if cfg.tier() == "C"
+                else results["test_accuracy"] if cfg.tier() == "A"
+                else results["test_roc_auc"])
+    # Tier C has no last-checkpoint rescore to sit beside a selected one —
+    # it does not select during training — so there is nothing to print here.
+    last = (None if cfg.tier() == "C"
+            else results["test_accuracy_last"] if cfg.tier() == "A"
+            else results["test_roc_auc_last"])
     print(f"[results] tier {cfg.tier()} headline={headline} "
           f"last-ckpt={last if last is not None else 'same as best'} "
           f"(best-val {metric}={results['best_val_score']}) "

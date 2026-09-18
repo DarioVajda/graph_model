@@ -156,6 +156,14 @@ def build_parser():
     p.add_argument("--max-train-examples", type=int, default=d.max_train_examples,
                    help="Tier B only: 0 = the whole scaffold split.")
     p.add_argument("--max-eval-examples", type=int, default=d.max_eval_examples)
+    p.add_argument("--chebi-heavy-atom-cap", type=int, default=d.chebi_heavy_atom_cap,
+                   help="Tier C: heavy-atom ceiling. Decides which of the "
+                        "benchmark's molecules exist, so it is in the dataset "
+                        "path and in the reported denominator.")
+    p.add_argument("--chebi-allow-disconnected", action=B,
+                   default=d.chebi_allow_disconnected,
+                   help="Tier C: admit salts and multi-fragment entries, which "
+                        "is the benchmark's own population.")
     p.add_argument("--data-seed", type=int, default=d.data_seed)
     p.add_argument("--ordering", choices=("rcm", "original"), default=d.ordering)
     p.add_argument("--len-buckets", type=_int_list, default=d.len_buckets)
@@ -169,6 +177,12 @@ def build_parser():
     # ── training schedule ──────────────────────────────────────────────────────
     p.add_argument("--lr", type=float, default=d.lr)
     p.add_argument("--bias-lr", type=float, default=d.bias_lr)
+    p.add_argument("--lr-schedule", choices=("cosine", "wsd"), default=d.lr_schedule,
+                   help="cosine is this package's schedule; wsd matches the "
+                        "generalist harness so a run can be compared with one "
+                        "made there without changing two things at once.")
+    p.add_argument("--wsd-decay-fraction", type=float, default=d.wsd_decay_fraction,
+                   help="fraction of a wsd run spent decaying; ignored by cosine.")
     p.add_argument("--num-epochs", type=int, default=d.num_epochs)
     p.add_argument("--batch-size", type=int, default=d.batch_size)
     p.add_argument("--accumulation-steps", type=int, default=d.accumulation_steps)
@@ -209,11 +223,14 @@ def config_from_args(args):
         train_size=args.train_size, val_size=args.val_size, test_size=args.test_size,
         max_train_examples=args.max_train_examples,
         max_eval_examples=args.max_eval_examples,
+        chebi_heavy_atom_cap=args.chebi_heavy_atom_cap,
+        chebi_allow_disconnected=args.chebi_allow_disconnected,
         data_seed=args.data_seed, ordering=args.ordering,
         len_buckets=tuple(args.len_buckets) if args.len_buckets else None,
         node_buckets=tuple(args.node_buckets) if args.node_buckets else None,
         lora=args.lora, lora_r=args.lora_r, lora_dropout=args.lora_dropout,
         lr=args.lr, bias_lr=args.bias_lr, num_epochs=args.num_epochs,
+        lr_schedule=args.lr_schedule, wsd_decay_fraction=args.wsd_decay_fraction,
         batch_size=args.batch_size, accumulation_steps=args.accumulation_steps,
         eval_steps=args.eval_steps, max_steps=args.max_steps,
         num_workers=args.num_workers,
