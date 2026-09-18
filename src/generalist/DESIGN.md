@@ -488,6 +488,16 @@ lexicon that are not present — so it is a lower bound on the published definit
 between our own arms, not comparable to a MolT5 number. Every Tier-C caption result carries that
 sentence, next to the templated-caption caveat `molecules/PLAN.md` §1 already attaches.
 
+**A number that has to go beside a published row is produced by a different pair of tools, on
+purpose.** `molecules/chebi_score.py` generates the whole split and dumps the predictions;
+`molecules/chebi_lit_metrics.py` rescores them offline under the reference implementation's protocol —
+NLTK `corpus_bleu` and `meteor_score` over SciBERT word pieces, `rouge_score` over raw strings — and
+charges every molecule the build excludes as a miss, so the denominator is the benchmark's 3,300 and
+not whatever the `chebi_heavy_atom_cap` admitted. The three dependencies live in `requirements.in`
+for that tool alone and nothing in the training path imports them. The gap between the two
+instruments is not small and not constant: on the `008` instruct cells it is 0.095 BLEU-2
+(`molecules/TODO.md` §6).
+
 ### D7.4 Selection
 
 Training runs do not select. A fork may declare `selection: {"metric": "<key>", "split": "val"}`
