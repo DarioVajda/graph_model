@@ -1,0 +1,94 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 042 — TIER C AT THIS PACKAGE'S RECIPE AND A LARGER BUDGET. 3 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHAT IT ANSWERS ────────────────────────────────────────────────────────
+  //
+  // Two things the instruct cells left open, and they are worth one run because
+  // they share it:
+  //
+  // 1. **The recipe.** Warmup + `cosine_with_min_lr` to `lr/10` in a single run,
+  //    which is what every other specialist in this package uses
+  //    (`train.py`) — against the generalist harness's WSD-plus-anneal-fork.
+  // 2. **The budget.** The 5,000-step instruct cells were NOT converged: held-out
+  //    test BLEU-2 rose 0.388 -> 0.415 -> 0.457 across step 2,000, step 4,000 and
+  //    the anneal, with validation rising alongside it the whole way and no peak.
+  //    The reported number was a floor.
+  //
+  // ── THE LEARNING RATE IS RAISED, AND BY HOW MUCH IS ARITHMETIC ─────────────
+  //
+  // `lr` 2e-4, twice the instruct cells' 1e-4, because the two schedules spend
+  // their budget at different average rates and holding the PEAK fixed would not
+  // hold the dose fixed. WSD here ran 200 warmup steps, ~4,800 at the full rate
+  // and a 500-step decay to `lr/10`: mean factor 0.94 of peak. Warmup plus cosine
+  // to `lr/10` over this budget averages 0.55. The ratio is **1.72**, so 2x is
+  // the correction, not a guess — and 3x would overshoot the thing it corrects.
+  //
+  // ── THE BUDGET ─────────────────────────────────────────────────────────────
+  //
+  // 12 epochs against the control's 9, so ~1.33x the exposure. Sized to finish
+  // inside the window on two cards rather than to a round number of steps; the
+  // question is whether MORE budget helps, and 1.33x answers that as well as 2x
+  // would.
+  //
+  // ── SELECTION IS ON DEV BLEU, AFTER THE RUN ────────────────────────────────
+  //
+  // Cosine anneals to a floor, so unlike WSD its last checkpoint is not
+  // privileged and the run should be read at its best DEV point. A caption has no
+  // dev metric the Trainer can compute — BLEU needs generation — so Tier C keeps
+  // six checkpoints, does not restore a best one during training, and
+  // `chebi_score.py --run-dir ... --split val` picks the winner by generating.
+  // Selecting on `eval_loss` would optimise a different quantity than the number
+  // reported, which is the defect `train.py::TIER_METRIC` already records once.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "042_chebi_cosine_2x",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "10:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 2e-4, "bias_lr": 2e-2 }
+  ],
+  "seed": [0, 1, 2],
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 1400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

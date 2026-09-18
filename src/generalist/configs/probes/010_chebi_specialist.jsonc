@@ -1,0 +1,174 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE ChEBI-20 SPECIALIST — the generation row of the paper's molecule section
+  //
+  // Three cells: the graph arm on `Llama-3.2-1B-Instruct`, seeds 0/1/2,
+  // `mol/chebi20` and nothing else.
+  //
+  //   python3 -m src.generalist validate --config <this file> --cells
+  //   src/generalist/tools/chain.sh <this file> <cell>
+  //
+  // ── WHY IT EXISTS ──────────────────────────────────────────────────────────
+  //
+  // Captioning is the only molecule benchmark with a published ladder that the
+  // specialist campaign never ran. `molecules/PLAN.md` §1 deferred Tier C to the
+  // generalist, and the generalist gave it a 20 % share of a sixteen-task
+  // mixture — a number that answers "what does a generalist retain" and not
+  // "what can this architecture do on this benchmark". The paper section needs
+  // the second one.
+  //
+  // ── COVERAGE IS THE POINT, AND IT IS WHY THE BUILD MOVES ───────────────────
+  //
+  // Every ChEBI-20 number measured here before today was scored on 2,889 of the
+  // 3,300 test molecules: `chebi_heavy_atom_cap` 64 dropped 251 and
+  // `chebi_allow_disconnected: false` dropped 160. Those are the large and the
+  // multi-fragment molecules — the hard end of the split — so a BLEU quoted
+  // against MolT5's 3,300 from that subset is not a comparison, it is a
+  // comparison against an easier benchmark with the same name.
+  //
+  // The cap moves to 128 and disconnected molecules are admitted: **3,261 of
+  // 3,300, 98.8 % coverage**. 128 is the 99th percentile of the test split's
+  // heavy-atom distribution (q0.99 = 135, max = 383); admitting the whole tail
+  // would put a 536-atom molecule through an N^2 bias for the sake of 39 rows.
+  // The 39 uncovered molecules are scored as **zeros** in the reported number
+  // rather than dropped, and the coverage travels with it.
+  //
+  // ── THE BUDGET ─────────────────────────────────────────────────────────────
+  //
+  // `passes` 15 on the mixture preset, and `max_steps` set from the measured
+  // examples/step after the smoke — a corpus of one still needs `max_steps` to
+  // bound the run because nothing else does. Fifteen passes over ~26k captions
+  // is about 2.7x the exposure the generalist's 20 % share bought over its own
+  // 11,140-step trunk.
+  //
+  // ── WHAT IS NOT RE-SCREENED, AND WHY THAT IS ALLOWED ───────────────────────
+  //
+  // `molecules/PLAN.md` §3.2.7 and §8.4.4 are the same lesson twice: an inherited
+  // recipe is a confound across a change in *capacity*. Nothing about capacity
+  // changes here — same backbone, same formatting, same LoRA surface, same
+  // schedule as `008`, whose recipe this is verbatim. What changes is the
+  // mixture, and a mixture change is what `max_steps` and `passes` answer. A
+  // rate screen would be re-measuring `008`'s answer on `008`'s model.
+  //
+  // ── NO FLAT TWIN ───────────────────────────────────────────────────────────
+  //
+  // The section compares against published rows only. The flat arm's caption
+  // number already exists at the generalist's mixture share (`008`,
+  // `MOLECULE_GENERALIST.md` §7.4) and is rescored on the whole split by
+  // `tools/chebi_report.py`, so the arm contrast is reported where it was
+  // measured rather than bought again here.
+  //
+  // AN ANNEAL FORK IS OWED PER CELL (`configs/forks/anneal_molecule_generalist.jsonc`).
+  // The annealed checkpoint is the reportable model, as everywhere else in this
+  // campaign.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // SUPERSEDED FOR THE PAPER BY `experiments/molecules/configs/041` AND `042`.
+  // ChEBI-20 is Tier C of the molecules benchmark suite and its specialist now
+  // trains in that package, on the benchmark's own split and this project's
+  // specialist recipe. This config stays because the numbers it produced are
+  // real, reproducible and are what `041` is the control for; it is not the
+  // config a new Tier-C run should start from.
+  "name": "chebi_specialist",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      // ONE card a cell, and a FOUR-HOUR window over four chunks, because this
+      // campaign is scheduling-bound rather than compute-bound. Submitted first
+      // as 2 cards x 24 h, it sat behind four higher-priority jobs on a cluster
+      // with every GPU allocated and the soonest Blackwell release 4h46 out — a
+      // 24 h request is almost never backfillable, and a two-card request needs
+      // both cards free on one node.
+      //
+      // The optimizer step is IDENTICAL: `micro_batch_tokens` is
+      // `tokens_per_step / (accumulation_steps x world_size)`, so halving the
+      // world size and doubling `accumulation_steps` to 16 holds it at 1024.
+      // Only the wall clock moves, and `MOLECULE_GENERALIST.md` §8.6 records
+      // that graph forks were not faster on more cards anyway — every new
+      // `(B, L, N)` triple pays a Triton autotune per rank.
+      //
+      // Four chunks of four hours is requeue-safe by construction: `save_steps`
+      // is 500, chunk 1 is `train` and every chunk after it is
+      // `resume --from latest`, so a chunk killed at its wall clock loses at
+      // most 500 steps.
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "04:00:00",
+      "inductor_cache": ".inductor_cache/chebi_specialist",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 4,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "chebi_specialist_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      // 16 at one rank == 8 at two: `micro_batch_tokens` is 1024 either way.
+      "accumulation_steps": 16
+    }
+  ],
+
+  "seed": [0, 1, 2],
+
+  // ── the specialist: one task, and the step count that has to bound it ──────
+  "mixture": "chebi_specialist",
+  "validators": "chebi_specialist",
+  "max_steps": 5000,
+
+  // ── the backbone, `008`'s ──────────────────────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+
+  // ── coverage ───────────────────────────────────────────────────────────────
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  // ── everything below is `008`, unchanged ───────────────────────────────────
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

@@ -1,0 +1,97 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 041 — TIER C CONTROL: the base backbone, this package's formatting, and
+  // otherwise the recipe the instruct cells ran. 3 runs (graph arm, 3 seeds).
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHAT IT ISOLATES ───────────────────────────────────────────────────────
+  //
+  // The first ChEBI-20 specialist ran on `Llama-3.2-1B-Instruct` in chat
+  // formatting, because it was built inside the generalist harness where the
+  // trunk lives on instruct weights. Every other specialist in this package runs
+  // on the RAW base and `Q:/A:` formatting (§3.4). That is one uncontrolled
+  // difference sitting under the only Tier-C number, and this run removes it:
+  // **base weights, plain formatting, everything else held.**
+  //
+  // "Everything else held" is exact. Same cap-128 ChEBI build, same LoRA surface
+  // (r16), same `bias_lr`, same `lr` 1e-4, same ~5,000-step budget expressed as
+  // epochs over the same corpus. What moves is `model_name` and, through
+  // `prompt_format`'s auto rule, the turn spelling.
+  //
+  // ── WHY THE BUDGET IS IN EPOCHS AND NOT STEPS ──────────────────────────────
+  //
+  // This package sizes runs by `num_epochs`; the generalist sized that run by
+  // `max_steps`. 9 epochs over the 26,071-molecule train split is the same
+  // exposure the 5,000-step instruct cell got (8.93 epochs over its own,
+  // partition-thinned 21,612). Matching exposure rather than step count is the
+  // right invariant: the two harnesses batch differently.
+  //
+  // ── THE SPLIT IS THE BENCHMARK'S OWN ───────────────────────────────────────
+  //
+  // No scaffold split and no cross-source partition (`chebi.py`). ChEBI-20 ships
+  // three files and every published baseline uses exactly those. This is also
+  // why this run sees 26,071 training molecules where the generalist saw 21,612:
+  // D3.3 withheld 2,184 ChEBI *training* molecules that a MoleculeNet corpus
+  // claimed as test, a handicap no baseline pays.
+  //
+  // ── SELECTION ──────────────────────────────────────────────────────────────
+  //
+  // WSD has no selection: the reported model is the end of the schedule. Tier C
+  // saves checkpoints and does not restore a best one during training
+  // (`train.py`), so the last checkpoint is this arm's answer, matching how the
+  // instruct cells were read. The cosine arm (`042`) is the one that selects.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "041_chebi_control_wsd",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 1e-4, "bias_lr": 1e-2 }
+  ],
+  "seed": [0, 1, 2],
+
+  // ── the control: base weights, this package's formatting ───────────────────
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "prompt_style": "plain",
+
+  // ── Tier C ─────────────────────────────────────────────────────────────────
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  // ── held to the instruct cells ─────────────────────────────────────────────
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 9,
+  "lr_schedule": "wsd",
+  "wsd_decay_fraction": 0.1,
+  "eval_steps": 400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}
