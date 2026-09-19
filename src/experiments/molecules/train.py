@@ -56,6 +56,33 @@ def _scoring(cfg, tokenizer):
             make_margin_preprocessor(yes_id, no_id))
 
 
+def steps_per_epoch_for(n_examples, batch_size, accumulation_steps,
+                        world_size=None):
+    """Optimizer steps in one epoch, as the Trainer will actually run them.
+
+    ``world_size`` defaults to the torchrun environment, and it belongs in the
+    divisor: one optimizer step consumes
+    ``batch_size * accumulation_steps * world_size`` examples, so at two ranks the
+    run is half as many steps as the single-rank arithmetic predicts.
+
+    Leaving it out is not a rounding error, because a WSD schedule's segments are
+    laid out against this number. A 9-epoch Tier-C run predicted as 7,326 steps
+    but executed as 3,663 halts in the middle of the stable phase and **never runs
+    its decay**, ending at peak LR — the one outcome the schedule exists to
+    prevent. Measured on 041 before the fix: step 3,663 logged `learning_rate`
+    1e-4, the peak, with no anneal at all, and the number it produced was a model
+    that had never been annealed.
+
+    Every other config in this package is `gpus_per_config: 1`, where the divisor
+    is 1 and the bug is invisible, so the two Tier-C sweeps are the only runs it
+    ever reached.
+    """
+    if world_size is None:
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    world_size = max(1, world_size)
+    return max(1, n_examples // batch_size // accumulation_steps // world_size)
+
+
 def _schedule_args(cfg, steps_per_epoch, total_steps):
     """TrainingArguments fields for ``cfg.lr_schedule``.
 
@@ -403,7 +430,20 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         magnetic_m=cfg.magnetic_m,
         len_buckets=cfg.len_buckets, node_buckets=cfg.node_buckets)
 
-    steps_per_epoch = max(1, len(train_dataset) // cfg.batch_size // cfg.accumulation_steps)
+    # `world_size` is part of the divisor, and leaving it out is not a rounding
+    # error — it doubles the schedule. An optimizer step consumes
+    # `batch_size * accumulation_steps * world_size` examples, so at two ranks the
+    # Trainer runs HALF the steps this line would otherwise predict. The segments
+    # of a WSD schedule are laid out against that prediction, so a 9-epoch run
+    # computed as 7,326 steps but executed as 3,663 stops dead in the middle of
+    # the stable phase and **never runs its decay** — it ends at peak LR, which is
+    # the one thing the schedule exists to avoid. Measured on 041 before the fix:
+    # step 3,663 logged `learning_rate` 1e-4, the peak, with no anneal at all.
+    #
+    # Every other config in this package is `gpus_per_config: 1`, where the bug is
+    # invisible, so the two Tier-C sweeps are the only runs it ever reached.
+    steps_per_epoch = steps_per_epoch_for(
+        len(train_dataset), cfg.batch_size, cfg.accumulation_steps)
     # WSD needs its three segments to sum to the run's length, so the length has
     # to be known here rather than left to the Trainer. `max_steps` wins when set,
     # exactly as it does inside `TrainingArguments`.
