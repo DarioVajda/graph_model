@@ -544,64 +544,231 @@ a doubled post-training evaluation. **Aggregation therefore de-duplicates on `sw
 guard belongs in `train.py` the next time this package runs multi-GPU — patching it under six live
 jobs would have been the more expensive mistake.
 
-## 6c. RESULTS — the control and the budget-scaling arm (2026-09-18)
+## 6c. THE ELEVENTH DEFECT: a "WSD" run that never annealed (2026-09-18)
+
+The first `041`/`042` sweeps produced a clean-looking result — cosine ahead of WSD by +0.023 BLEU-2
+on every metric, with half the seed spread — and it was wrong at the root. **`041` never ran its
+decay.** Its final checkpoint sits at the 1e-4 peak:
+
+```
+041 (labelled WSD)   step 1 → 1.012e-05    step 3663 (final) → 1.0e-04   ← peak, flat
+042 (cosine)         step 1 → 2.457e-07    step 4884 (final) → 2.0e-05   ← lr/10, correct
+```
+
+`train.py`'s `steps_per_epoch` divided by `batch_size` and `accumulation_steps` but **not by
+`world_size`**. An optimizer step consumes the product of all three, so at two ranks the Trainer runs
+half the predicted steps. The WSD segments were laid out against 26,071 // 4 // 8 × 9 = **7,326**
+steps — warmup 732, stable 5,861, decay 733 — while the run executed **3,663**. The decay segment
+began at step 6,593, which is 2,930 steps after the run was over. The warmup arithmetic confirms it
+exactly: `1e-5 + 9e-5 × (1/732)` = 1.0123e-05, matching the logged step-1 LR to every digit.
+
+**Why it survived inspection.** Nothing about the run announces it. The loss curve is ordinary, the
+checkpoint is real, the config says `"lr_schedule": "wsd"`, and the *run length* is correct — 3,663
+steps either way, because `num_epochs` governs that and only the schedule laid over it moved. It was
+found by accident, while checking the batch arithmetic for a four-card cell.
+
+**What it cost.** Both headline conclusions. A schedule comparison between an annealed arm and a
+never-annealed one measures mostly the missing anneal, which is the single best-understood
+end-of-training gain there is — so "+0.023 for cosine" was not a schedule result. And `probes/010`
+*did* anneal, via an explicit fork, so the 0.043 instruct-over-base gap was inflated by the same
+missing anneal and was not a backbone result either.
+
+Fixed in `train.py::steps_per_epoch_for`, with the stranding reproduced in
+`tests/experiments/molecules/test_schedule_steps.py` (7 tests). **Containment is total by luck, not
+design**: every other config in this package is `gpus_per_config: 1`, where the divisor is 1 and the
+bug cannot fire, so the two Tier-C sweeps are the only runs it ever reached. `042` was touched far
+more gently — cosine derives its decay from the Trainer's own step count, so the curve was right and
+only `warmup_steps` was wrong (814, two real epochs, where the recipe says one).
+
+Pre-fix results are kept under `results/_superseded_noanneal/` and **must not be set beside the
+corrected ones**. For the record, they were: `041` 0.3999 ±0.0030, `042` 0.4229 ±0.0015.
+
+## 6d. The 2×2 — backbone × schedule, all four cells on corrected code (2026-09-18)
+
+The fix makes the pre-fix cells incomparable to any new one, so all four are run together rather than
+patched piecemeal. This also finally closes the corner that was never run: **instruct weights and the
+cosine recipe at the same time.**
+
+| | WSD, 9 ep, `lr` 1e-4 | cosine, 12 ep, `lr` 2e-4 |
+|---|---|---|
+| **1B base**, `Q:/A:` | `041` | `042` |
+| **1B Instruct**, chat | `043` | `044` |
+
+Every cell: ChEBI's own three-file split, cap-128 build, `rich_levi` graph arm, LoRA r16, 3 seeds,
+2 GPUs. The WSD cells are read at the end of the schedule; the cosine cells at their best **dev**
+BLEU-2 checkpoint. `043`/`044` move only `model_name` from their base twin — `prompt_style` resolves
+from the name, so instruct weights and the chat template arrive together or not at all.
+
+**Why `043` is worth three cells on its own.** Without it the instruct claim still rests on
+`probes/010`, which differs from the base runs in four ways at once — backbone, turn spelling, split
+and harness — and two of those push in opposite directions, since `010` trained on the D3.3
+partition's 21,612 molecules where this package trains on ChEBI's own 26,071. `044` alone would give
+a headline number but could not separate "instruct helps" from "instruct helps *under cosine*".
+
+**The budget stays at 12 epochs.** The pre-fix `042` dev curves had already flattened — two of three
+seeds peaked at step 4,200 of 4,884 and then *declined*, and 2,800 → 4,200 bought +0.003 / +0.012 /
++0.013 BLEU-2. An earlier draft of this file read that as "still not converged" on the strength of
+the one seed that picked the last checkpoint; the other two contradict it. More budget is not where
+the remaining headroom is.
+
+### The stop token differs between the two backbones, and both are consistent
+
+Checked before the instruct cells could report anything, because §8.5 is this project's most expensive
+recurring defect and the chat path had never been exercised in this package:
+
+| backbone | trained stop token (`tokenizer.eos_token_id`) | `generate` halts on |
+|---|---|---|
+| `Llama-3.2-1B` | 128001 `<\|end_of_text\|>` | 128001 |
+| `Llama-3.2-1B-Instruct` | **128009** `<\|eot_id\|>` | [128001, 128008, **128009**] |
+
+`tokenize(add_eos=True)` appends the tokenizer's own EOS, so the two builds supervise *different*
+tokens — and `generate` falls back to the model's `generation_config`, whose instruct entry is a
+three-token set that contains 128009. The two agree on both backbones. Had the instruct build been
+supervised with 128001 instead, every caption would have run past its end and the failure would have
+looked like a quality problem rather than a stopping one.
+
+### What this design does and does not license
+
+Worth stating before the numbers land, so the reading is fixed in advance rather than fitted to the
+result.
+
+**Clean — the backbone axis.** `043` vs `041` and `044` vs `042` each move `model_name` and nothing
+else; `prompt_style` resolves from the name, so instruct weights and the chat template arrive
+together. Verified at the formatter: the base backbone gets `answer_prefix` `"\nA:"`, the instruct
+backbone gets `"<|start_header_id|>assistant<|end_header_id|>\n\n"`. This is a real main effect, and
+it is the one `probes/010` could never support.
+
+**NOT clean — the schedule axis is a RECIPE axis.** The cosine cells differ from the WSD cells in
+three ways at once: schedule, budget (12 epochs against 9), and learning rate (2e-4 against 1e-4,
+`bias_lr` likewise). So the contrast supports "this package's recipe beats the generalist harness's
+recipe" and **not** "cosine beats WSD". Turning it into a schedule ablation needs a matched-budget
+cell — WSD at 12 epochs — which nothing in the paper needs, and which the pre-fix dev curves argue
+against: 2,800 -> 4,884 steps bought +0.003 / +0.012 / +0.013 BLEU-2, so the budget is not what is
+doing the work.
+
+**Disclosed asymmetry — only the cosine arm selects on dev.** WSD's last checkpoint *is* its
+schedule's answer; a cosine run's is not privileged, which is why the two are read differently. But
+that hands the cosine arm a free selection advantage, and it points the same way as the conclusion it
+supports, so it is measured rather than waved at. On the pre-fix dev curves it is worth **+0.0034
+BLEU-2** (per seed +0.0064 / +0.0040 / 0.0000). Each cosine cell's LAST checkpoint is therefore also
+scored on test, so the recipe comparison can be read with the selection removed as well as with it.
+
+**The 2x LR correction survives the anneal fix.** Integrated over the schedules as they actually run,
+the fixed WSD spends a mean 0.9101 of peak and warmup-plus-cosine 0.5458 — ratio **1.667**, against
+the 1.72 computed when WSD was stuck at constant peak. The defect moved the justification by 0.05, so
+2x stands as a deliberate slight over-correction.
+
+### THE TWELFTH DEFECT: the instruct cells were discarding their own captions
+
+Found while reading `043`'s first three seeds, which came in at 0.3434 ±0.0584 — a spread thirty
+times the base control's over eval_loss curves that agreed to three decimal places (0.5962 / 0.5938 /
+0.5896). A seed spread that large over training that identical is a symptom, not a result.
+
+Greedy decoding was free to choose the stop token at the **first generated position**. That decodes,
+under `skip_special_tokens=True`, to the empty string, and is scored as a total miss. It is nearly
+invisible upstream: one position out of ~50, so even a 24 % probability there moves `eval_loss` by
+about 0.005.
+
+| | empty captions of 3,261 |
+|---|---|
+| `041`/`042`, base backbone, all six cells | **0** |
+| `probes/010`, instruct, all three seeds | **0** |
+| `043`, instruct, seeds 0/1/2 | **375 / 189 / 788** |
+
+The asymmetry is the chat template: `<|start_header_id|>assistant<|end_header_id|>\n\n` followed
+straight by `<|eot_id|>` is the instruct-tuned spelling of an empty turn, and the base backbone
+carries no such prior. On a 200-row sample of the worst seed, forbidding the stop token for five
+steps took empties from 46 to 0 and BLEU-2 from 0.3003 to 0.3914, and the recovered rows read as
+ordinary captions.
+
+`DEFAULT_MIN_NEW_TOKENS = 5` now applies on **every** arm. A constraint switched on for the arm it
+rescues is not a measurement, and it is verifiably free where it is not needed: `041` seed2 rescored
+to 0.4255, identical to its pre-fix value. `tests/experiments/molecules/test_generate_min_new.py`
+reproduces the defect and asserts that generation never branches on the backbone.
+
+**Why this one was dangerous.** It produced exactly the result I had already half-written — "the
+instruct backbone is worse" — and I reported that reading, along with an inference about `010`'s
+budget, before checking it. Both had to be withdrawn. The number agreed with the hypothesis, which is
+the condition under which a number gets the least scrutiny. This is the same trap as §8.5 and as the
+stop-token port, three times now in one campaign.
+
+All twelve cells were regenerated afterwards into `results/chebi_v2/` as one homogeneous batch —
+including redoing the cosine arms' dev selection, since those winners were chosen by generating too.
+Nothing from the mixed directory is reused; the pre-fix scores are in
+`results/_superseded_noeosguard/`.
+
+### RESULTS — the 2x2, all twelve cells on corrected code (2026-09-18)
 
 Published protocol, whole 3,300-molecule benchmark split, 39 unencodable molecules charged against
-their real captions. Three seeds each. `042` is read at its **best dev BLEU-2 checkpoint**; `041` is
-WSD and is read at the end of its schedule.
+their real captions. Three seeds each. WSD cells are read at the end of the schedule; cosine cells at
+their best dev BLEU-2 checkpoint.
 
-| run | backbone / format | schedule | budget | BLEU-2 | BLEU-4 | ROUGE-L | METEOR |
-|---|---|---|---|---:|---:|---:|---:|
-| `010` instruct | 1B-Instruct, chat | WSD + anneal | 8.9 ep | **0.4430** ±0.0007 | **0.3427** | **0.4988** | **0.4898** |
-| `041` control | 1B base, `Q:/A:` | WSD | 9 ep | 0.3999 ±0.0030 | 0.2902 | 0.4401 | 0.4427 |
-| `042` scaling | 1B base, `Q:/A:` | cosine, `lr` 2e-4 | 12 ep | 0.4229 ±0.0015 | 0.3158 | 0.4552 | 0.4592 |
+| | WSD, 9 ep, `lr` 1e-4 | cosine, 12 ep, `lr` 2e-4 |
+|---|---|---|
+| **1B base**, `Q:/A:` | 0.4079 ±0.0020 | **0.4226 ±0.0101** |
+| **1B Instruct**, chat | 0.3788 ±0.0214 | 0.3613 ±0.0217 |
 
-Per-seed BLEU-2 — control 0.4014 / 0.4018 / 0.3964, cosine 0.4223 / 0.4246 / 0.4217.
+Full metrics:
 
-### 1. The cosine recipe at a larger budget beats the WSD control, and the LR correction holds
+| run | BLEU-2 | BLEU-4 | ROUGE-L | METEOR |
+|---|---:|---:|---:|---:|
+| `041` base, WSD | 0.4079 ±0.0020 | 0.2994 | 0.4419 | 0.4492 |
+| `042` base, cosine | **0.4226 ±0.0101** | **0.3180** | **0.4557** | **0.4596** |
+| `043` instruct, WSD | 0.3788 ±0.0214 | 0.2756 | 0.4292 | 0.4394 |
+| `044` instruct, cosine | 0.3613 ±0.0217 | 0.2606 | 0.4202 | 0.4227 |
+| `probes/010` instruct, generalist harness | 0.4430 ±0.0007 | 0.3427 | 0.4988 | 0.4898 |
 
-**+0.0230 BLEU-2, +0.0255 BLEU-4, +0.0151 ROUGE-L, +0.0165 METEOR**, every metric in the same
-direction and a seed spread half the control's (±0.0015 against ±0.0030). The two runs differ in
-schedule *and* budget, so this is their joint effect and not a schedule ablation — but the direction
-settles the practical question: **moving Tier C onto this package's convention costs nothing.** It
-is not a trade of accuracy for tidiness.
+#### 1. The two effects do not add — they interact, and the "missing corner" is the worst cell
 
-The 2× LR correction is not falsified by anything here. A warmup+cosine run at the *same* peak as
-WSD would have spent about 0.55 of the dose; at 2e-4 it spends about 0.94 of it, and it came out
-ahead rather than unstable, which is what the average-LR argument predicts.
+Cosine is worth **+0.0147** on the base backbone and **−0.0175** on the instruct one. The cell this
+round was run to produce — instruct weights and the better recipe together — is the weakest of the
+four. Whatever the earlier `010`-vs-`041` gap was measuring, it was not a backbone main effect that
+could be stacked on top of a schedule main effect.
 
-### 2. Still not converged, and now on dev evidence rather than inference
+#### 2. The instruct deficit is a STOPPING failure, not a semantic one
 
-**Every seed's best dev checkpoint sits at step 4200 or 4884 of 4884** — val BLEU-2 0.4366, 0.4473,
-0.4404. Not one run peaked early and declined. At 12 epochs and twice the learning rate, the
-budget is still the binding constraint, and the reported number is a floor.
+The empty captions were the acute form; the chronic form survives the fix.
 
-That selection is also doing real work rather than rubber-stamping the last checkpoint: two of three
-seeds chose 4200 over 4884, so reading the end of a cosine run would have been slightly wrong.
+| arm | 4-gram repetition | predicted words | runaway (>=200 words) per seed |
+|---|---|---|---|
+| `041` base WSD | 0.017 | 43.2 | 12 / 21 / 4 |
+| `042` base cosine | 0.018 | 43.8 | 27 / 4 / 41 |
+| `043` instruct WSD | 0.035 | 48.2 | **126** / 34 / 40 |
+| `044` instruct cosine | 0.040 | 46.9 | 44 / 11 / **133** |
 
-### 3. The backbone costs more than the port gains — and the two are confounded by design
+Reference captions average 43.9 words. The instruct arms repeat at twice the rate, run long, and in
+each sweep **the worst-scoring seed is the one with the most runaways** (`043` seed0 at 126 ->
+0.3551; `044` seed2 at 133 -> 0.3440). That also explains the shape of the gap: METEOR falls by
+0.010 where BLEU-2 falls by 0.029, because a model that says roughly the right things and then keeps
+saying them loses n-gram precision long before it loses meaning. The elevated seed spread (±0.021
+against the base arm's ±0.002) is the same thing — how badly a seed fails to stop is what varies.
 
-`041` is 0.0431 BLEU-2 below the instruct cell. That gap is the **joint** effect of two changes
-pushing opposite ways: base weights instead of instruct+chat (expected to hurt captioning), and
-ChEBI's own split instead of the cross-source partition (**+21 % training data**, expected to help).
-The backbone effect alone is therefore *larger* than 0.0431.
+#### 3. `010` still beats every cell here, and budget is the surviving explanation
 
-**This is the outcome §2 of this file said would be the least informative, and it is worth saying
-plainly rather than dressing up.** A clean backbone control would have kept the partition; the port
-removed it for a good independent reason, and the two arrived together.
+0.4430 against the best in-package cell's 0.4226, on the *same* instruct backbone that finishes last
+in this 2x2. `010` differs in harness, split (the D3.3 partition, 21,612 training molecules against
+26,071) and — the candidate that matters — **token budget**: `tokens_per_step` 16384 x 5000 steps is
+roughly 1.75x the exposure these cells get, despite 21 % fewer molecules. A stopping policy is
+exactly the kind of thing more exposure calibrates, which makes budget the one hypothesis consistent
+with both facts: instruct is worse here, and instruct is best there.
 
-**What it does support**: even at the low end, a base-weights 1B still lands within ~0.02 BLEU-2 of
-InstructMol-G's 0.466 once the budget is right, so nothing about the headline claim depends on the
-instruct backbone. **What it does not support**: any statement of the form "instruct weights are
-worth X on captioning". Separating them is one more `041`-shaped run with the partition restored,
-which nothing in the paper needs.
+**This is a hypothesis, not a result.** Settling it needs an instruct cell at `010`'s budget on
+ChEBI's own split, which has not been run.
 
-### 4. What the section should report
+#### 4. What the section should report
 
-The **instruct cell (`010`) remains the headline**: it is the strongest number, it is three seeds,
-and it is the one the anchor table is comparable with. `041` and `042` are the methodology evidence
-behind it — that the recipe choice is not load-bearing, and that the budget was not tuned to
-convergence. The seam disclosed in §4 stands, and is now quantified rather than asserted.
+The **best defensible ChEBI-20 number this project has is `probes/010` at 0.4430 ±0.0007**, and the
+best in-package number is `042` at 0.4226 ±0.0101. Both sit **below InstructMol-G's 0.466** (§5),
+which is the direct architectural comparator at 7x the parameters. The section says that plainly
+rather than choosing a friendlier opponent afterwards.
+
+The 2x2 is reported as methodology, and it retires two claims this file used to make:
+
+* "The instruct base helps a lot" — **false as stated.** It was an artifact of comparing a
+  never-annealed control (§6c) against a run that differed in four ways at once, and of a generation
+  defect that cost the instruct arm 6-24 % of its captions.
+* "Cosine beats WSD" — **true only on the base backbone**, and even there the +0.0147 includes about
+  +0.004 of dev-selection the WSD arm does not get.
 
 ## 7. The section
 
@@ -702,16 +869,29 @@ than dropped, so the denominator is the benchmark's. Restricting to the admitted
 universal and the effect need not be small: on an earlier build admitting 2{,}889
 of 3{,}300, the same charge was worth $0.068$ BLEU-2.
 
-\paragraph{Recipe and budget.}
-The caption model is trained with warmup-stable-decay and a short anneal. We
-verified that this is not load-bearing: the same task trained with this work's
-usual single-run cosine schedule, at a learning rate raised $2\times$ to hold the
-average rate fixed, and a $1.3\times$ budget, scores $0.423 \pm 0.002$ BLEU-2
-against $0.400 \pm 0.003$ for a matched WSD control --- better on every metric, so
-the schedule choice costs nothing. \textbf{The budget, however, is not tuned to
-convergence}: selecting each cosine run at its best checkpoint on a held-out
-development split places every seed in the final quarter of training, and
-development BLEU is still rising there. The reported numbers are floors.
+\paragraph{Recipe and backbone.}
+We ran the captioning task as a $2\times2$ over backbone (base vs.\ instruction-tuned
+weights, each with its matching prompt format) and schedule (warmup-stable-decay
+vs.\ a single-run cosine at a $2\times$ learning rate and a $1.3\times$ budget),
+three seeds per cell, on ChEBI-20's own split. The two factors do not compose. On
+the base backbone the cosine recipe is worth $+0.015$ BLEU-2 ($0.423 \pm 0.010$
+against $0.408 \pm 0.002$); on instruction-tuned weights it is worth $-0.018$
+($0.361 \pm 0.022$ against $0.379 \pm 0.021$), so the cell combining both is the
+weakest of the four. \textbf{The deficit is a stopping failure rather than a
+semantic one}: the instruction-tuned arms repeat $4$-grams at twice the base rate,
+exceed $200$ words on $3$--$10\times$ as many molecules, and in each sweep the
+worst seed is the one that runs away most often. METEOR falls by $0.010$ where
+BLEU-2 falls by $0.029$, which is the signature of a model that says roughly the
+right thing and then continues past the end of it.
+
+\paragraph{A note on generation.}
+Captions are decoded greedily with the stop token suppressed for the first five
+steps, uniformly across arms. Without it, an immediately emitted end-of-turn token
+yields an empty string that is scored as a total miss while perturbing validation
+loss by under $0.005$; on instruction-tuned weights, whose chat template makes an
+empty assistant turn a natural continuation, this silently discarded $6$--$24\%$ of
+captions. The constraint is inert on the base backbone, which emits no empty
+captions either way.
 
 \paragraph{Scope.}
 We report classification and captioning. MoleculeNet's regression sets (ESOL,
