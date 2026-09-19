@@ -41,6 +41,21 @@
   // saves checkpoints and does not restore a best one during training
   // (`train.py`), so the last checkpoint is this arm's answer, matching how the
   // instruct cells were read. The cosine arm (`042`) is the one that selects.
+  //
+  // ── RE-RUN 2026-09-18: THE FIRST SWEEP NEVER ANNEALED ──────────────────────
+  //
+  // `steps_per_epoch` was world-size-blind, so at two ranks the WSD segments were
+  // laid out against 7,326 steps while the Trainer executed 3,663. The run ended
+  // 2,930 steps before the decay segment began, with `learning_rate` still at the
+  // 1e-4 peak — "WSD" in the config and warmup-plus-constant in fact. The model
+  // it reported (BLEU-2 0.3999) had never been annealed, which made the schedule
+  // comparison against `042` measure mostly the missing anneal.
+  //
+  // Fixed in `train.py::steps_per_epoch_for`, with the stranding reproduced in
+  // `tests/experiments/molecules/test_schedule_steps.py`. The run LENGTH is
+  // unchanged — 3,663 steps either way, since `num_epochs` governs that — so only
+  // the schedule laid over it moves. Pre-fix results are kept under
+  // `results/_superseded_noanneal/` and must not be set beside these.
   // ───────────────────────────────────────────────────────────────────────────
 
   "name": "041_chebi_control_wsd",

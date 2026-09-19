@@ -19,12 +19,17 @@
   //
   // ── THE LEARNING RATE IS RAISED, AND BY HOW MUCH IS ARITHMETIC ─────────────
   //
-  // `lr` 2e-4, twice the instruct cells' 1e-4, because the two schedules spend
-  // their budget at different average rates and holding the PEAK fixed would not
-  // hold the dose fixed. WSD here ran 200 warmup steps, ~4,800 at the full rate
-  // and a 500-step decay to `lr/10`: mean factor 0.94 of peak. Warmup plus cosine
-  // to `lr/10` over this budget averages 0.55. The ratio is **1.72**, so 2x is
-  // the correction, not a guess — and 3x would overshoot the thing it corrects.
+  // `lr` 2e-4, twice the WSD arm's 1e-4, because the two schedules spend their
+  // budget at different average rates and holding the PEAK fixed would not hold
+  // the dose fixed. Integrated over the schedules as they actually run — `041`'s
+  // 366 warmup / 2,931 stable / 366 decay, and this run's 407 warmup then cosine
+  // to `lr/10` — the mean factors are **0.9101** and **0.5458** of peak, a ratio
+  // of **1.667**. So 2x is a deliberate slight over-correction rather than a
+  // guess, and 3x would overshoot the thing it corrects.
+  //
+  // An earlier draft of this comment cited 1.72, computed against a WSD arm that
+  // never annealed (§6c) and therefore spent 0.94 of peak. The defect moved the
+  // ratio by 0.05, which is why 2x survives the fix unchanged.
   //
   // ── THE BUDGET ─────────────────────────────────────────────────────────────
   //
@@ -42,6 +47,17 @@
   // `chebi_score.py --run-dir ... --split val` picks the winner by generating.
   // Selecting on `eval_loss` would optimise a different quantity than the number
   // reported, which is the defect `train.py::TIER_METRIC` already records once.
+  //
+  // ── RE-RUN 2026-09-18: WARMUP WAS TWICE ITS INTENDED LENGTH ────────────────
+  //
+  // The same world-size-blind `steps_per_epoch` that stranded `041`'s anneal
+  // reached this config too, but far more gently: cosine derives its decay curve
+  // from the Trainer's own step count, so the curve was correct and only
+  // `warmup_steps` was wrong — 814 steps, two real epochs, where the recipe is
+  // one. A deviation rather than a defect, and the reported 0.4229 is a genuinely
+  // annealed model. It is re-run anyway, because `043`/`044` train on the
+  // corrected code and a 2x2 whose cells disagree about warmup is not a 2x2.
+  // Pre-fix results are under `results/_superseded_noanneal/`.
   // ───────────────────────────────────────────────────────────────────────────
 
   "name": "042_chebi_cosine_2x",

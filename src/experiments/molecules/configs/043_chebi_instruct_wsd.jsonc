@@ -1,0 +1,93 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 043 — TIER C ON INSTRUCT WEIGHTS, WSD. 3 runs (graph arm, 3 seeds).
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHAT IT ISOLATES ───────────────────────────────────────────────────────
+  //
+  // `041` with the backbone moved and nothing else: `Llama-3.2-1B-Instruct` and
+  // the chat turn spelling, against `041`'s raw base and `Q:/A:`. Same ChEBI-own
+  // split, same cap-128 build, same LoRA surface, same `lr` 1e-4, same 9 epochs,
+  // same WSD schedule, same seeds.
+  //
+  // Together with `041`, `042` and `044` this closes a 2x2 over
+  // {base, instruct} x {WSD, cosine}. Before it existed the only instruct
+  // Tier-C number was the generalist's `probes/010`, which differed from the base
+  // runs in FOUR ways at once — backbone, turn spelling, split and harness — and
+  // two of those pushed in opposite directions: `010` trained on the D3.3
+  // partition's 21,612 molecules where this package trains on ChEBI's own 26,071.
+  // A gap measured across that is not attributable to the backbone.
+  //
+  // ── PROMPT STYLE IS LEFT TO RESOLVE FROM THE NAME ──────────────────────────
+  //
+  // No `prompt_style` key. `config.py` resolves it to "chat" for an Instruct
+  // backbone and "plain" otherwise, which is D3's "instruct weights + chat
+  // template, both or neither". Setting it explicitly here would let the two
+  // drift apart in a later edit, and `dataset_path` keys the artifact on
+  // `model_name` rather than on the style — so a hand-set style that disagreed
+  // with the backbone would silently reuse the wrong build.
+  //
+  // ── THE SCHEDULE ACTUALLY ANNEALS NOW ──────────────────────────────────────
+  //
+  // The first `041` sweep reported a model that had never been annealed:
+  // `steps_per_epoch` was world-size-blind, so the WSD segments were laid out
+  // against 7,326 steps while two ranks executed 3,663, and the run stopped mid
+  // stable-phase with `learning_rate` still at the 1e-4 peak. `train.py`'s
+  // `steps_per_epoch_for` now divides by `world_size` and
+  // `tests/experiments/molecules/test_schedule_steps.py` reproduces the stranding.
+  // Every cell of the 2x2 is re-run on the corrected code; the pre-fix numbers are
+  // in `results/_superseded_noanneal/` and are not comparable to these.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "043_chebi_instruct_wsd",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 1e-4, "bias_lr": 1e-2 }
+  ],
+  "seed": [0, 1, 2],
+
+  // ── the only thing that moves from `041` ───────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+
+  // ── Tier C ─────────────────────────────────────────────────────────────────
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  // ── held to `041` ──────────────────────────────────────────────────────────
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 9,
+  "lr_schedule": "wsd",
+  "wsd_decay_fraction": 0.1,
+  "eval_steps": 400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

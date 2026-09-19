@@ -1,0 +1,94 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 044 — TIER C ON INSTRUCT WEIGHTS, THIS PACKAGE'S RECIPE. 3 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHAT IT ANSWERS ────────────────────────────────────────────────────────
+  //
+  // The headline row, and the corner of the 2x2 that had never been run: instruct
+  // weights AND the cosine recipe together. `041`/`042` moved the schedule on the
+  // base backbone; `043` moves the backbone under WSD; this moves both. If the
+  // two effects are additive it is the best ChEBI-20 number this architecture has
+  // produced. Whether they ARE additive is the actual question — instruct weights
+  // may already supply part of what the LR correction buys, in which case this
+  // lands short of the sum and the honest reading is that the two overlap.
+  //
+  // `042` with the backbone moved and nothing else: same 12 epochs, same `lr`
+  // 2e-4, same `bias_lr` 2e-2, same ChEBI-own cap-128 build, same seeds.
+  //
+  // ── THE LEARNING RATE IS STILL 2x, AND FOR THE SAME REASON ─────────────────
+  //
+  // 2e-4 against the WSD arm's 1e-4. The correction is a property of the two
+  // SCHEDULES, not of the backbone: integrated over the schedules as they run,
+  // WSD spends a mean 0.9101 of peak and warmup-plus-cosine-to-`lr/10` spends
+  // 0.5458, a ratio of 1.667. So it transfers to instruct weights unchanged, and
+  // holding it fixed is what keeps `043`/`044` the same contrast as `041`/`042`.
+  //
+  // ── THE BUDGET STAYS AT 12 EPOCHS ──────────────────────────────────────────
+  //
+  // Not raised, because the pre-fix `042` dev curves showed the run had already
+  // flattened: two of three seeds peaked at step 4,200 of 4,884 and then DECLINED,
+  // and 2,800 -> 4,200 bought +0.003 / +0.012 / +0.013 BLEU-2. More budget is not
+  // where the remaining headroom is. 12 epochs also holds the exposure equal to
+  // `042`, which is what makes the backbone contrast readable.
+  //
+  // ── SELECTION IS ON DEV BLEU, AFTER THE RUN ────────────────────────────────
+  //
+  // As `042`: cosine anneals to a floor, so its last checkpoint is not privileged
+  // and the run is read at its best DEV point. A caption has no dev metric the
+  // Trainer can compute — BLEU needs generation — so Tier C keeps the checkpoints,
+  // does not restore a best one during training, and `chebi_score.py --run-dir`
+  // picks the winner by generating on val before the winner is scored on test.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "044_chebi_instruct_cosine",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "10:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 2e-4, "bias_lr": 2e-2 }
+  ],
+  "seed": [0, 1, 2],
+
+  // ── the only thing that moves from `042` ───────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+
+  // ── Tier C ─────────────────────────────────────────────────────────────────
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  // ── held to `042` ──────────────────────────────────────────────────────────
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 1400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}
