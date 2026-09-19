@@ -26,6 +26,28 @@ from .chebi import CHEBI_QUESTION  # noqa: F401  (imported for callers' convenie
 #: word is more than one token, so 256 leaves room without inviting a runaway.
 DEFAULT_MAX_NEW_TOKENS = 256
 
+#: Steps during which the stop token is forbidden.
+#:
+#: **An empty caption is never a valid answer here**, and without this the model
+#: is allowed to give one: an EOS chosen at the first generated position decodes,
+#: under ``skip_special_tokens=True``, to the empty string. It is scored as a
+#: total miss and it is nearly invisible upstream — one position out of ~50, so
+#: even a 24 % probability there moves ``eval_loss`` by about 0.005.
+#:
+#: Measured on `043` (instruct, WSD), 2026-09-18: 189 / 375 / 788 empty captions
+#: of 3,261 across three seeds whose eval_loss curves agreed to three decimals
+#: (0.5962 / 0.5938 / 0.5896), against **zero** on every base-backbone cell. On a
+#: 200-row sample of the worst seed, lifting the constraint's absence took empties
+#: from 46 to 0 and BLEU-2 from 0.3003 to 0.3914, and the recovered rows read as
+#: ordinary captions. The pathology is specific to the chat path, where
+#: ``<|start_header_id|>assistant<|end_header_id|>\n\n`` followed straight by
+#: ``<|eot_id|>`` is the instruct-tuned spelling of an empty turn — a prior the
+#: base backbone simply does not carry.
+#:
+#: It is applied to EVERY arm, not to the ones that need it. A constraint switched
+#: on for the arm it rescues is not a measurement.
+DEFAULT_MIN_NEW_TOKENS = 5
+
 #: Token budget per batch. Rows per batch fall out of it, so a split of long
 #: captions makes smaller batches rather than a larger peak.
 #:
@@ -139,7 +161,8 @@ def _prompt_only(row, tokenizer):
 
 def generate_captions(model, tokenizer, collator, dataset, device=None,
                       max_samples=None, batch_tokens=DEFAULT_BATCH_TOKENS,
-                      max_new_tokens=DEFAULT_MAX_NEW_TOKENS):
+                      max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
+                      min_new_tokens=DEFAULT_MIN_NEW_TOKENS):
     """``(predictions, targets, meta)`` over ``dataset``.
 
     ``max_samples`` takes a deterministic prefix rather than a random sample: the
@@ -161,7 +184,7 @@ def generate_captions(model, tokenizer, collator, dataset, device=None,
         length = sum(len(x) for x in row["input_ids"])
         if batch and batch_tokens_used + length > batch_tokens:
             _run_batch(model, tokenizer, collator, batch, device, pad_id,
-                       max_new_tokens, predictions)
+                       max_new_tokens, predictions, min_new_tokens)
             batch, batch_tokens_used = [], 0
         batch.append(_prompt_only(row, tokenizer))
         batch_tokens_used += length
@@ -169,12 +192,12 @@ def generate_captions(model, tokenizer, collator, dataset, device=None,
         meta.append({"index": i})
     if batch:
         _run_batch(model, tokenizer, collator, batch, device, pad_id,
-                   max_new_tokens, predictions)
+                   max_new_tokens, predictions, min_new_tokens)
     return predictions, targets, meta
 
 
 def _run_batch(model, tokenizer, collator, rows, device, pad_id, max_new_tokens,
-               out):
+               out, min_new_tokens=DEFAULT_MIN_NEW_TOKENS):
     packed = collator(rows)
     packed = {k: (v.to(device) if hasattr(v, "to") else v)
               for k, v in packed.items()}
@@ -182,6 +205,7 @@ def _run_batch(model, tokenizer, collator, rows, device, pad_id, max_new_tokens,
     prompt_len = packed["input_ids"].shape[1]
     with torch.no_grad():
         generated = model.generate(**packed, max_new_tokens=max_new_tokens,
+                                   min_new_tokens=min_new_tokens,
                                    do_sample=False, num_beams=1,
                                    pad_token_id=pad_id)
     for row in range(generated.shape[0]):
