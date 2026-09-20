@@ -1,0 +1,61 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Data-prep for the CWQ question-node headline (2026-09-19): builds the
+  // .gtds caches for question_node=isolated on the frozen CWQ data config
+  // (max_nodes 1024, n_max 50, versions 1, dfv3 — 022_cwq_headline's keys).
+  //
+  // Only `isolated` is built. The WebQSP sweep (029) found the three edge
+  // modes statistically indistinguishable with the edge-free `isolated` on
+  // top: the gain comes from the question TEXT being visible during graph
+  // encoding, not from wiring QUESTION into the SPD/magnetic structure. So
+  // CWQ inherits the winner directly instead of re-running the ablation.
+  //
+  // The baseline (no question node) cache already exists from 022 — this is
+  // the only build the CWQ headline needs.
+  //
+  // mem 200G: CWQ data prep holds the full record set plus the Arrow writer;
+  // the E4.2 probe OOM-killed at 96G on the training side and the ver8 build
+  // died at 250G (hence versions 1, which is also a near-no-op on CWQ's
+  // near-singleton answer sets).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/040_cwq_question_node_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_question_node_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "200G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "question_node": "isolated",
+
+  // data-config keys — must match 022_cwq_headline's frozen CWQ data config
+  // exactly (aside from question_node) so the training sweep's cache lookups
+  // hit this build.
+  "dataset": "cwq",
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "max_nodes": 1024,
+  "n_max": 50,
+  "versions": 1,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

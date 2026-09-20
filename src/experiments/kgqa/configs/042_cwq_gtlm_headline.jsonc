@@ -1,0 +1,109 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // CWQ GTLM headline (2026-09-19) — the graph-native arm only, at the best
+  // recipe known for it, for the CWQ row of the results table.
+  //
+  // This supersedes 022's graph cell (.5401 F1 / .5605 Hits@1 / .5933 Hit,
+  // 3 seeds), which was only at parity with retrieval-matched SR-GNN-RAG
+  // (53.3 F1 / 55.6 Hits@1 / 60.6 Hit) — inside seed noise. Two things change,
+  // neither of them a new idea:
+  //
+  //   1. question_node = isolated. The WebQSP sweep (029, 2026-07-15) scored
+  //      it +0.8 to +1.4 test F1 over the old construction, with all 9 runs at
+  //      or above the best control seed, and it is the setting behind the
+  //      74.07 F1 WebQSP headline. It landed two days AFTER 022 was submitted,
+  //      so CWQ has never had it. The mechanism is question-conditioned graph
+  //      encoding: the structural mask blocks graph->prompt attention, so
+  //      without a QUESTION prefix node the subgraph is encoded blind to what
+  //      is being asked. CWQ is 1-4 hop with ~3x WebQSP's subgraphs, where
+  //      encoding blind should cost more, not less.
+  //   2. Selection is read off 512 dev questions instead of 256, every half
+  //      epoch instead of every 1000 steps. E4.2 measured the dev-256 bests
+  //      overstating final test by 4-6 pts: with 23 checkpoints scored on 256
+  //      questions, the argmax is substantially selection-max inflation, and
+  //      an inflated argmax does not just mis-report, it picks the wrong
+  //      checkpoint. Doubling the sample and halving the count cuts both.
+  //
+  // Everything else is 022 verbatim: cap1024 / n_max 50 / ver1 / dfv3 data,
+  // Llama-3.2-1B, r64, lora_dropout 0.15, lr 1e-4, bias_lr 5e-3, 8 epochs.
+  //
+  // DDP: 4 ranks at batch_size 1 x accumulation_steps 2 consume 8 examples per
+  // optimizer step — the same effective batch, step count and schedule as
+  // 022's 2 x 4 on one GPU, so the recipe transfers unchanged and only
+  // wall-clock moves (~21.5 h -> ~7 h). Validated at 2 ranks by 041.
+  //
+  // Four ranks rather than eight because four is what the fast tier actually
+  // has free in one place, and three seeds each holding four B200s can run
+  // side by side instead of queueing behind one 8-GPU job.
+  //
+  // mem 700G: the generative loop is where CWQ peaks — the E4.2 probe was
+  // host-RAM OOM-killed at 96G there and 022's single-rank headline peaked at
+  // 183 GB against a 200G request. Since the eval now shards by rank, that peak
+  // divides rather than multiplying, and 700G sits well clear of the ~70 GB per
+  // rank the 041 smoke measured before generation.
+  //
+  // Requires 040 (the question_node=isolated CWQ cache) to have finished.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/042_cwq_gtlm_headline.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_gtlm_headline",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "700G",
+      "time": "20:00:00",
+      // One flex compile cache for all three seeds. The flex path autotunes
+      // under max-autotune-no-cudagraphs at ~320 s per distinct (L, N) shape,
+      // and cap1024 CWQ touches 23 of them; per-job caches make each seed pay
+      // for all 23 from cold, which is the whole of a 4-rank job's first hour
+      // at 11-14 s/step before it settles near 1.3. Seeded from the first run's
+      // three caches, so a re-run starts warm.
+      "inductor_cache": ".inductor_cache/shared_cwq_flex",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": [0, 1, 2],
+
+  "mode": "train",
+  "question_node": "isolated",
+
+  "dataset": "cwq",
+  "max_nodes": 1024,
+  "versions": 1,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "rel_mode": "last_1",
+  "num_epochs": 8,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "eval_steps": 1465,            // every half epoch (2,930 steps/epoch at 4 x 1 x 2)
+  "gen_eval_samples": 512,       // fixed seeded dev subsample for selection
+  "gen_max_samples": null,       // final scoring: full splits
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
