@@ -92,8 +92,12 @@ def _make_ctx(module, with_bias, cache):
         num_nodes=torch.tensor([N_NODES]),
         cache=cache,
         features={
+            # Every key `compute_node_bias` reads, because it reads them with []
+            # and not .get(): a feature added to the dispatch without a line here
+            # fails this test with a KeyError rather than a numeric mismatch.
             "spd": _spd_feature() if with_bias else None,
             "laplacian": None, "rwse": None, "rrwp": None, "magnetic": None,
+            "landmark": None,
         },
         structural_mask=structural_mask,
         block_mask=None,
