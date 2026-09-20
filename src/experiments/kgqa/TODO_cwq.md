@@ -317,3 +317,149 @@ E1 (CPU, ~an afternoon incl. three CWQ data-prep builds) → E2+E3 (code, no
 GPU; the E3.5 smokes are minutes) → E4.1–E4.2 (~1 build + 1 probe run) →
 E4.3–E4.4 (headline: 4 cells × 3 seeds; ~150–250 GPU-h depending on the
 E4.2 schedule — the dominant cost) → E4.5–E4.6 (analysis, cheap).
+
+---
+
+# E5 — the CWQ GTLM headline (2026-09-19)
+
+The CWQ table needs the same shape as WebQSP's: GTLM ahead of
+retrieval-matched SR-GNN-RAG on all three metrics, and level with the
+7B-reader pipelines (RoG, GNN-RAG) that use better retrieval and 7× the
+parameters. E4.3 does not deliver that — its graph cell (.5401 F1 / .5605
+Hits@1 / .5933 Hit) sits on top of the baseline (53.3 / 55.6 / 60.6) inside
+its own seed noise (sd .0099), and trails on Hit.
+
+**Only the graph arm runs here.** The flat control is settled and is not part
+of the claim; this is GTLM's number.
+
+## What changes vs E4.3
+
+1. **`question_node = isolated`.** Worth +0.8 to +1.4 test F1 on WebQSP (029,
+   9/9 runs at or above the best control seed) and the setting behind the
+   74.07 WebQSP headline. It landed two days after 022 was submitted, so CWQ
+   has never had it. The mechanism argues for a LARGER effect here, not a
+   smaller one: the structural mask blocks graph→prompt attention, so without
+   a QUESTION prefix node the subgraph is encoded without reference to the
+   question — and CWQ subgraphs are ~3× WebQSP's, 1–4 hop.
+2. **Selection on 512 dev questions every half epoch**, not 256 every 1000
+   steps. E4.2 measured dev-256 bests overstating final test by 4–6 pts.
+   Across 23 checkpoints that argmax is substantially selection-max
+   inflation, and an inflated argmax does not merely mis-report — it picks
+   the wrong checkpoint. Doubling the sample and halving the count cuts both.
+
+Everything else is 022 verbatim: cap1024 / n_max 50 / ver1 / dfv3,
+Llama-3.2-1B, r64, lora_dropout 0.15, lr 1e-4, bias_lr 5e-3, 8 epochs.
+
+## DDP — the reason this fits in a night
+
+A CWQ graph run is ~21.5 h on one B300 (23,440 optimizer steps at 3.3 s/step,
+job 111530). Four ranks at `batch_size 1 × accumulation_steps 2` consume 8
+examples per optimizer step — the same effective batch as 022's 2 × 4 on one
+GPU, hence the same step count (23,440), the same warmup (2,344) and the same
+cosine schedule. The recipe transfers unchanged; only wall-clock moves.
+
+Four ranks and not eight because four is what the fast tier has free in one
+place: ixb1 and ixb2 each hold 4 free B200s while the rest of the B200/B300
+nodes are full. Three seeds on four GPUs each start side by side; three seeds
+on eight would queue behind one another, and the wall-clock a wider job saves
+is given straight back to the queue.
+
+Three things had to be fixed for that to be true:
+
+- `steps_per_epoch` divided by `world_size` (`train.py`). It feeds
+  `warmup_steps = total_steps // 10`; unfixed, a 4-rank run spends 40% of its
+  length in warmup and an 8-rank run 80%. Single-rank runs divide by 1, so
+  nothing on record moves. Same bug, same fix as the molecules Tier-C sweeps.
+- The run-record write is now rank-0 only. An appending writer called from 4
+  ranks puts 4 records in `runs.jsonl` for one run, and the report then
+  averages one run as though it were four.
+- **The generative eval now shards by rank** (`evaluate.py`). It was rank-naive
+  by construction — `_generative_metrics` passes the *unwrapped* `self.model`,
+  so `.generate` works on every rank and no rank blocks on a collective the
+  others skip, which also means every rank generated the entire split and
+  discarded all but one copy. The teacher-forced pass inside `evaluate` does
+  shard (verified: 1,760 = 3,519/2 steps at 2 ranks), so the duplicated
+  generation, not training, set the floor on run time.
+
+  Each rank now takes a stride of the index list and the per-question scores
+  are gathered before averaging. A macro-mean over the gathered union is the
+  single-rank number exactly — each question contributes one score and order
+  does not enter a mean — and that equality is pinned by test, at ragged world
+  sizes and under the seeded subsample as well as the full split.
+
+  The gather runs over a **gloo** group, not NCCL. It sits right after a loop
+  whose per-rank duration differs by whatever the questions in each shard cost,
+  so the first rank to arrive enqueues a collective that the NCCL watchdog
+  would abort ten minutes later — a plausible gap on a full split, and it would
+  take down a run hours deep.
+
+This also removes the run's memory cliff. CWQ peaks inside the generative loop:
+the E4.2 probe was host-RAM OOM-killed at 96G there, and 022's single-rank
+headline peaked at 183 GB against its 200G request. Duplicated across ranks
+that peak multiplies; sharded, it divides. 042 asks for 700G against the ~70 GB
+per rank the smoke measured before generation.
+
+## Flex compile is the first hour, and it looks like a hang
+
+The flex path compiles under `max-autotune-no-cudagraphs`, which buys ~1.47×
+on the step but costs ~320 s of one-time compile per distinct `(L, N)` shape.
+The CWQ headline at cap1024 touches 23 distinct shapes — nine length buckets
+(512 … 12288) crossed with the node buckets each length actually draws — and
+under DDP each one is compiled **once per rank**, not once per job. Four ranks
+in lockstep reach the same cold shape in the same moment, and the on-disk
+cache is written after a compile finishes, not when it starts, so all four
+miss and all four autotune. The compiles then serialize through the gradient
+sync barrier, which is why the step counter sits still while the log is
+plainly alive.
+
+So the first hour of a 4-rank job runs at 11–14 s/step, and a naive projection
+off that window says 95 h against a 20 h limit. The projection is wrong: the
+cost is startup, not rate. Measured on 042 over one 3-minute window at ~1 h in,
+with shape coverage essentially complete:
+
+| seed | node | early | after coverage |
+|------|------|-------|----------------|
+| 1 | ixb1 | 11.3 s/step | **1.26 s/step** |
+| 2 | ixb8 | 13.6 s/step | **2.57 s/step** |
+| 0 | ixb2 | 31.6 s/step | 10.6 s/step |
+
+The slow row is not a slow seed, and reading it as one sends you chasing the
+wrong cause. My first explanation for seed 0 was CPU contention — autotune is a
+CPU-bound Triton compile, and ixb2 was shared with another 32-CPU job — but the
+run disproved it within the hour. The slow seat moves. Two hours later seed 0
+was the **fastest** of the three at 0.89 s/step, still sharing ixb2 with the
+same co-tenant, while seed 2 on an uncontended ixb8 had dropped to 10.4 s/step
+on the `1x32x12288x64` backward, the longest bucket and the dearest compile in
+the set. Each seed draws the nine length buckets in whatever order its shuffle
+gives it, so at any moment the one that has just met a new shape looks broken
+and the ones that met it an hour ago look fine. What separates them is how much
+of the shape space they have covered, not what else is on the node.
+
+Two things follow. **Never read a frozen step counter as a hang here**: check
+whether `AUTOTUNE` lines are still being emitted and whether the distinct-shape
+count is still climbing. And the per-job cache is the wasteful default —
+`execution.sbatch.inductor_cache` points a whole sweep at one directory, so the
+second and third seeds read what the first compiled instead of paying the same
+23 shapes again. 042 left it unset and each seed built its own ~8 GB / 20k-file
+cache; pointing the three at one warm directory is the obvious saving on any
+re-run, and the reason to keep those directories rather than clean them up.
+
+One trap in reading those logs: the array task index is **not** the run index.
+`results/<sweep>/array_map.tsv` is the only authority, and for 042 it maps task
+0 to `0001_seed1` and task 1 to `0000_seed0` — transposed. Every per-seed number
+in this section is keyed by that map, not by the `_N` in the log filename. Watch
+scripts should read their labels out of `array_map.tsv` rather than assume `_0`
+is seed 0; the mistake is silent, survives a whole run, and surfaces only when a
+checkpoint lands in a directory you were not expecting. Nothing downstream is
+affected — each job writes its own record from its own config — so this is a
+reporting hazard, not a data one.
+
+- [x] **E5.1 DDP smoke** (`configs/041_cwq_ddp_smoke.jsonc`) — 2 ranks,
+  4 steps, full eval + record path off 022's existing cache. Re-run after the
+  eval sharding landed, to exercise the gloo gather on real hardware.
+- [x] **E5.2 question-node CWQ build** (`configs/040_cwq_question_node_data_prep.jsonc`):
+  `…_dfv3_qnisolated`, 23,441 train questions (23,442 without the question
+  node — one cap-hitting graph loses a triple to the reserved Levi slot),
+  dev/test denominators unchanged at 3,519/3,531.
+- [ ] **E5.3 headline run** (`configs/042_cwq_gtlm_headline.jsonc`): 3 seeds,
+  4 ranks each. Report mean ± sd on the full test split against Table 15(d).
