@@ -1,4 +1,8 @@
 .venv
+# the writer's venv: a second interpreter with transformers new enough for the
+# writer checkpoint, built beside the container and referenced by VENV_BIN in
+# src/generalist/tools/intent_{write,judge}.py
+.venv_writer
 **/__pycache__
 hf_token.txt
 **/*.pth

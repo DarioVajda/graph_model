@@ -173,6 +173,18 @@ def test_an_unwritable_trace_path_never_takes_the_run_down(tmp_path):
     if not cb.host.available:
         pytest.skip("/proc/<pid>/status is not readable on this host")
     (tmp_path / "nope").chmod(0o500)   # the constructor already created it
+    # Inside the container the suite runs as root, which overrides the mode bit,
+    # so the trace would write and the assertion below would fail on a probe that
+    # is in fact correct. Make the unwritable path the precondition it claims to
+    # be, rather than something only an unprivileged uid sees.
+    try:
+        probe = tmp_path / "nope" / ".writable"
+        probe.touch()
+        probe.unlink()
+        (tmp_path / "nope").chmod(0o700)
+        pytest.skip("this uid writes through a mode-0500 directory")
+    except OSError:
+        pass
     try:
         assert cb.mark("data_loaded") is not None      # sampling still works
         assert cb.summary()["host_mem_trace"] is None  # the trace does not

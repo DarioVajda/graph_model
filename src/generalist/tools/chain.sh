@@ -175,7 +175,9 @@ for i in $(seq 1 "$CHUNKS"); do
   # old inode, where it stays consistent to the end.
   mv -f "$SCRIPT.tmp.$$" "$SCRIPT"
 
-  WRAP="srun --container-image=$CONTAINER --container-mounts=/shared:/shared \
+  # MELLANOX_VISIBLE_DEVICES=none: see run_cli.sh and CLAUDE.md.
+  WRAP="srun --export=ALL,MELLANOX_VISIBLE_DEVICES=none \
+--container-image=$CONTAINER --container-mounts=/shared:/shared \
 env HOME=$HOME PYTHONUNBUFFERED=1 SWEEP_PROJECT_ROOT=$REPO SWEEP_VENV_BIN=$REPO/.venv/bin \
 SWEEP_LOGIN=$REPO/login.sh SWEEP_INDUCTOR_CACHE=$INDUCTOR_CACHE \
 bash $REPO/sweep/slurm_launch.sh gen_${GEN_RUN_NAME}_c$i $SCRIPT"

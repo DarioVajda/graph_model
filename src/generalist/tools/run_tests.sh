@@ -42,7 +42,9 @@ LOG="$LOG_DIR/$STAMP.out"
 } > "$SCRIPT"
 chmod +x "$SCRIPT"
 
-WRAP="srun --container-image=$CONTAINER --container-mounts=/shared:/shared \
+# MELLANOX_VISIBLE_DEVICES=none: see run_cli.sh and CLAUDE.md.
+WRAP="srun --export=ALL,MELLANOX_VISIBLE_DEVICES=none \
+--container-image=$CONTAINER --container-mounts=/shared:/shared \
 env HOME=$HOME PYTHONUNBUFFERED=1 SWEEP_PROJECT_ROOT=$REPO SWEEP_VENV_BIN=$REPO/.venv/bin \
 SWEEP_LOGIN=$REPO/login.sh bash $REPO/sweep/slurm_launch.sh gen_tests_$STAMP $SCRIPT"
 

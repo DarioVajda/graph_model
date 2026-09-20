@@ -51,6 +51,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO"
 
 CONTAINER="${CONTAINER:-/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh}"
+# The repo venv is pinned at transformers 4.50.3, which the GTLM attention
+# internals are written against. A step that shares nothing with training — the
+# §9.4 writer, which needs 5.5+ to load a gemma4 checkpoint — points this at its
+# own venv instead of dragging the trunk's environment forward.
+VENV_BIN="${VENV_BIN:-$REPO/.venv/bin}"
 PARTITION="${PARTITION:-frida}"
 CPUS="${CPUS:-16}"
 MEM="${MEM:-64G}"
@@ -92,8 +97,11 @@ fi
 } > "$SCRIPT"
 chmod +x "$SCRIPT"
 
-WRAP="srun --container-image=$CONTAINER --container-mounts=/shared:/shared \
-env HOME=$HOME PYTHONUNBUFFERED=1 SWEEP_PROJECT_ROOT=$REPO SWEEP_VENV_BIN=$REPO/.venv/bin \
+# MELLANOX_VISIBLE_DEVICES=none skips the enroot mellanox hook, which fails on
+# nodes without rdma_cm (ixb7); single-node jobs need no InfiniBand (CLAUDE.md).
+WRAP="srun --export=ALL,MELLANOX_VISIBLE_DEVICES=none \
+--container-image=$CONTAINER --container-mounts=/shared:/shared \
+env HOME=$HOME PYTHONUNBUFFERED=1 SWEEP_PROJECT_ROOT=$REPO SWEEP_VENV_BIN=$VENV_BIN \
 SWEEP_INDUCTOR_CACHE=$INDUCTOR_CACHE \
 SWEEP_LOGIN=$REPO/login.sh bash $REPO/sweep/slurm_launch.sh ${NAME}_$STAMP $SCRIPT"
 
