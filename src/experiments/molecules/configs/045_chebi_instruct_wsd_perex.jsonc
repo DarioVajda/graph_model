@@ -1,0 +1,99 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 045 — `043` WITH PER-EXAMPLE LOSS, AND NOTHING ELSE MOVED. 2 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHAT IT ISOLATES ───────────────────────────────────────────────────────
+  //
+  // `loss_norm`. This is `043` — instruct weights, chat template, WSD, 9 epochs,
+  // `lr` 1e-4 — with the single field `loss_norm: per_example` added. Every other
+  // key is copied verbatim, so the difference against `043`'s three seeds is the
+  // normalisation and nothing else.
+  //
+  // ── WHY THIS IS THE FIRST THING TO TEST ────────────────────────────────────
+  //
+  // `probes/010` beats every cell of the 2x2 on the *same* instruct backbone that
+  // finishes last in it, while training on 21 % fewer molecules and 82 M tokens
+  // against 90-120 M (§6d.3). Budget is therefore ruled out, and what is left is
+  // harness-level. `loss_norm` is the only remaining candidate that changes the
+  // OBJECTIVE rather than the trajectory, and it is the only one with a mechanism
+  // that matches the measured failure:
+  //
+  //   run                              4-gram rep   mean words   runaway >=200
+  //   probes/010  instruct per_example       0.009         40.2       0 / 0 / 0
+  //   041         base     per_token         0.017         43.2      12 / 21 / 4
+  //   043         instruct per_token         0.035         48.2     126 / 34 / 40
+  //
+  // Reference captions average 43.9 words. A per-token mean weights an example by
+  // its length, so long captions set the gradient and the model is pushed long —
+  // and the per-token runs do run long, while the per-example run writes SHORT of
+  // the reference and never runs away. This config asks whether that is causal.
+  //
+  // ── THE LEARNING RATE DOES NOT MOVE, AND THAT IS NOT AN OVERSIGHT ──────────
+  //
+  // Both normalisations are averages of the same per-token cross-entropy — one
+  // weighted by length, one not — so they carry the same units and a comparable
+  // magnitude. Unlike the WSD->cosine move (`042`), there is no dose to hold
+  // fixed here, and changing `lr` would put a second variable in a run whose
+  // whole purpose is to have one.
+  //
+  // ── SEEDS ──────────────────────────────────────────────────────────────────
+  //
+  // Two, against `043`'s three. The effect being tested is worth 0.03-0.08 BLEU-2
+  // if it is real, against a seed sd of 0.021 on this cell — visible at two seeds.
+  // Two seeds cannot establish a small effect, and if the result comes back
+  // inside the noise the honest reading is "not resolved", not "no effect".
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "045_chebi_instruct_wsd_perex",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 1e-4, "bias_lr": 1e-2 }
+  ],
+  "seed": [0, 1],
+
+  // ── the only thing that moves from `043` ───────────────────────────────────
+  "loss_norm": "per_example",
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 9,
+  "lr_schedule": "wsd",
+  "wsd_decay_fraction": 0.1,
+  "eval_steps": 400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

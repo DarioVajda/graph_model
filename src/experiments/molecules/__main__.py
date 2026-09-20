@@ -183,6 +183,12 @@ def build_parser():
                         "made there without changing two things at once.")
     p.add_argument("--wsd-decay-fraction", type=float, default=d.wsd_decay_fraction,
                    help="fraction of a wsd run spent decaying; ignored by cosine.")
+    p.add_argument("--loss-norm", choices=("per_token", "per_example"),
+                   default=d.loss_norm,
+                   help="per_token is HF's mean over supervised tokens; "
+                        "per_example divides each example by its own span first, "
+                        "so long captions stop setting the gradient. Tier C only "
+                        "-- A and B supervise one token and the two coincide.")
     p.add_argument("--num-epochs", type=int, default=d.num_epochs)
     p.add_argument("--batch-size", type=int, default=d.batch_size)
     p.add_argument("--accumulation-steps", type=int, default=d.accumulation_steps)
@@ -231,6 +237,7 @@ def config_from_args(args):
         lora=args.lora, lora_r=args.lora_r, lora_dropout=args.lora_dropout,
         lr=args.lr, bias_lr=args.bias_lr, num_epochs=args.num_epochs,
         lr_schedule=args.lr_schedule, wsd_decay_fraction=args.wsd_decay_fraction,
+        loss_norm=args.loss_norm,
         batch_size=args.batch_size, accumulation_steps=args.accumulation_steps,
         eval_steps=args.eval_steps, max_steps=args.max_steps,
         num_workers=args.num_workers,

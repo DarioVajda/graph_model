@@ -1,0 +1,93 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 046 — `042` WITH PER-EXAMPLE LOSS. THE BASE-BACKBONE CELL. 2 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHAT IT ISOLATES ───────────────────────────────────────────────────────
+  //
+  // `loss_norm`, on the RAW BASE backbone. This is `042` — base weights, `Q:/A:`,
+  // cosine, 12 epochs, `lr` 2e-4 — with `loss_norm: per_example` added and
+  // nothing else touched.
+  //
+  // ── WHY THE BASE CELL IS NOT OPTIONAL ──────────────────────────────────────
+  //
+  // Two different readings of the per-token evidence predict different things
+  // here, and only a base cell separates them:
+  //
+  // * **If per-token normalisation is bad for captioning in general**, this moves
+  //   up alongside `045`, and `loss_norm` is a main effect the whole package
+  //   should adopt.
+  // * **If per-token normalisation only hurts INSTRUCT weights** — whose chat
+  //   prior already pushes toward producing text until an explicit stop — then
+  //   `045` moves and this does not, and the finding is an interaction rather
+  //   than a recipe change.
+  //
+  // The base arm is also where the pathology is mildest already (4-gram
+  // repetition 0.018 against the instruct arms' 0.035-0.040, runaways 27/4/41
+  // against 126/34/40), so a null result here would be genuinely informative
+  // rather than a floor effect.
+  //
+  // ── AND IT IS THE MOST LIKELY CELL TO WIN OUTRIGHT ─────────────────────────
+  //
+  // `042` is the strongest in-package cell at 0.4226 BLEU-2. If `loss_norm` is
+  // worth anything like what §6d.3 suggests, its twin is the first thing in this
+  // package with a chance of passing `probes/010`'s 0.4430 — on ChEBI's own split,
+  // with 21 % more training data than `010` had.
+  //
+  // `lr` stays 2e-4: it is `042`'s, and the cosine dose argument that set it is
+  // untouched by how the loss is normalised (see `045` on why the rate does not
+  // move with `loss_norm`).
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "046_chebi_base_cosine_perex",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "10:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 2e-4, "bias_lr": 2e-2 }
+  ],
+  "seed": [0, 1],
+
+  // ── the only thing that moves from `042` ───────────────────────────────────
+  "loss_norm": "per_example",
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 1400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

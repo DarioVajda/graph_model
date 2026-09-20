@@ -1,0 +1,168 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 048 — THE LEARNING-RATE SCREEN TIER C NEVER GOT. 8 runs (2x2x2 seeds).
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHY THIS EXISTS ────────────────────────────────────────────────────────
+  //
+  // ChEBI-20 has been trained at exactly two learning rates in this project's
+  // history, and both are confounded with the schedule: 1e-4 under WSD (`041`,
+  // `043`, `probes/010`) and 2e-4 under cosine (`042`, `044`, `046`, `047`).
+  // The 2e-4 was never a search result — TODO.md §6d derives it from the dose
+  // arithmetic, WSD spending a mean 0.9101 of peak against warmup-plus-cosine's
+  // 0.5458, ratio 1.667 — so it holds the dose across a schedule change rather
+  // than locating an optimum. Nothing has ever looked for the optimum.
+  //
+  // That is the largest untouched knob on the task, and §3.2.7 and §8.4.4 of
+  // PLAN.md are the standing evidence that it matters here more than anything
+  // architectural: an inherited recipe cost this domain ~30 GPU-h and four
+  // sweeps diagnosing an "architectural deficit" that was a copied
+  // hyperparameter block, and `026`'s BACE ladder (1e-5 -> 3e-5 -> 1e-4 giving
+  // 0.7821 -> 0.8268 -> 0.8594, monotone in val AND test) says this repository's
+  // rates have historically been set too low.
+  //
+  // ── THE BRACKET, AND ITS ONE HONEST WEAKNESS ───────────────────────────────
+  //
+  // `lr` {5e-5, 2e-4} and `bias_lr` {5e-3, 2e-2}, crossed.
+  //
+  // 2e-4 is the incumbent and it sits at the TOP edge of the `lr` bracket. By
+  // §8.4's own rule an argmax at a bracket edge means the bracket was wrong, so
+  // the likely outcome of this screen is "2e-4 wins, extend upward" rather than
+  // a located optimum. That is accepted deliberately and recorded here so the
+  // result is read for what it can support.
+  //
+  // What it does settle is whether the graph arm is ALREADY past its peak, which
+  // is a real question rather than a formality: §8.4.7 measured 3e-4 costing the
+  // HIV graph arm 0.109 AUROC where the flat arm barely noticed — the largest
+  // single effect in the Tier-B campaign, and a learning-rate effect. Nobody has
+  // checked whether Tier C sits on the same cliff. A 4x step down answers that
+  // with no ambiguity.
+  //
+  // `bias_lr` {5e-3, 2e-2} is a 4x span, and `026`'s header records that a
+  // {5e-3, 1e-2, 2e-2} grid on BACE had its whole span inside the +-0.010 seed
+  // noise. This is not a repeat: BACE at +-0.010 could not have seen a 0.005
+  // effect, and Tier C's base arm reads at +-0.0020 (`041`, three seeds, last
+  // checkpoint). The old grid may have been inert or merely invisible, and the
+  // instrument could not tell those apart. This one can.
+  //
+  // `bias_lr` is held at an ABSOLUTE value across the `lr` axis rather than at
+  // the 100x ratio every previous Tier-C config carried, so the `lr` axis moves
+  // one thing. The full cross is run rather than a staged screen because the two
+  // rates feed different parameter groups, and the 2x2 in §6d is a fresh lesson
+  // in two factors that do not compose.
+  //
+  // ── TWO SEEDS, AND WHY THAT IS THE RIGHT NUMBER ────────────────────────────
+  //
+  // Measured seed spread on this backbone, read at a fixed checkpoint, is 0.0020
+  // BLEU-2 (`041`, n=3); `046` gives 0.0028 at n=2. Learning-rate effects
+  // elsewhere in this suite run 0.03-0.11. One seed would already resolve a
+  // difference of ~0.006, so two is a confirmation rather than a necessity, and
+  // it guards the one place the assumption could fail: seed variance typically
+  // grows near an instability edge, which is exactly where the top of an `lr`
+  // bracket sits.
+  //
+  // The instruct backbone is not used. §6d measures base ahead by 0.045 BLEU-2
+  // at t~4.9 — the only resolvable effect in that 2x2 — and its seed spread is
+  // 0.0075-0.0217 against the base arm's 0.0020. It loses on the mean and it is
+  // a ten-times blunter instrument, so there is no tension in the choice.
+  //
+  // ── HOW IT IS READ ─────────────────────────────────────────────────────────
+  //
+  // THE LAST CHECKPOINT, not the best dev one. A cosine decayed to `lr/10` has
+  // its answer at its end, which is how every other specialist in this package
+  // and the TAG and WebQSP rows are read. TODO.md §6d.2 shows what best-dev
+  // selection costs instead: `042`'s three seeds picked three different
+  // checkpoints and its reported +-0.0101 is mostly that pick, not seed noise,
+  // against 0.0020 for the same backbone read at a fixed point. Dropping the
+  // selection is what makes a screen this size readable.
+  //
+  // `eval_steps` 700 rather than `042`'s 1400, so the run keeps seven
+  // checkpoints instead of four. The extra resolution is for the CURVE — whether
+  // a cell is still climbing, has plateaued, or has turned over is the thing that
+  // says which direction to extend the bracket, and it is not recoverable after
+  // the fact. Keeping them costs adapter-sized files.
+  //
+  // Scored on the val split at `--max-samples 1500`. `generate_captions` takes a
+  // deterministic prefix rather than a seeded sample; checked before relying on
+  // it, the benchmark's validation file is not ordered by anything the model sees
+  // (CIDs are not sorted) and the first 1,500 rows match the remaining 1,801 on
+  // SMILES length (79.5 against 83.7) and caption length (43.4 against 44.3
+  // words). So the prefix is a random subset in everything but name, and it has
+  // the property a seeded sample would not: identical rows for every checkpoint
+  // and every cell.
+  //
+  // THE TEST SPLIT IS NOT TOUCHED. The screen ranks on val; only the winner is
+  // scored on test, at three seeds. An `lr` chosen on the test split would poison
+  // the row it is meant to improve.
+  //
+  // ── HELD FIXED ─────────────────────────────────────────────────────────────
+  //
+  // `gpus_per_config` 2 with `batch_size` 4 and `accumulation_steps` 8, matching
+  // `042` exactly. Since the `steps_per_epoch` fix (§6c) the world size sets the
+  // optimizer-step count: the same 12 epochs on one card would be 9,768 steps at
+  // half the batch, which is a different recipe wearing the same config. Warmup
+  // stays at one epoch and is identical across cells, so the only things moving
+  // are the two rates.
+  //
+  // This tunes the graph arm only — `bias_lr` does not exist on the flat arm.
+  // `026`'s uncomfortable corollary applies: a tuned graph arm against an untuned
+  // flat twin is a confound. Nothing in the caption section makes a graph-flat
+  // comparison, so it does not bite here, but a ChEBI SMILES twin would need the
+  // `lr` half of this screen before it could be quoted beside these numbers.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "048_chebi_lr_bias_screen",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 8,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 2e-4, "bias_lr": 2e-2 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 2e-4, "bias_lr": 5e-3 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-5, "bias_lr": 2e-2 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-5, "bias_lr": 5e-3 }
+  ],
+  "seed": [0, 1],
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

@@ -1,0 +1,90 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 050 — THE THIRD SEED OF `049`. 1 run.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHY A THIRD SEED, AND WHY IT IS ITS OWN CONFIG ─────────────────────────
+  //
+  // `049` (lr 5e-4 x bias_lr 5e-3, two seeds) came back split: seed 0 at 0.4812
+  // BLEU-2 on test is the best cell measured on this task, seed 1 at 0.4438 is
+  // below both seeds of `048` (lr 2e-4), whose own spread was +-0.0012. A
+  // two-seed mean of +0.0113 over `048` with a +-0.0264 spread is not a level
+  // difference that two draws can establish, and the two readings are far enough
+  // apart that the honest question is whether 5e-4 raised the ceiling or only the
+  // variance. Three seeds is the spread every other cell in this campaign was
+  // measured at, so this restores the comparison to its usual footing rather
+  // than adding an exception.
+  //
+  // It is a separate config because `049`'s results directory is complete and
+  // re-running its sweep to widen the `seed` axis would re-submit seeds 0 and 1,
+  // burning four GPU-hours to reproduce numbers already in hand. The recipe below
+  // is `049`'s, field for field; only `seed` differs.
+  //
+  // ── THE TABLE IS BUILT ACROSS BOTH SWEEPS ──────────────────────────────────
+  //
+  // `chebi_lit_metrics.py` groups by run-name family, so this run forms its own
+  // group of one and the three-seed mean is taken over the per-run rows of both
+  // sweeps together. The per-run numbers are what matter; the group summary of a
+  // single seed reports sd 0.0 and is not the figure to read.
+  //
+  // ── UNCHANGED FROM `049` ───────────────────────────────────────────────────
+  //
+  // Four cards, `accumulation_steps` 4, so an optimizer step still consumes
+  // 4 x 4 x 4 = 64 examples and 12 epochs is still 4,884 steps on the same
+  // checkpoint grid. Last checkpoint, no dev selection, `eval_steps` 700. Val and
+  // test scoring and the published-protocol rescore are chained onto this job.
+  //
+  // The 2e-4 vs 5e-4 choice remains a VAL decision, now on three seeds a side.
+  // The test numbers are reported for whichever cell val picks; they do not pick
+  // it.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "050_chebi_lr5e4_seed2",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 4,
+      "cpus": 16,
+      "mem": "256G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-4, "bias_lr": 5e-3 }
+  ],
+  "seed": [2],
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

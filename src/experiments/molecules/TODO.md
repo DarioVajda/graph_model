@@ -743,17 +743,88 @@ each sweep **the worst-scoring seed is the one with the most runaways** (`043` s
 saying them loses n-gram precision long before it loses meaning. The elevated seed spread (±0.021
 against the base arm's ±0.002) is the same thing — how badly a seed fails to stop is what varies.
 
-#### 3. `010` still beats every cell here, and budget is the surviving explanation
+#### 3. `010` still beats every cell here, and it is NOT budget
 
 0.4430 against the best in-package cell's 0.4226, on the *same* instruct backbone that finishes last
-in this 2x2. `010` differs in harness, split (the D3.3 partition, 21,612 training molecules against
-26,071) and — the candidate that matters — **token budget**: `tokens_per_step` 16384 x 5000 steps is
-roughly 1.75x the exposure these cells get, despite 21 % fewer molecules. A stopping policy is
-exactly the kind of thing more exposure calibrates, which makes budget the one hypothesis consistent
-with both facts: instruct is worse here, and instruct is best there.
+in this 2x2. The obvious explanation is exposure, and it is wrong — measured rather than assumed:
 
-**This is a hypothesis, not a result.** Settling it needs an instruct cell at `010`'s budget on
-ChEBI's own split, which has not been run.
+| config | optimizer steps | examples/step | tokens seen |
+|---|---|---|---|
+| `042` base cosine | 4,884 | 64 | **120.2 M** |
+| `041` / `043` / `044` | 3,663 | 64 | 90.1 M |
+| `probes/010` instruct | 5,000 | `tokens_per_step` 16384 | **81.9 M** |
+
+at a measured mean of **384.5 tokens per example** on the cap-128 build. `010` wins on the *fewest*
+tokens and the fewest molecules (21,612 against 26,071). An earlier draft of this section put the
+ratio the other way round, from an assumed ~200 tokens per example; the assumption was the error.
+
+What is left is harness-level, and two of the differences are not tuning knobs but changes to the
+objective and to the data:
+
+* **Loss normalisation.** `010` sets `loss_norm: per_example`. This package has no such setting at
+  all and takes HF's default per-token mean, so long captions dominate the gradient in proportion to
+  their length. The stop decision is one token of ~384 either way, but the two schemes weight it
+  differently across examples.
+* **Truncation.** `010` sets `max_length: 512`; this package does not truncate. At a 384.5-token
+  mean a real tail exceeds 512, so the two runs are not supervised on the same text.
+* Batch composition (16,384 tokens/step against ~24,600) and the separate anneal fork.
+
+**Which of these carries the result is not established.** It is the obvious next experiment and it
+has not been run; nothing in the section depends on the answer.
+
+### 6e. `loss_norm` tested and REJECTED as the explanation (2026-09-19)
+
+§6d.3 left four harness-level candidates for `probes/010`'s 0.02 advantage, and named
+`loss_norm` the leading one: it was the only candidate that changes the OBJECTIVE rather than the
+trajectory, and the only one with a mechanism matching the measured failure — a per-token mean
+weights an example by its length, so long captions set the gradient and the model is pushed long.
+
+Three configs, each a ONE-VARIABLE twin of an existing three-seed cell, two seeds apiece:
+`045` <-> `043`, `046` <-> `042`, `047` <-> `044`. Published protocol, benchmark denominator.
+
+| cell | per_token | per_example | delta |
+|---|---|---|---|
+| instruct + WSD | 0.3788 ±0.0214 | 0.3811 ±0.0090 | **+0.0023** |
+| **base + cosine** | **0.4226 ±0.0101** | 0.4039 ±0.0028 | **-0.0187** |
+| instruct + cosine | 0.3613 ±0.0217 | 0.3736 ±0.0075 | **+0.0123** |
+
+**The verdict is no.** The effect is not a main effect in either direction: it helps two cells,
+hurts the best one, and nets out near zero. Nothing here closes a 0.02 gap to `010`, and the best
+configuration in this package is still `042` — base weights, cosine, **per-token** loss.
+
+#### The mechanism was real and it still did not generalise
+
+This is the part worth keeping. The prediction — per-example removes the length bias, so generation
+should land on the reference's 43.9 words — was made before the runs and came true exactly where the
+pathology was worst, and *reversed* where it was mildest:
+
+| cell | per_token (rep4 / words / runaway) | per_example |
+|---|---|---|
+| instruct + WSD | 0.035 / 48.2 / 66.7 | **0.031 / 43.6 / 43.5** |
+| base + cosine | **0.018 / 43.8 / 24.0** | 0.033 / 45.0 / 57.5 |
+| instruct + cosine | 0.040 / 46.9 / 62.7 | 0.043 / 47.3 / 76.0 |
+
+On instruct+WSD it did what it was supposed to: 48.2 -> 43.6 words against a 43.9 reference, runaways
+cut by a third. On base+cosine — the arm that was already well behaved — it made every stability
+measure WORSE: repetition nearly doubled and runaways went 24 -> 58. A correction for a length bias
+is only a correction where the length bias exists; applied to an arm that did not have one, it
+becomes a bias of its own.
+
+So `loss_norm` is a genuine knob for a *sick* generation arm and a pessimisation for a healthy one.
+It is not the recipe change §6d.3 was hunting for.
+
+#### One observation not to over-read
+
+Seed spread fell in all three pairs (±0.0214 -> ±0.0090, ±0.0101 -> ±0.0028, ±0.0217 -> ±0.0075).
+That is suggestive and consistent in direction, **but it is two seeds against three**: an sd from two
+samples is |x1 - x2| / sqrt(2) and carries almost no confidence. It is recorded as something to check
+if the knob is ever revisited, not as a finding.
+
+#### What is left of the `010` question
+
+Three candidates, all untested: **batch composition** (16,384 tokens/step against ~24,600), the
+**separate anneal fork**, and **warmup length** (200 steps against 366/407). The field is narrowed by
+one. Nothing in the paper section depends on which of the three it is.
 
 #### 4. What the section should report
 

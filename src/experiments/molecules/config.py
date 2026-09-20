@@ -138,6 +138,18 @@ class RunConfig:
     lr_schedule: str = "cosine"
     #: Fraction of the run WSD spends decaying. Ignored by ``"cosine"``.
     wsd_decay_fraction: float = 0.1
+    #: ``"per_token"`` (HF's own mean over supervised tokens) or ``"per_example"``
+    #: (each example's summed loss divided by its own span, then meaned over
+    #: examples — the generalist harness's `loss_norm`). See `loss.py`.
+    #:
+    #: Irrelevant to Tiers A and B, which supervise one token per example and make
+    #: the two identical. It is a Tier-C knob: caption spans run from a handful of
+    #: tokens to 391, so ``per_token`` lets the long captions set the gradient.
+    #:
+    #: **The default stays ``per_token``**, which is what every result in this
+    #: package before 2026-09-19 was trained under. Flipping the default would
+    #: silently re-interpret them.
+    loss_norm: str = "per_token"
     num_epochs: int = 20
     batch_size: int = 4
     accumulation_steps: int = 8

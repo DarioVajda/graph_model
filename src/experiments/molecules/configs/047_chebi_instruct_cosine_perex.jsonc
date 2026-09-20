@@ -1,0 +1,84 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 047 — `044` WITH PER-EXAMPLE LOSS. THE CELL WITH THE MOST HEADROOM. 2 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHAT IT ISOLATES ───────────────────────────────────────────────────────
+  //
+  // `loss_norm` on instruct weights under COSINE — `044` with the one field
+  // added. Together with `045` (instruct, WSD) and `046` (base, cosine) it gives
+  // the normalisation's effect at three of the 2x2's four corners, each against
+  // an existing three-seed control.
+  //
+  // ── AND IT DECIDES WHETHER THE INTERACTION WAS REAL ────────────────────────
+  //
+  // Under per-token loss the backbone and the schedule do not compose: cosine is
+  // worth +0.015 BLEU-2 on base weights and **-0.018** on instruct ones, which is
+  // why `044` is the weakest of the four at 0.3613 and carries the single worst
+  // seed in the campaign (133 runaway generations). If that interaction is an
+  // artifact of the stopping pathology, it should weaken or vanish once the
+  // normalisation stops rewarding length — and this cell, having the furthest to
+  // climb, is where that shows up most clearly.
+  //
+  // The comparison `045` vs `047` then gives the schedule effect on instruct
+  // weights under the corrected objective, which is the question `044` was
+  // supposed to answer and could not.
+  //
+  // ── WHAT A NULL RESULT HERE WOULD MEAN ─────────────────────────────────────
+  //
+  // If `047` stays near `044` while `045` moves, the normalisation interacts with
+  // the schedule as well as the backbone, and the clean story dies. That is worth
+  // knowing before any of this is written up as "use per-example loss".
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "047_chebi_instruct_cosine_perex",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300", "H100"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "10:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 2e-4, "bias_lr": 2e-2 }
+  ],
+  "seed": [0, 1],
+
+  // ── the only thing that moves from `044` ───────────────────────────────────
+  "loss_norm": "per_example",
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 1400,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

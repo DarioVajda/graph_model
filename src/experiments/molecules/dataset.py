@@ -244,6 +244,100 @@ def build_graph_example(mol, question, answer, named_atoms, cfg):
     return relabel_for_dataset(graph)
 
 
+def build_assistant_example(mol, question, answer, named_atoms, shots, cfg,
+                            atom_labels: bool = True):
+    """The assistant arm: the target molecule, plus one component per demonstration.
+
+    §9.4's few-shot axis. A demonstration is a *different* molecule, so it enters
+    the graph as its own connected component — there is no bond between two
+    molecules, and inventing one to join them would be a chemical claim nothing
+    computed. What joins them instead is the prompt node, which carries a
+    directed edge to each demonstration's node, mirroring in structure the
+    pointer the question makes in words.
+
+    The distances that produces are the point of building it this way::
+
+        prompt -> target atom          1
+        prompt -> demonstration node   1
+        prompt -> demonstration atom   2   (through the demonstration node)
+
+    So "which of these molecules is the question about" is answerable from the
+    prompt's SPD row alone. Wiring the prompt straight to every atom in the graph
+    would collapse that to a constant 1 and leave the arm guessing from text.
+
+    Node order is demonstrations first, then the target, then question and
+    prompt — `TextGraphDataset` reads node text in index order, so this is the
+    order the backbone reads, and it puts the worked examples before the
+    question that refers back to them.
+
+    ``shots`` is a sequence of ``(mol, question, answer)``; empty is the ordinary
+    single-molecule example and this reduces to `build_graph_example`.
+
+    **``atom_labels`` defaults on, and ``named_atoms`` is honoured directly.**
+    Both differ from `build_graph_example`, which reads them off
+    ``ATOM_LEVEL_TASKS`` — a list of Tier-A families that the assistant task is
+    not one of. It is a corpus task whose examples mix atom-scoped and
+    molecule-level facts row by row, so the decision cannot come from the task
+    name:
+
+    * the labels go on every row, because most of §9.4's fact families name an
+      atom ("atom 20 (C) is in a ring") and an unlabelled graph leaves that
+      reference pointing at nothing. Uniformly on rather than per row, so the
+      set does not carry two atom-text conventions for the model to reconcile;
+    * ``named_atoms`` is whatever the caller passes — `assistant.named_atoms_for`
+      returns the drawn facts' atoms when *every* fact is atom-scoped, and
+      nothing when any of them is about the molecule.
+    """
+    import networkx as nx
+
+    from ...generalist.assistant import shot_text
+
+    graph = nx.DiGraph()
+
+    for i, (shot_mol, shot_question, shot_answer) in enumerate(shots):
+        component = mol_to_graph(shot_mol, encoding=cfg.encoding,
+                                 stereo_tags=cfg.stereo_tags,
+                                 atom_labels=atom_labels)
+        # Namespaced by demonstration index, so two demonstrations that both
+        # have an atom 0 stay two atoms rather than silently becoming one node
+        # and welding their molecules together.
+        component = nx.relabel_nodes(component, {n: ("shot", i) + n
+                                                 for n in component.nodes},
+                                     copy=True)
+        graph.update(component)
+        node = ("shot_node", i)
+        graph.add_node(node, text=shot_text(shot_question, shot_answer, i),
+                       kind="shot")
+        for other in component.nodes:
+            if component.nodes[other].get("kind") == "atom":
+                graph.add_edge(node, other)
+
+    target = mol_to_graph(mol, encoding=cfg.encoding,
+                          stereo_tags=cfg.stereo_tags, atom_labels=atom_labels)
+    target_atoms = [n for n, d in target.nodes(data=True)
+                    if d.get("kind") == "atom"]
+    graph.update(target)
+
+    # `prompt_edges="none"`, then the edges by hand: "all" means every atom node
+    # in the graph, which here would include the demonstrations' atoms and erase
+    # the distinction this builder exists to create.
+    graph = attach_question(
+        graph, question, answer,
+        fmt=prompt_format(getattr(cfg, "prompt_style", None), cfg.model_name),
+        prompt_edges="none", question_node=cfg.question_node)
+
+    prompt = graph.graph["prompt_node"]
+    targets = [("atom", i) for i in named_atoms] if named_atoms else target_atoms
+    for node in targets:
+        if node not in graph:
+            raise ValueError(f"prompt edge target {node!r} is not in the graph")
+        graph.add_edge(prompt, node)
+    for i in range(len(shots)):
+        graph.add_edge(prompt, ("shot_node", i))
+
+    return relabel_for_dataset(graph)
+
+
 def build_flat_example(mol, question, answer, cfg):
     """Flat arm: ONE node holding question + the molecule string + answer.
 

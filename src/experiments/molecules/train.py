@@ -26,6 +26,7 @@ from .config import EXPERIMENT_NAME
 from .analysis import write_per_example_report
 from .dataset import load_data, load_dataset_stats
 from .evaluate import answer_token_ids, make_margin_metrics, make_margin_preprocessor
+from .loss import trainer_class_for
 from ._io import append_jsonl
 
 EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -146,6 +147,7 @@ def _save_train_record(cfg, run_name, results, runs_jsonl, sweep_meta=None):
         # the record rather than only in the config that produced it. A scoring
         # pass rebuilds its config from here.
         "lr_schedule": getattr(cfg, "lr_schedule", "cosine"),
+        "loss_norm": getattr(cfg, "loss_norm", "per_token"),
         "prompt_style": cfg.prompt_style,
         "chebi_heavy_atom_cap": getattr(cfg, "chebi_heavy_atom_cap", None),
         "chebi_allow_disconnected": getattr(cfg, "chebi_allow_disconnected", None),
@@ -499,7 +501,17 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
             "save_total_limit": 2, "load_best_model_at_end": True}),
     )
 
-    trainer = GraphTrainerV2(
+    # `per_example` swaps the Trainer class, not a flag on it: the normalisation
+    # is the whole difference, and `trainer_class_for` refuses an unknown value
+    # rather than falling back to HF's default under a record that claims
+    # otherwise.
+    trainer_cls = trainer_class_for(getattr(cfg, "loss_norm", "per_token"))
+    # Printed because the run RECORD only echoes the config: it would say
+    # `per_example` just as loudly if the swap had silently not happened. This
+    # line is the log's own evidence of which class actually ran.
+    print(f"[train] loss_norm={getattr(cfg, 'loss_norm', 'per_token')!r} -> "
+          f"{trainer_cls.__name__}", flush=True)
+    trainer = trainer_cls(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
