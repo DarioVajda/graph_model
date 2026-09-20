@@ -83,7 +83,7 @@ class WiringError(RuntimeError):
 # Registry and mixture — the torch-free half
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_registry(config: RunConfig, adapter_config=None):
+def build_registry(config: RunConfig, adapter_config=None, extra_tasks=()):
     """``(registry, adapter_config)`` for this run's arm.
 
     Every ``mol/`` task is registered, not just the ones in the mixture: the
@@ -96,14 +96,21 @@ def build_registry(config: RunConfig, adapter_config=None):
     a different mixture than it trained on. ``adapter_config`` stays the
     molecules one; the text config is a pure function of the run config
     (:meth:`RunConfig.text_adapter_config`), so it is rebuilt where needed.
+
+    ``extra_tasks`` names tasks a *fork* adds to the mixture the config
+    describes: an anneal with an `add` block trains a task the trunk's own config
+    never named, and the registry it resolves against has to hold it. It affects
+    nothing else — a run that passes none registers exactly what it always did.
     """
     from .adapters import molecules
+    from .registry import TEXT_PREFIX
 
     adapter_config = adapter_config or config.adapter_config()
     adapter_config.validate()
     registry = Registry()
     molecules.register_molecule_tasks(registry, adapter_config, arm=config.arm)
-    if config.has_text_tasks():
+    if config.has_text_tasks() or any(name.startswith(TEXT_PREFIX)
+                                      for name in extra_tasks):
         from .adapters import text
 
         text_config = config.text_adapter_config()

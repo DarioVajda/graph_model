@@ -218,28 +218,36 @@ def molecule_generalist_mixture() -> tuple:
 #: `MOLECULE_GENERALIST.md` §9.1: the replay share, pre-registered.
 REPLAY_SHARE = 0.15
 
+#: The second screen's share. At 0.15 the captions went away outright —
+#: `caption_rate` 0.139 -> 0.000 with `kl_mean` halved — and the molecule suite
+#: paid for it: the five-set property mean fell 9 seed-sd and g2s `exact_match`
+#: 0.074. The overshoot on the text side is what makes a smaller share worth
+#: measuring, and 0.08 gives the molecule gradient back about half of what 0.15
+#: took from it.
+REPLAY_SHARE_LOW = 0.08
 
-def molecule_generalist_replay_mixture() -> tuple:
-    """§2's mixture at 0.85x, plus `text/replay` as a block of its own at 0.15.
+
+def molecule_generalist_replay_mixture(share: float = REPLAY_SHARE) -> tuple:
+    """§2's mixture at (1 - share), plus `text/replay` as a block of its own.
 
     Every molecule weight is scaled rather than one block being cut, so the four
     blocks keep the ratios §2 justifies and the molecule gradient loses exactly
     the replay share and nothing else.
 
-    **The ``budget_scale`` that reproduces `008` is 1.7, not 2.0.** The scale
-    multiplies the mixture's own feasible budget, ``min(available / share)``,
-    and scaling every corpus share by 0.85 raises that base by 1 / 0.85. At 2.0
-    the budget would be 2.35x §2's instead of 2x, BACE would be thinned to 0.0097
-    and refused at its 0.01 floor. At 1.7 the corpora are asked for exactly what
+    **The ``budget_scale`` that reproduces `008` is 2.0 x (1 - share)**, so 1.7
+    at 0.15 and 1.84 at 0.08, not 2.0. The scale multiplies the mixture's own
+    feasible budget, ``min(available / share)``, and scaling every corpus share
+    by (1 - share) raises that base by 1 / (1 - share). At 2.0 the budget would
+    be 2.35x §2's instead of 2x, BACE would be thinned to 0.0097 and refused at
+    its 0.01 floor. At the scaled value the corpora are asked for exactly what
     `008` asked of them, so BACE and BBBP sit at the same pass caps.
 
-    ``floor`` stays at 0.01 for the same reason: at 1.7 the thinned corpora land
-    on `008`'s absolute shares, not 0.85x of them.
+    ``floor`` stays at 0.01 for the same reason: at the scaled budget the thinned
+    corpora land on `008`'s absolute shares, not (1 - share) of them.
     """
-    entries = [dict(e, weight=e["weight"] * (1.0 - REPLAY_SHARE))
+    entries = [dict(e, weight=e["weight"] * (1.0 - share))
                for e in molecule_generalist_mixture()]
-    entries.append({"name": "text/replay", "weight": REPLAY_SHARE,
-                    "block": "replay"})
+    entries.append({"name": "text/replay", "weight": share, "block": "replay"})
     return tuple(entries)
 
 
@@ -287,6 +295,23 @@ G2S_SPECIALIST_MIXTURE = (
     {"name": "mol/g2s", "weight": 1.0},
 )
 
+#: The ChEBI-20 specialist: `mol/chebi20` and nothing else.
+#:
+#: Captioning is the one molecule benchmark with a published ladder that the
+#: campaign has never run as a specialist — `molecules/PLAN.md` §1 deferred Tier C
+#: to the generalist, and the generalist only ever gave it a 20 % share of a
+#: sixteen-task mixture. A specialist gives the task the whole budget, which is
+#: what a number quoted against MolT5 has to be.
+#:
+#: ``passes`` is 15 rather than `CORPUS_PASSES`. Six is the ceiling that keeps one
+#: small corpus from setting the length of a *mixed* run; on a mixture of one
+#: there is nothing to protect, and six passes over 26k captions is less exposure
+#: than the generalist's 20 % share bought over its own trunk. Fifteen is about
+#: 2.7x that share, and `max_steps` bounds the run in any case.
+CHEBI_SPECIALIST_MIXTURE = (
+    {"name": "mol/chebi20", "weight": 1.0, "passes": 15},
+)
+
 #: The smoke mixture plus the two tasks the smoke run never reached: the
 #: `admit` fork's candidate and the only ``text`` task in the campaign.
 #:
@@ -314,10 +339,12 @@ SMOKE_PROBE_MIXTURE = SMOKE_MIXTURE + (
 MIXTURES = {
     "molecule_generalist": molecule_generalist_mixture(),
     "molecule_generalist_replay": molecule_generalist_replay_mixture(),
+    "molecule_generalist_replay08": molecule_generalist_replay_mixture(REPLAY_SHARE_LOW),
     "smoke": SMOKE_MIXTURE,
     "smoke_probe": SMOKE_PROBE_MIXTURE,
     "cross_check": CROSS_CHECK_MIXTURE,
     "g2s_specialist": G2S_SPECIALIST_MIXTURE,
+    "chebi_specialist": CHEBI_SPECIALIST_MIXTURE,
 }
 
 
@@ -463,6 +490,25 @@ G2S_SPECIALIST_VALIDATORS = (
     {"name": "throughput", "cadence": "steps:50"},
 )
 
+#: The `chebi_specialist` set. Same three survivors as `g2s_specialist`, and for
+#: the same reasons: `base_exact` and `perm_spread` read a ``token`` or ``yesno``
+#: margin and a caption is ``text``; `per_example` skips every other kind;
+#: `grad_share` on a mixture of one compares 1.0 against 1.0; `held_out` and
+#: `leakage` want tasks a ChEBI-only build never materialises.
+#:
+#: ``max_samples`` is 200 at ``steps:2000``, which is a *curve* and not a result.
+#: The reported caption numbers come from `experiments/molecules/chebi_score.py` over the whole
+#: 3,300-molecule split and are rescored offline under the published metric
+#: protocol (`experiments/molecules/chebi_lit_metrics.py`) — a 500-row in-training firing was the
+#: instrument this section exists to stop quoting. Keeping the cap low matters
+#: here because a firing generates captions at 256 new tokens on two splits, which
+#: is the expensive half of the suite.
+CHEBI_SPECIALIST_VALIDATORS = (
+    {"name": "in_mixture", "cadence": "steps:2000", "max_samples": 200},
+    {"name": "bias_norm", "cadence": "steps:500"},
+    {"name": "throughput", "cadence": "steps:50"},
+)
+
 #: `text_behaviour` alone, for `eval` mode over a checkpoint that is already
 #: trained — the six instruct cells of `MOLECULE_GENERALIST.md` §7, which were trained before this
 #: validator existed.
@@ -490,6 +536,7 @@ VALIDATOR_SETS = {
     "shakedown": SHAKEDOWN_VALIDATORS,
     "notation": NOTATION_VALIDATORS,
     "g2s_specialist": G2S_SPECIALIST_VALIDATORS,
+    "chebi_specialist": CHEBI_SPECIALIST_VALIDATORS,
     "text": TEXT_VALIDATORS,
     "none": (),
 }

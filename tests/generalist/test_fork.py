@@ -324,6 +324,39 @@ class TestForkRefusals:
         named = [e["name"] for e in plan.legs[0].mixture_config]
         assert named == [e["name"] for e in parent["mixture"]]
 
+    def test_anneal_adds_a_task_at_its_share_and_scales_the_rest(self, parent,
+                                                                 tmp_path):
+        """`add` buys a behaviour over the decay instead of over the trunk: the
+        added task gets exactly its share of the leg's examples and the parent's
+        entries keep every ratio they had to each other."""
+        plan = plan_fork(parent["ckpt"], "anneal",
+                         {"run_dir": str(tmp_path / "c"),
+                          "add": [{"name": CANDIDATE_TASK, "share": 0.25}]},
+                         registry=parent["registry"],
+                         parent_mixture=parent["mixture"])
+        weights = {e["name"]: e["weight"] for e in plan.legs[0].mixture_config}
+        total = sum(weights.values())
+        assert weights[CANDIDATE_TASK] / total == pytest.approx(0.25)
+        for name in TASKS:
+            assert weights[name] / total == pytest.approx(0.75 / len(TASKS))
+        assert plan.config_diff["added"]["child"] == {CANDIDATE_TASK: 0.25}
+
+    @pytest.mark.parametrize("add, match", [
+        ([{"name": CANDIDATE_TASK}], "share"),
+        ([{"name": CANDIDATE_TASK, "share": 0.0}], "share"),
+        ([{"name": CANDIDATE_TASK, "share": 1.0}], "share"),
+        ([{"share": 0.2}], "name"),
+        ([{"name": TASKS[0], "share": 0.2}], "already in the parent's mixture"),
+        ([{"name": CANDIDATE_TASK, "share": 0.6},
+          {"name": HELD_OUT_TASK, "share": 0.5}], "nothing"),
+    ])
+    def test_an_ill_formed_add_is_refused(self, parent, tmp_path, add, match):
+        with pytest.raises(ForkError, match=match):
+            plan_fork(parent["ckpt"], "anneal",
+                      {"run_dir": str(tmp_path / "c"), "add": add},
+                      registry=parent["registry"],
+                      parent_mixture=parent["mixture"])
+
     def test_anneal_without_a_recorded_mixture_is_refused(self, parent, tmp_path):
         """An older checkpoint, or one written by something that did not record
         the entries, is refused rather than annealed on a guessed mixture."""

@@ -26,7 +26,8 @@ import pytest
 from src.generalist.adapters import AdapterError, adapter_for
 from src.generalist.adapters import text as T
 from src.generalist.config import (
-    MIXTURES, REPLAY_SHARE, RunConfig, molecule_generalist_mixture,
+    MIXTURES, REPLAY_SHARE, REPLAY_SHARE_LOW, RunConfig,
+    molecule_generalist_mixture,
 )
 from src.generalist.registry import TEXT_PREFIX
 
@@ -204,15 +205,19 @@ def test_build_and_load_a_replay_pass(tmp_path):
 # What wiring it in must not move
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_replay_mixture_scales_every_molecule_weight_alike():
+@pytest.mark.parametrize("mixture, share", [
+    ("molecule_generalist_replay", REPLAY_SHARE),
+    ("molecule_generalist_replay08", REPLAY_SHARE_LOW),
+])
+def test_the_replay_mixture_scales_every_molecule_weight_alike(mixture, share):
     base = {e["name"]: e["weight"] for e in molecule_generalist_mixture()}
-    replay = {e["name"]: e for e in MIXTURES["molecule_generalist_replay"]}
-    assert replay.pop("text/replay")["weight"] == REPLAY_SHARE
+    replay = {e["name"]: e for e in MIXTURES[mixture]}
+    assert replay.pop("text/replay")["weight"] == share
     assert set(replay) == set(base)
     for name, entry in replay.items():
-        assert entry["weight"] == pytest.approx(base[name] * (1 - REPLAY_SHARE))
+        assert entry["weight"] == pytest.approx(base[name] * (1 - share))
     total = sum(base.values())
-    assert sum(e["weight"] for e in replay.values()) + REPLAY_SHARE == \
+    assert sum(e["weight"] for e in replay.values()) + share == \
         pytest.approx(total)
 
 

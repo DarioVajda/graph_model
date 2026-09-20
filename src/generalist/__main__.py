@@ -516,7 +516,12 @@ def mode_fork(config: RunConfig, args) -> int:
     from .lineage import Lineage
 
     fork_config = load_fork_config(args.fork_config, args, config)
-    registry, adapter_config = wiring.build_registry(config)
+    # An `anneal` may `add` a task the trunk never trained — the assistant slice,
+    # or a replay slice bought over the decay alone — and the registry the leg
+    # resolves against is built from the *trunk's* config, which does not name it.
+    added = [entry["name"] for entry in (fork_config.get("add") or [])
+             if isinstance(entry, dict) and entry.get("name")]
+    registry, adapter_config = wiring.build_registry(config, extra_tasks=added)
 
     # The checkpoint records the mixture RESOLVED — name, weight, passes,
     # cap_per_pass — which is everything a fork needed before blocks existed and

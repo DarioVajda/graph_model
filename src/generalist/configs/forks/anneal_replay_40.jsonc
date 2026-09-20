@@ -1,0 +1,25 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `anneal_replay_15.jsonc` at 40 %. Read that file for what the pair is for.
+  //
+  // The decay is a tenth of the trunk, so 15 % of it is a tenth of the replay
+  // examples `009` trained on. If what removes the captions is the *number* of
+  // examples rather than the share of the gradient, 15 % here cannot work and a
+  // larger share is what to ask. 40 % is as far as this can go and still be an
+  // anneal of a molecule trunk: the molecule corpora keep 60 % of the leg that
+  // sharpens them, and the reportable molecule numbers are the check on whether
+  // that was too little.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "add": [{"name": "text/replay", "share": 0.40, "block": "replay"}],
+
+  // 2.0 x 0.60 — see `anneal_replay_15.jsonc`.
+  "budget_scale": 1.2,
+
+  "passes": {
+    "mol/bbbp": 7, "mol/bace": 7, "mol/chebi20": 7,
+    "mol/sider": 7, "mol/hiv": 7, "mol/tox21": 7
+  },
+
+  "eval_steps": 280
+}

@@ -1,0 +1,130 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE SECOND REPLAY SCREEN — `009` AT 8 % INSTEAD OF 15 %.
+  //
+  //   python3 -m src.generalist validate --config <this file>
+  //   src/generalist/tools/run_cli.sh data_prep --config <this file>
+  //   src/generalist/tools/chain.sh <this file> replay08_screen_graph
+  //
+  // ── WHY A SECOND SCREEN ────────────────────────────────────────────────────
+  //
+  // `009` overshot on one side and failed on the other. The text bar was
+  // `caption_rate` <= 0.03 and it came back **0.000** on both prompt forms, from
+  // 0.139, with `kl_mean` halved (0.205 -> 0.103) and the adapter-on answer
+  // length back to the adapters-off length. The molecule bars all failed: the
+  // five-set property mean 0.7784 against 0.7978 +- 0.0021 over `008`'s three
+  // graph seeds, HIV -0.067, Tox21 -0.041, SIDER -0.025 against +-0.02, and g2s
+  // `exact_match` 0.358 against 0.432, below even the weakest seed.
+  //
+  // So 15 % of the gradient buys the behaviour several times over and costs
+  // real accuracy. This asks what half of it buys: the text side has room to
+  // come off 0.000 and still pass, and the molecule side gets back about half
+  // of what `009` gave up.
+  //
+  // ── THE THREE NUMBERS THAT MOVE ────────────────────────────────────────────
+  //
+  //   1. `mixture: molecule_generalist_replay08`. Molecule weights x0.92,
+  //      `text/replay` at 0.08 in a block of its own.
+  //   2. `budget_scale` 1.84 = 2.0 x 0.92, which is the value that asks each
+  //      corpus for exactly what `008` asked of it (`config.py`).
+  //   3. `tokens_per_step` 16731, so examples/step stays at `008`'s 55.89: a
+  //      replay example averages 364.1 tokens against the molecule mixture's
+  //      293.8, and at 0.08 the weighted mean is 299.36.
+  //
+  // `accumulation_steps` stays 8 on two cards, so the micro-batch is 1,045
+  // tokens and a replay example of up to 1,024 still fits in one. Everything
+  // else is `008`'s graph cell, seed 0, and `009`'s build: `replay/v1`, four
+  // passes built, of which this run draws about 1.3.
+  //
+  // ── WHAT IS READ, AND AGAINST WHAT ─────────────────────────────────────────
+  //
+  // After the standard anneal, against `008` graph seed 0 annealed and against
+  // `009`: the same bars as `009` — `caption_rate` <= 0.03 with a lower
+  // `kl_mean`, five-set property mean within one seed-sd, in-mixture probes
+  // within +-0.02, g2s `exact_match` within 0.03.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "replay_screen_08",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B300", "B200"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      "inductor_cache": ".inductor_cache/generalist_instruct",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "replay08_screen_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16731,
+      "accumulation_steps": 8
+    }
+  ],
+
+  "seed": [0],
+
+  // ── the change ─────────────────────────────────────────────────────────────
+  "mixture": "molecule_generalist_replay08",
+  "replay_version": "v1",
+  "text_max_length": 1024,
+  "budget_scale": 1.84,
+  "max_steps": 11140,
+
+  // ── everything below is `008`'s, unchanged ─────────────────────────────────
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+  "validators": "default",
+
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

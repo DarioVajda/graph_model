@@ -1,0 +1,53 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The `anneal` that closes a molecule-generalist trunk, with 15 % of the decay
+  // spent on `text/replay`. Everything else is `anneal_molecule_generalist.jsonc`.
+  //
+  //   GPU=2 src/generalist/tools/run_cli.sh fork \
+  //     --from .../runs/molecule_generalist_instruct_graph_s0/checkpoint-11140 \
+  //     --mode anneal --fork-config src/generalist/configs/forks/anneal_replay_15.jsonc \
+  //     --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \
+  //     --cell molecule_generalist_instruct_graph_s0 \
+  //     --run-dir src/generalist/results/runs/replay_anneal15_graph_s0
+  //
+  // WHAT IT ASKS. `009` bought the text behaviour with 15 % of an 11,140-step
+  // trunk and paid for it in molecule accuracy. This asks whether the same share
+  // of the 1,114-step *decay* buys the same behaviour — a tenth of the replay
+  // examples, at the end of the schedule, where the model is already trained and
+  // the LR is on its way to `lr/10`. If it does, the trunk never pays: the
+  // campaign's three existing graph cells stay exactly as they are and the
+  // assistant behaviour is a property of the leg that closes them.
+  //
+  // It is also the mechanism §9.3's `mol/assistant` slice needs, tested on a task
+  // whose control already exists: `molecule_generalist_instruct_graph_s0`'s own
+  // anneal is this leg without the `add` block.
+  //
+  // `--run-dir` is not optional here. A fork names its child after the parent and
+  // the step it left, which is the directory the standard anneal already wrote.
+  //
+  // WHY THE SHARE IS STILL 15 %. It is `009`'s, so the two legs differ in when
+  // the replay is spent and in nothing else. `anneal_replay_40.jsonc` is the same
+  // leg at 40 %, which is what a short leg needs if the total number of replay
+  // examples is what matters rather than the share.
+  //
+  // The `passes` bump is `anneal_molecule_generalist.jsonc`'s, unchanged: the
+  // molecule corpora are asked for *less* here than in a standard anneal, because
+  // they are drawing 85 % of the leg rather than all of it.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "add": [{"name": "text/replay", "share": 0.15, "block": "replay"}],
+
+  // 2.0 x 0.85, for the reason `config.py::molecule_generalist_replay_mixture`
+  // gives: the scale multiplies the mixture's own feasible budget, and scaling
+  // every molecule share by 0.85 raises that base by 1 / 0.85. Left at the run
+  // config's 2.0 the leg asks the corpora for 18 % more than the trunk did and
+  // BACE is refused under its floor.
+  "budget_scale": 1.7,
+
+  "passes": {
+    "mol/bbbp": 7, "mol/bace": 7, "mol/chebi20": 7,
+    "mol/sider": 7, "mol/hiv": 7, "mol/tox21": 7
+  },
+
+  "eval_steps": 280
+}

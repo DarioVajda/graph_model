@@ -518,8 +518,10 @@ def _plan_anneal(*, config, parent_mixture, parent_schedule, parent_step,
             "`mixture`). It is not reconstructible from the checkpoint — state.json "
             "records the mixture *hash* and the registry snapshot, not the entry "
             "list with its weight overrides.")
-    mixture_config = _with_passes(_as_mixture_config(parent_mixture),
-                                  config.get("passes"), mode="anneal")
+    mixture_config = _with_added(_as_mixture_config(parent_mixture),
+                                 config.get("add"))
+    mixture_config = _with_passes(mixture_config, config.get("passes"),
+                                  mode="anneal")
 
     decay_steps = int(config.get("decay_steps")
                       or max(1, round(DEFAULT_DECAY_FRACTION * parent_step)))
@@ -551,9 +553,12 @@ def _plan_anneal(*, config, parent_mixture, parent_schedule, parent_step,
                     mixture=mixture, mixture_config=mixture_config,
                     max_steps=parent_step + decay_steps + 1,
                     eval_steps=config.get("eval_steps"))]
-    return {"legs": legs,
-            "diff_extra": {"decay_steps": decay_steps, "min_factor": min_factor,
-                           "decay_shape": shape}}
+    diff_extra = {"decay_steps": decay_steps, "min_factor": min_factor,
+                  "decay_shape": shape}
+    added = config.get("add")
+    if added:
+        diff_extra["added"] = {e["name"]: float(e["share"]) for e in added}
+    return {"legs": legs, "diff_extra": diff_extra}
 
 
 def _plan_admit(*, config, parent_mixture, parent_schedule, parent_step,
@@ -665,16 +670,22 @@ def _plan_adapt(*, config, tokens_per_step, seed, run_dir, registry,
 
     warmup_steps = int(config.get("warmup_steps",
                                   max(1, min(10, budget_steps // 10))))
-    mixture_config = ({"name": task,
-                       "weight": float(config.get("weight", 1.0))},)
+    # `passes` is the same override an `anneal` takes and is needed here for the
+    # same reason: a corpus hands out `passes x train_size` examples in total, and
+    # a leg that trains one task for a specialist's budget wants a specialist's
+    # number of epochs — §9.2's BACE legs are 1,000 steps of 32 examples over
+    # 1,208 molecules, which is 26.5 passes against a corpus default of six.
+    mixture_config = _with_passes(({"name": task,
+                                    "weight": float(config.get("weight", 1.0))},),
+                                  config.get("passes"), mode="adapt")
 
     legs = []
     for leg_seed in seeds:
         # One mixture and one schedule object per seed, shared by both starts:
         # the two legs are the same run twice over apart from where the weights
         # came from, and building them separately would leave room to drift.
-        mixture = _adapt_mixture(registry, task, tokens_per_step, budget_steps,
-                                 weight=mixture_config[0]["weight"])
+        mixture = _adapt_mixture(registry, mixture_config, tokens_per_step,
+                                 budget_steps, task=task)
         for start in starts:
             leg_name = f"{start}-s{leg_seed}" if len(seeds) > 1 else start
             legs.append(ForkLeg(
@@ -794,6 +805,69 @@ def _as_mixture_config(mixture) -> tuple:
     return tuple(out)
 
 
+def _with_added(mixture_config, added) -> tuple:
+    """Add tasks to an ``anneal``'s mixture at a stated share of its examples.
+
+    ``add`` is ``[{"name": …, "share": …}]`` and the share is the fraction of the
+    leg's examples the task gets: every parent weight is scaled by
+    ``1 - sum(shares)`` and the new tasks enter at ``share x`` the parent's total,
+    so the four blocks keep their ratios to each other and the parent's mixture
+    loses exactly the added share. It is the same arithmetic
+    `molecule_generalist_replay_mixture` does to a trunk mixture, applied to one
+    leg instead of a whole run.
+
+    An anneal is where a task is added for a *behaviour* rather than for a score:
+    the assistant slice of §9.3, or a replay slice bought over 1,114 decay steps
+    instead of 11,140 trunk ones. `admit` stays the mode for "does this task
+    belong in the mixture", and it differs in what it is for: a gate with a
+    criterion, a re-warm, and a fixed budget.
+    """
+    if not added:
+        return tuple(mixture_config)
+    if not isinstance(added, (list, tuple)):
+        raise ForkError(
+            f"anneal: `add` must be a list of {{name, share}} objects, got {added!r}")
+
+    names = {entry["name"] for entry in mixture_config}
+    total = 0.0
+    for entry in added:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            raise ForkError(f"anneal: `add` entry needs a name, got {entry!r}")
+        if entry.get("share") is None:
+            raise ForkError(
+                f"anneal: `add` entry {entry['name']} has no share. What a leg "
+                "buys is a function of how much of it the task gets, so a default "
+                "share would make the result a property of this code rather than "
+                "of the config.")
+        share = float(entry["share"])
+        if not 0.0 < share < 1.0:
+            raise ForkError(
+                f"anneal: `add` share for {entry['name']} must be in (0, 1), got "
+                f"{share}")
+        if entry["name"] in names:
+            raise ForkError(
+                f"anneal: {entry['name']} is already in the parent's mixture. `add` "
+                "introduces a task the parent never trained; changing the weight of "
+                "one it did would make the leg a different mixture under the same "
+                "name.")
+        total += share
+    if total >= 1.0:
+        raise ForkError(
+            f"anneal: `add` shares sum to {total}, which leaves the parent's "
+            "mixture nothing. The leg still has to be an anneal of the trunk.")
+
+    parent_total = sum(float(e["weight"]) for e in mixture_config)
+    out = [dict(e, weight=float(e["weight"]) * (1.0 - total))
+           for e in mixture_config]
+    for entry in added:
+        item = {"name": entry["name"],
+                "weight": float(entry["share"]) * parent_total}
+        if entry.get("block"):
+            item["block"] = entry["block"]
+        out.append(item)
+    return tuple(out)
+
+
 def _with_passes(mixture_config, overrides, mode: str) -> tuple:
     """Raise the parent's ``passes`` for the fork's own leg.
 
@@ -884,8 +958,8 @@ def _resolve(registry, mixture_config, tokens_per_step, steps, budget_scale=1.0)
                    budget_scale=budget_scale)
 
 
-def _adapt_mixture(registry: Registry, task: str, tokens_per_step: int, steps: int,
-                   weight: float = 1.0):
+def _adapt_mixture(registry: Registry, mixture_config, tokens_per_step: int,
+                   steps: int, *, task: str):
     """A one-task mixture over a task every other mixture must refuse.
 
     D2.1 makes ``resolve`` reject a held-out task on sight, and that is right for
@@ -895,7 +969,7 @@ def _adapt_mixture(registry: Registry, task: str, tokens_per_step: int, steps: i
     ``allow_held_out``, so the budget arithmetic is the same one every other
     mixture goes through and the exception is visible in the call.
     """
-    return resolve(registry, [{"name": task, "weight": float(weight)}],
+    return resolve(registry, list(mixture_config),
                    tokens_per_step=tokens_per_step, steps=int(steps),
                    allow_held_out=(task,))
 

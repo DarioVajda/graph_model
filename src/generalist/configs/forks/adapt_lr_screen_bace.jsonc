@@ -1,0 +1,67 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // §9.2's `lr` screen: one in-mixture `adapt` fork on BACE, from the instruct
+  // backbone, run once at each candidate rate. The winner is the rate every §9.2
+  // and §9.3 leg then uses.
+  //
+  // A leg is ~4.5 h on one card, and almost all of it is the `eval_steps` 50
+  // cadence rather than the 1,000 training steps, which take about 20 min at
+  // 1.2 s a step.
+  //
+  //   GPU=1 src/generalist/tools/run_cli.sh fork --lr 3e-5 \
+  //     --from <the annealed trunk>/anneal/checkpoint-12255 \
+  //     --mode adapt --fork-config src/generalist/configs/forks/adapt_lr_screen_bace.jsonc \
+  //     --config <the trunk's config> --cell <the trunk's cell> \
+  //     --run-dir src/generalist/results/runs/lr_screen_bace_3e-5
+  //
+  // `lr` is a *run config* field, not a fork field, so the two arms of the screen
+  // are two submissions differing in `--lr` and nothing else.
+  //
+  // WHY IT IS ALLOWED ON AN IN-MIXTURE TASK. `allow_in_mixture_task` exists for
+  // this control and its warning is correct: on a task the parent trained, the
+  // from-parent number is partly how recently the task was sampled. That is why
+  // §9.2's parent is the *annealed* trunk rather than the stable checkpoint, and
+  // why the screen picks by the **from-base** leg — the from-base leg is the
+  // matched from-zero specialist at this recipe, so the rate that is best for it
+  // is the fair choice for the baseline and the conservative one for the claim.
+  //
+  // THE BATCH IS THE SPECIALIST'S, NOT THE TRUNK'S. `molecules/033` ran BACE at
+  // `batch_size` 4 x `accumulation_steps` 8 = 32 examples a step, and a
+  // steps-to-target number is only comparable with that ladder if a step here is
+  // a step there. `mol/bace` renders to 369.4 tokens a graph example, so 32
+  // examples is 11,821 tokens and that is what `tokens_per_step` says. The fork
+  // records its own value, so the trunk's 16,384 is not inherited by accident.
+  //
+  // 1,000 steps at 32 examples is 26.5 passes over BACE's 1,208 training
+  // molecules, which is why `passes` is 30 — a corpus hands out `passes x
+  // train_size` examples in total and the specialist ladder's own budget was 40
+  // epochs. `eval_steps` 50 is the resolution of every steps-to-95 % number §9.2
+  // reports, and it is the specialist sweep's own cadence.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "task": "mol/bace",
+  "allow_in_mixture_task": true,
+
+  "tokens_per_step": 11821,
+  "budget_steps": 1000,
+  "passes": {"mol/bace": 30},
+  "warmup_steps": 10,
+  "eval_steps": 50,
+  // Base only. The screen is decided on the from-base leg — see below — and a
+  // from-parent leg costs the same 4.5 h without entering the decision. §9.2's
+  // legs, which do compare the two starts, carry their own config and run both.
+  "starts": ["base"],
+  "validators": ["in_mixture"],
+
+  // The screen reads the end-of-budget score rather than a crossing, but an
+  // `adapt` fork needs a target to plan, and BACE's own three-seed specialist
+  // value is the one number §9.2 pre-registers for this task. It is named on
+  // **val**: a target is a selection rule and D7.4 refuses one that names the
+  // test split. The reported §9.2 numbers are still read on test, at the end of
+  // the budget, where nothing selected on them.
+  "target": {
+    "metric": "in_mixture/mol/bace/val/roc_auc",
+    "value": 0.8133,
+    "direction": "max"
+  }
+}
