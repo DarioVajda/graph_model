@@ -142,13 +142,55 @@ def eval_indices(n_total, max_samples):
     return sorted(random.Random(f"gen-eval:{n_total}").sample(range(n_total), max_samples))
 
 
+_SCORE_GATHER_GROUP = None
+
+
+def _score_gather_group():
+    """A gloo group for collecting per-question scores across ranks.
+
+    NCCL is the wrong backend here. The gather sits directly after a generation
+    loop whose per-rank duration differs by whatever the questions in each shard
+    happen to cost, so the first rank to arrive enqueues a collective that the
+    NCCL watchdog aborts ten minutes later — a plausible gap on a full split,
+    and it would take down a run hours deep. Gloo waits on the host with a
+    half-hour budget and no abort. The payload is a few thousand floats, so
+    there is nothing the GPU path would win anyway.
+    """
+    global _SCORE_GATHER_GROUP
+    if _SCORE_GATHER_GROUP is None:
+        _SCORE_GATHER_GROUP = torch.distributed.new_group(backend="gloo")
+    return _SCORE_GATHER_GROUP
+
+
+def _ddp_rank_and_world():
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return torch.distributed.get_rank(), torch.distributed.get_world_size()
+    return 0, 1
+
+
 @torch.no_grad()
 def generative_eval(model, dataset, tokenizer, collator, question_end,
                     max_new_tokens=128, device=None, max_samples=None, prefix="eval",
                     answer_sep=",", include_strict=False):
+    """Generate an answer set per question and score it; shards across ranks.
+
+    Under torchrun each rank scores a stride of the index list and the
+    per-question scores are gathered before averaging, so every question is
+    generated exactly once and every rank returns the same metrics. The model
+    passed in is the unwrapped one, so nothing inside the loop is collective and
+    the shards may be ragged. Averaging a mean over the gathered union
+    reproduces the single-rank number: each question contributes one score and
+    order does not enter a mean.
+
+    This is what makes a full-split final scoring affordable at all under DDP.
+    Scoring the whole split on every rank costs N times the wall clock for one
+    answer, and N times the host memory at the peak — CWQ's single-rank run
+    already peaked near 183 GB there.
+    """
     was_training = model.training
     model.eval()
     device = device or next(model.parameters()).device
+    rank, world = _ddp_rank_and_world()
 
     # Flex attention needs block-aligned lengths, but generation batches are
     # unbucketed (the prompt node must stay last, so we can't pad past it).
@@ -160,7 +202,8 @@ def generative_eval(model, dataset, tokenizer, collator, question_end,
 
     hits1, f1s, hitstar = [], [], []
     s_hits1, s_f1s, s_hitstar = [], [], []
-    for i in eval_indices(len(dataset), max_samples):
+    indices = list(eval_indices(len(dataset), max_samples))
+    for i in indices[rank::world]:
         item = dataset[i]
         pn = int(item["prompt_node"])
         ids = list(item["input_ids"][pn])
@@ -212,6 +255,13 @@ def generative_eval(model, dataset, tokenizer, collator, question_end,
         model.config.graph_attn_impl = "flex"
     if was_training:
         model.train()
+
+    if world > 1:
+        buckets = [hits1, f1s, hitstar, s_hits1, s_f1s, s_hitstar]
+        parts = [None] * world
+        torch.distributed.all_gather_object(parts, buckets, group=_score_gather_group())
+        hits1, f1s, hitstar, s_hits1, s_f1s, s_hitstar = [
+            [v for part in parts for v in part[k]] for k in range(len(buckets))]
 
     m = lambda xs: float(np.mean(xs)) if xs else 0.0
     out = {f"{prefix}_hits1": m(hits1), f"{prefix}_f1": m(f1s),

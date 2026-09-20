@@ -35,6 +35,31 @@ _DEFAULT_RUNS_JSONL = os.path.join(EXPERIMENT_DIR, "results", "train_runs.jsonl"
 _PRINT_KEYS = ("f1", "hits1", "hit_star", "loss", "accuracy")
 
 
+def steps_per_epoch_for(n_examples, batch_size, accumulation_steps,
+                        world_size=None):
+    """Optimizer steps in one epoch, as the Trainer will actually run them.
+
+    ``world_size`` defaults to the torchrun environment, and it belongs in the
+    divisor: one optimizer step consumes
+    ``batch_size * accumulation_steps * world_size`` examples, so at eight ranks
+    the run is an eighth as many steps as the single-rank arithmetic predicts.
+
+    Here the count feeds ``warmup_steps = total_steps // 10`` and nothing else —
+    the cosine decay curve comes from HF's own step count, so a wrong number
+    lengthens the warmup rather than truncating the schedule. That is still
+    enough to ruin a run: the CWQ headline at eight ranks would warm up for
+    18,752 of its 23,440 steps, reaching peak LR with four-fifths of the run
+    already spent.
+
+    Every KGQA run before 2026-09-19 is single-rank, where the divisor is 1 and
+    the arithmetic is unchanged, so no number on record moves.
+    """
+    if world_size is None:
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    world_size = max(1, world_size)
+    return max(1, n_examples // batch_size // accumulation_steps // world_size)
+
+
 def _run_identity(cfg, run_name, sweep_id):
     """Internal (checkpoint + wandb) run name — unique per run.
 
@@ -207,7 +232,8 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None, resume=Fa
     model = select_active_params(model, active_params=active_params, lora=cfg.lora_config())
     print_trainable_parameters(model)
 
-    steps_per_epoch = max(1, len(train_dataset) // (cfg.batch_size * cfg.accumulation_steps))
+    steps_per_epoch = steps_per_epoch_for(
+        len(train_dataset), cfg.batch_size, cfg.accumulation_steps)
     total_steps = steps_per_epoch * cfg.num_epochs
     gc = cfg.gradient_checkpointing
 
@@ -293,8 +319,14 @@ def run_train_mode(cfg, runs_jsonl=None, run_name=None, sweep_id=None, resume=Fa
         if any(t in k for t in _PRINT_KEYS):
             print(f"  {k}: {v:.4f}")
 
-    _save_train_record(cfg, internal_run, dev_metrics, test_metrics,
-                       runs_jsonl=runs_jsonl, sweep_meta=sweep_meta)
+    # Every rank runs the scoring above (the teacher-forced pass inside evaluate()
+    # is collective — skipping it on non-zero ranks deadlocks), and every rank
+    # arrives at the same metrics. Only one of them may write: an appending
+    # writer called from 8 ranks puts 8 records in runs.jsonl for one run, and
+    # the report then averages a single run as if it were eight.
+    if trainer.is_world_process_zero():
+        _save_train_record(cfg, internal_run, dev_metrics, test_metrics,
+                           runs_jsonl=runs_jsonl, sweep_meta=sweep_meta)
 
     if report_to == "wandb":
         import wandb
