@@ -36,7 +36,10 @@ graph architecture. Concretely, in order:
 4. Only after 1–3 are won: **demonstrate retrieval portability** by plugging in one
    stronger public retriever (e.g. SubgraphRAG's) as a second input condition. This lifts
    the coverage ceiling and yields competitive headline numbers without claiming
-   retrieval as a contribution.
+   retrieval as a contribution. Sized in
+   [Baseline retrieval ceilings](#baseline-retrieval-ceilings-sr-vs-the-rog-2-hop-pool-2026-09-23):
+   the SR ∪ RoG-pool union reaches 90.2 Hits@1 on CWQ against 80.7 for either
+   alone, so the headroom is in combining retrievers, not in picking a better one.
 
 **Non-goal:** chasing the 2026 leaderboard (agentic/interactive-KG systems, GPT-4-class
 readers, own retrievers — see [Published SOTA landscape](#published-sota-landscape-as-of-2026-07)).
@@ -767,6 +770,90 @@ p99 7845 / max 25427; a 8192 cap covers 99.1–99.4% per split (matching WebQSP'
 "4096 covers 99.6%" standard), while WebQSP's 4096 would cover only ~76% of CWQ.
 Outliers drop trailing triple lines, as on WebQSP. The collapsed serialization
 (the D2b winner) is slightly shorter, so 8192 covers it a fortiori.
+
+### Baseline retrieval ceilings: SR vs the RoG 2-hop pool (2026-09-23)
+
+The ceilings above bound our input condition. The baselines that run their own
+retrieval are bounded by something else, and no paper in the landscape table
+publishes it — GNN-RAG reports no subgraph answer coverage in either the ACL
+version or the arXiv one. Measured directly instead, over the `graph` field of
+`rmanluo/RoG-{webqsp,cwq}` (the 2-hop neighbourhoods RoG and GNN-RAG retrieve
+from), with `_ceilings`' definitions reused verbatim so the rows are comparable:
+
+    python -m src.experiments.kgqa.analysis.rog_pool_ceiling --datasets webqsp cwq
+
+| Input condition (test split) | WQSP H@1 | WQSP F1 | CWQ H@1 | CWQ F1 |
+|---|---:|---:|---:|---:|
+| RoG / GNN-RAG 2-hop pool | **95.6** | **94.3** | 80.7 | 79.5 |
+| SR, uncapped | 91.1 | 89.6 | 80.7 | 79.8 |
+| SR, as built (cap512 / cap1024) | 90.9 | 89.1 | 79.9 | 79.0 |
+
+**This is an upper bound on the baselines, not their ceiling**: it measures the
+pool they retrieve *from*, and their GNN selects a subset of it. The matching key
+also differs — RoG ships name-resolved triples, so gold strings are intersected
+with node strings where the SR path intersects mids. Both ask "is the gold a node
+of the retrieved graph", and unnamed-mid golds never match on either side.
+
+**WebQSP: their pool is genuinely richer** — 94.3 vs our operative 89.1 F1, a
+5.2-point advantage. Any WebQSP comparison against a dense-retrieval baseline is
+made from 5 points further back.
+
+**CWQ: the ceilings are the same, and that is not an artifact.** 80.69 vs 80.66
+Hits@1 is close enough to look like a shared data source or a bug, so
+`analysis/ceiling_agreement.py` checks whether the same *questions* are covered:
+
+| CWQ test, ≥1 gold present | count | share |
+|---|---:|---:|
+| covered by both | 2513 | 71.2% |
+| SR only (pool misses it) | 336 | 9.5% |
+| pool only (SR misses it) | 335 | 9.5% |
+| neither | 347 | 9.8% |
+
+Two different retrievals whose totals coincide: 21.6% of questions differ in
+per-question recall, almost perfectly symmetrically. The same script on WebQSP
+disagrees strongly and in one direction (106 pool-only against 32 SR-only,
+91.09 / 95.64), which is what shows the comparison is not forced to agree. The
+sources are independent — sr-cwq is SR's own retriever over the int-coded
+Freebase cache (see `sr_records.py`), not RoG's neighbourhoods.
+
+**The two pools are nowhere near the same size**, which is where the extra
+WebQSP coverage comes from (test split, raw retriever output on both sides, no
+cap of ours applied):
+
+    python -m src.experiments.kgqa.analysis.subgraph_sizes --datasets webqsp cwq
+
+| Retriever | dataset | nodes (mean / p50 / p95 / max) | triples (mean / p50 / p95 / max) | relations (mean) |
+|---|---|---|---|---:|
+| SR (raw) | WebQSP | 75 / 29 / 284 / 1182 | 90 / 35 / 356 / 1741 | 10.7 |
+| RoG 2-hop pool | WebQSP | 1389 / 1530 / 1995 / 1999 | 4309 / 4415 / 7983 / 10810 | 295.0 |
+| SR (raw) | CWQ | 204 / 94 / 854 / 1715 | 268 / 119 / 1017 / 4487 | 14.5 |
+| RoG 2-hop pool | CWQ | 1281 / 1481 / 1989 / 1998 | 4273 / 4143 / 9043 / 17049 | 268.6 |
+
+SR is a precision-oriented retriever and it shows: 18× fewer nodes and 48× fewer
+triples than the pool on WebQSP, 6× / 16× on CWQ, over ~20× fewer distinct
+relations. The two-hop pool is a candidate set, not a reader input — RoG and
+GNN-RAG prune it to paths before anything reaches the LLM — so this is not a
+prompt-length comparison. It is what the +5.2 WebQSP F1 of ceiling costs: the
+pool buys its coverage by being an order of magnitude larger, and on CWQ that
+same order of magnitude buys nothing (79.5 vs 79.8 F1).
+
+Note the pool's own ceiling is capped: max nodes 1999 (WebQSP) and 1998 (CWQ),
+with p50 already at ~1500, so `rmanluo/RoG-*` is itself truncated at 2000 nodes.
+The pool ceilings are therefore an upper bound on a *already-capped* pool, not on
+unrestricted 2-hop reachability.
+
+Consequences worth carrying into the write-up:
+
+- The CWQ gap to dense-retrieval GNN-RAG (55.2 vs 59.4 F1) is **not** a coverage
+  gap. Both conditions bound any reader at ~79 F1, so that margin is reading.
+- GNN-RAG loses 6.1 F1 on CWQ (59.4 → 53.3) swapping dense for SR under an
+  unchanged ceiling — their paper's stated mechanism, disconnected sparse
+  subgraphs breaking shortest-path extraction. There is no path-extraction stage
+  here to break.
+- **Union ceilings are far above either retriever**: CWQ 90.2 Hits@1 (+9.5 over
+  both), WebQSP 97.6 (+2.0 over the pool, +6.5 over SR). That is the concrete
+  size of the prize in [Goal](#goal) step 4, and a better argument for it than
+  "a stronger public retriever".
 
 ### Entity-redundancy check: flat vs Levi-graph token cost (2026-07-13)
 
