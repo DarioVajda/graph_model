@@ -36,3 +36,7 @@ build/
 dist/
 
 CLAUDE.md
+
+# paper-writing notes, kept local
+src/experiments/molecules/TODO.md
+src/models/flex_attn/REBUTTAL.md

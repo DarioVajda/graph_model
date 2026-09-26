@@ -1,8 +1,7 @@
 {
   // ═══════════════════════════════════════════════════════════════════════════
   // Reproduce the Table 2 (Text-Attributed Graph) results from the GTLM paper
-  //   "Teaching LLMs to See Graphs: Unifying Text and Structural Reasoning"
-  //   (Vajda, arXiv:2605.10247v1).
+  //   "Teaching LLMs to See Graphs: Unifying Text and Structural Reasoning".
   //
   // Every value below is taken verbatim from the paper's appendix:
   //   • Table 6  — fixed graph-attention bias hyperparameters (all experiments)
