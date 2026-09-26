@@ -93,6 +93,20 @@ def build_model_for_eval(cfg, checkpoint):
         cfg.impl, tokenizer, pad_token_id, cfg.k_hop, cfg.k_hop_directed,
         magnetic_m=cfg.magnetic_m,
         len_buckets=cfg.len_buckets, node_buckets=cfg.node_buckets)
+    # The left padding has to be set HERE, on the collator. `GraphCollatorV2`
+    # packs the batch itself and reads only its own ``padding_side``; the
+    # tokenizer's, set above, never reaches it. Until 2026-09-24 it defaulted to
+    # right, so every caption — a batch of one included, since `pad_to_block`
+    # rounds L up to a bucket — was continued from a pad at position 0. Found
+    # on the 8B cells (055), where ~99 % of captions opened on a stray token
+    # ("definite:", "Question 2") while the teacher-forced argmax at the last
+    # real prompt token was " The" on every row checked; the 1B tolerated the
+    # same misplacement on ~87 % of rows, so every ChEBI score before that date
+    # carries it.
+    if not hasattr(collator, "padding_side"):
+        raise SystemExit(f"{type(collator).__name__} has no padding_side; "
+                         "generation needs left padding.")
+    collator.padding_side = "left"
     return model, tokenizer, collator, device
 
 

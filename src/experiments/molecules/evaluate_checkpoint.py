@@ -23,10 +23,12 @@ import torch
 from transformers import AutoTokenizer, TrainingArguments
 
 from ...models import GTLMLlamaForCausalLM
-from ...utils import GraphTrainerV2, make_compute_metrics, shift_logits_for_metrics
+from ...utils import GraphTrainerV2
 from ..expressiveness.training.dispatch import build_collator
 from .analysis import write_per_example_report
 from .dataset import load_data
+from .evaluate import answer_token_ids
+from .train import _scoring
 from ._io import append_jsonl
 
 
@@ -42,6 +44,27 @@ def _recorded_accuracy(runs_jsonl, run_name):
     return hit
 
 
+def _val_reload_check(trainer, val_dataset, checkpoint, tol=0.005):
+    """Re-score val and compare it with the val AUROC the checkpoint logged."""
+    state_path = os.path.join(checkpoint, "trainer_state.json")
+    step = int(os.path.basename(checkpoint.rstrip("/")).rsplit("-", 1)[1])
+    logged = None
+    if os.path.exists(state_path):
+        for entry in json.load(open(state_path)).get("log_history", []):
+            if entry.get("step") == step and "eval_roc_auc" in entry:
+                logged = entry["eval_roc_auc"]
+    got = trainer.evaluate(val_dataset, metric_key_prefix="val").get("val_roc_auc")
+    out = {"val_roc_auc": got, "val_roc_auc_logged": logged, "val_reload_verified": None}
+    if logged is None or got is None:
+        print(f"[eval] val reload check skipped: logged={logged} reloaded={got}")
+        return out
+    drift = abs(got - logged)
+    out["val_reload_verified"] = bool(drift <= tol)
+    print(f"[eval] val reload check {'OK' if drift <= tol else 'MISMATCH'}: "
+          f"logged={logged:.4f} reloaded={got:.4f} drift={drift:.4f}")
+    return out
+
+
 def run_eval_mode(cfg, run_name=None, runs_jsonl=None, sweep_meta=None,
                   expect_accuracy=None):
     if not cfg.checkpoint:
@@ -52,7 +75,7 @@ def run_eval_mode(cfg, run_name=None, runs_jsonl=None, sweep_meta=None,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     run_name = run_name or os.path.basename(cfg.checkpoint.rstrip("/"))
 
-    _, _, test_dataset = load_data(cfg)
+    _, val_dataset, test_dataset = load_data(cfg)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
 
@@ -67,6 +90,12 @@ def run_eval_mode(cfg, run_name=None, runs_jsonl=None, sweep_meta=None,
         magnetic_m=cfg.magnetic_m,
         len_buckets=cfg.len_buckets, node_buckets=cfg.node_buckets)
 
+    # Score exactly as training did: Tier A reads the answer span, Tier B the
+    # yes/no logit margin. The Tier-A pair alone cannot produce a Tier-B report,
+    # which needs the margin preprocessor's (N, 3) output and `yes_id`.
+    _, compute_metrics, preprocess_logits = _scoring(cfg, tokenizer)
+    yes_id = answer_token_ids(tokenizer)[0] if cfg.tier() == "B" else None
+
     trainer = GraphTrainerV2(
         model=model,
         args=TrainingArguments(
@@ -75,15 +104,25 @@ def run_eval_mode(cfg, run_name=None, runs_jsonl=None, sweep_meta=None,
             dataloader_num_workers=cfg.num_workers,
             report_to=[], bf16=True, seed=cfg.seed),
         data_collator=collator,
-        compute_metrics=make_compute_metrics(),
-        preprocess_logits_for_metrics=shift_logits_for_metrics,
+        compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits,
     )
 
     out_dir = os.path.join(os.path.dirname(runs_jsonl) or ".", "per_example") \
         if runs_jsonl else "per_example"
     os.makedirs(out_dir, exist_ok=True)
     summary = write_per_example_report(
-        trainer, test_dataset, cfg, os.path.join(out_dir, f"{run_name}.jsonl"))
+        trainer, test_dataset, cfg, os.path.join(out_dir, f"{run_name}.jsonl"),
+        yes_id=yes_id)
+    if summary.get("per_example_roc_auc") is not None:
+        print(f"[eval] test roc_auc={summary['per_example_roc_auc']:.4f}")
+
+    # The Tier-B reload check needs no training record: the checkpoint's own
+    # `trainer_state.json` logged the val AUROC at this step, computed on the live
+    # model. Re-scoring val after the reload must reproduce it. This is what
+    # vouches for a checkpoint whose training run died before writing a record.
+    if cfg.tier() == "B":
+        summary.update(_val_reload_check(trainer, val_dataset, cfg.checkpoint))
 
     # The reload check. `expect_accuracy` comes from the training record; a mismatch
     # means the checkpoint did not come back the way it went in, and every geometry

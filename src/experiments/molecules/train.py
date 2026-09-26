@@ -379,6 +379,12 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         sweep_meta["sweep_run"] = run_name
     internal_run_name = f"{sweep_id}_{run_name}" if (sweep_id and run_name) else cfg.run_name()
 
+    # Under torchrun every rank must claim its own card BEFORE the model is built:
+    # a bare "cuda" is cuda:0 until then, so all ranks materialised the backbone
+    # on card 0 and only the Trainer moved it afterwards. Four 8B copies fit on a
+    # 180 GB B200 and hid this; on 40 GB A100s it OOMed at load (059, 2026-09-25).
+    if torch.cuda.is_available() and "LOCAL_RANK" in os.environ:
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     report_to = "wandb" if cfg.wandb_project else "none"
     if cfg.wandb_project:
@@ -462,6 +468,10 @@ def run_train_mode(cfg, tokenizer, pad_token_id, runs_jsonl=None, run_name=None,
         per_device_eval_batch_size=cfg.batch_size,
         gradient_accumulation_steps=cfg.accumulation_steps,
         gradient_checkpointing=cfg.gradient_checkpointing,
+        # Non-reentrant: with LoRA the embedding output does not require grad, and
+        # reentrant checkpointing then hands backward a loss with no grad_fn.
+        gradient_checkpointing_kwargs=({"use_reentrant": False}
+                                       if cfg.gradient_checkpointing else None),
         dataloader_num_workers=cfg.num_workers,
         # Off, and it has to stay off while `eval_strategy` is "steps". The flag
         # is not per-loader: it applies to the eval loader too, and `evaluate`
