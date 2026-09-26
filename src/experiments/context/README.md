@@ -85,6 +85,7 @@ Two mechanisms run things, and which one applies depends on whether the step nee
 | §3.2 hard cell at 8k | `sbatch_chain_hard8k.sh` | `015_hard8k_graph` / `016_hard8k_flat` | in-job |
 | §A.10 decoy / fan_out | `sbatch_chain_decoy.sh` | `017_decoy_graph` / `018_decoy_flat` | in-job |
 | **§3.3 main sweep** | `sbatch_mainsweep_data.sh` | `021_mainsweep_graph` / `022_mainsweep_flat` | `023_mainsweep_grid` |
+| §3.4 placement probe | — (§3.3 test splits) | — (§3.3 checkpoints) | `029_placement_flat` / `030_placement_graph`, then `analysis.placement` |
 
 The full headline path, in order:
 
@@ -290,6 +291,73 @@ files you will find in the repo. On the machine that ran it the numbers come fro
 cell/k shards whose union is that config — cost goes as ~L^1.7 and the 128×512 cell alone is
 half the grid, so sharding by cell and k (`--only-cells` / `--only-hops`, neither in the cache
 key) cuts 2.7 h to 25 min.
+
+### 3.4 Placement probe: flat is position- and order-sensitive, the graph arm is not (2026-09-25)
+
+**Question.** §3.3's flat model loses accuracy with N. Is that a function of *where* the chain
+passages sit and *in what order* they appear, at a fixed checkpoint? And is the graph arm
+invariant to the same reorderings?
+
+**Design** (`placement.py`). The §3.3 checkpoints are used unchanged: all 3 flat seeds, and
+the median graph seed. Cells are 32×512 and 128×128 (both ≈16k tokens, within the training
+length) and 128×512 (65k, extrapolation), at k ∈ {2, 4}, with all 200 test graphs per cell.
+Each graph is scored under 11 orderings of the same passages:
+* `random` — the §3.3 order;
+* `fwd@p` — the k+1 chain passages as one contiguous block in hop order, inserted at relative
+  position p ∈ {0, .25, .5, .75, 1} among the other passages (0 = first, 1 = next to the
+  question), with the others keeping their §3.3 relative order;
+* `rev@p` — the same with the block reversed.
+
+Only the order changes; headers, question and answer tokens are identical. For the graph arm a
+reordering is a node relabelling: text, SPD, magnetic eigenvector rows and edges are permuted
+together. Analysis is paired within a graph: cluster bootstrap over graphs for CIs and exact
+McNemar for p, on `code_acc` and on gold-code log-prob.
+
+**Flat, `code_acc`, mean of 3 seeds.**
+
+| k | cell | random | fwd@0 | fwd@.5 | fwd@1 | rev@0 | rev@.5 | rev@1 | best − worst |
+|---|---|---|---|---|---|---|---|---|---|
+| 2 | 32×512 | 0.842 | 0.918 | 0.902 | 0.808 | 0.757 | 0.695 | 0.665 | +29.7 pp |
+| 2 | 128×128 | 0.742 | 0.940 | 0.800 | 0.635 | 0.873 | 0.450 | 0.408 | +56.7 pp |
+| 2 | 128×512 | 0.688 | 0.813 | 0.683 | 0.623 | 0.768 | 0.293 | 0.450 | +52.0 pp |
+| 4 | 32×512 | 0.238 | 0.250 | 0.223 | 0.177 | 0.058 | 0.057 | 0.102 | +19.3 pp |
+| 4 | 128×128 | 0.120 | 0.105 | 0.080 | 0.057 | 0.053 | 0.007 | 0.013 | +11.3 pp |
+| 4 | 128×512 | 0.073 | 0.047 | 0.057 | 0.087 | 0.018 | 0.008 | 0.042 | +8.2 pp |
+
+**Graph arm.** Per-item correctness under every ordering matches `random` in 11,997 of
+12,000 (item, ordering) pairs; the 3 exceptions are one borderline item at k=4/128×512. Every
+contrast is 0.0 pp, and mean log-prob moves by ≤ 0.01 nats.
+
+* **Order dominates.** Reading the chain forward rather than reversed is worth +18 / +27 / +27 pp
+  at k=2 and +14 / +6 / +4 pp at k=4 (32×512 / 128×128 / 128×512); every CI excludes 0.
+* **Not lost in the middle.** mean(fwd@0, fwd@1) − fwd@.5 is −3.8 / −1.2 / +3.5 pp at k=2,
+  with CIs straddling or below 0. The curve is monotone: the chain block works best early
+  and worst next to the question (end − start −11.0 / −30.5 / −19.0 pp at k=2, all
+  p ≤ 1e-8). "Position- and order-sensitive" is the accurate description, not a U-shape.
+* **At k=2 the size drop is mostly order.** With the chain first, 128×128 scores 0.940,
+  above the flat arm's own N=16 row (0.882, 3-seed mean).
+* **At k=4 no ordering rescues flat** (best 0.25 at 16k, 0.09 at 65k): that collapse is a
+  multi-hop composition failure, not placement.
+* **The same effect appears inside the §3.3 order.** Under `random`, bin graphs by how many
+  chain links happen to read forward. At k=2, 128×512, 0 / 1 / 2 forward links score
+  0.32 / 0.72 / 0.83. The §3.3 flat numbers therefore include the luck of the shuffle.
+* **Reproduction.** Flat `random` equals §3.3 exactly in 9 of 18 (seed, cell, k) and is within
+  1–2 items in the rest, both signs. §3.3 scored the in-memory model; the probe reloads the
+  adapter onto a bf16 base. The graph arm matches in 6 of 6.
+
+**Provenance.** Smoke `028_placement_smoke` (job 170673); flat `029_placement_flat` (170675,
+18 tasks, 10 min per 16k cell and 54 min per 65k cell); graph `030_placement_graph` (170684,
+6 tasks, 21 min / 2 h 28 min); analysis job 171521:
+
+```bash
+python3 -m src.experiments.context.analysis.placement \
+    src/experiments/context/results/placement_flat src/experiments/context/results/placement_graph \
+    --chain-order   # loads the test graphs — run it as a batch job
+```
+
+It writes `results/placement_analysis/{placement.md, placement_summary.json,
+placement_{acc,logp}.{png,pdf}}`, which holds all 11 orderings, every contrast with CI and p,
+and the answer-position and chain-link tables.
 
 ---
 

@@ -1,0 +1,66 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // PLACEMENT PROBE — graph-arm control. README §3.4. Companion to 029.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/030_placement_graph.jsonc
+  //
+  // The same conditions, cells and k as 029, on the GTLM checkpoint §3.3 scored.
+  // For the graph arm a "placement" is a relabelling of node indices — the text,
+  // tokens, SPD matrix, magnetic eigenvector rows and edge list are permuted
+  // together (placement.permute_item) — so a position-free model must score every
+  // condition identically. The smoke (028) confirmed it to 4 decimals of log-prob
+  // on 10 graphs; this is the full-size version of that check.
+  //
+  // One task per (cell, k). The smoke took 3.5 min for 30 items of 128x512 including
+  // compile, so 2200 items is a few hours at most; 06:00 leaves margin.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "placement_graph",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 6,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100", "B200", "B300"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "06:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "placement",
+  "placement_arm": "graph",
+  "checkpoint_path": "./checkpoints/context/mainsweep_graph_0001_seed1/checkpoint-3000",
+  "only_cells": ["32x512", "128x128", "128x512"],
+  "only_hops": ["2", "4"],
+
+  // The §3.3 main-sweep build, key for key — the probe reads its test splits.
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex"
+}

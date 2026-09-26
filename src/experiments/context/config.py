@@ -50,7 +50,10 @@ WIRED_FEATURES = ("spd", "rrwp", "magnetic")
 
 # flat_grid = the zero-shot flat-text arm (README §3.1): same 25 test splits, serialized
 # to one ordinary sequence and scored with the PRETRAINED backbone (no checkpoint).
-MODES = ("data_prep", "data_merge", "train", "grid", "flat_grid", "flat_train")
+# placement = the lost-in-the-middle probe (README §3.4): one checkpoint, either arm,
+# scored with the gold chain moved through the context as a contiguous block.
+MODES = ("data_prep", "data_merge", "train", "grid", "flat_grid", "flat_train", "placement")
+PLACEMENT_ARMS = ("flat", "graph")
 GRAPH_ATTN_IMPLS = ("flex", "eager")
 DTYPES = ("bf16", "fp32")
 
@@ -212,7 +215,14 @@ class RunConfig:
     gradient_checkpointing: bool = True
 
     # ── grid mode ──────────────────────────────────────────────────────────────
-    checkpoint_path: str = None                 # required by --mode grid
+    checkpoint_path: str = None                 # required by --mode grid / placement
+
+    # ── placement mode (README §3.4) ───────────────────────────────────────────
+    placement_arm: str = "flat"                 # which arm checkpoint_path is
+    # Restrict to these conditions, comma-joined ("random,fwd@0.50"). Empty = all of
+    # placement.CONDITIONS. Like only_cells, it shards a job and never touches data.
+    only_conditions: str = ""
+    placement_max_items: int = 0                # 0 = every test graph; >0 for a smoke run
 
     # ── tracking ───────────────────────────────────────────────────────────────
     wandb_project: str = None
@@ -247,6 +257,14 @@ class RunConfig:
             return self.hops_list()
         want = {int(k.strip()) for k in self.only_hops.split(",") if k.strip()}
         return tuple(k for k in self.hops_list() if k in want)
+
+    def selected_conditions(self):
+        """The placement conditions to score — every one unless filtered, in canonical order."""
+        from .placement import CONDITIONS
+        if not self.only_conditions:
+            return CONDITIONS
+        want = {c.strip() for c in self.only_conditions.split(",") if c.strip()}
+        return tuple(c for c in CONDITIONS if c in want)
 
     def needle_tokens(self):
         """Upper bound on a content node's needle, in tokens.
@@ -500,8 +518,18 @@ class RunConfig:
             raise ValueError(
                 f"train_shard={self.train_shard} is out of range for "
                 f"train_shards={self.train_shards} (valid: 0..{self.train_shards - 1}).")
-        if self.mode == "grid" and not self.checkpoint_path:
-            raise ValueError("--mode grid requires --checkpoint-path.")
+        if self.mode in ("grid", "placement") and not self.checkpoint_path:
+            raise ValueError(f"--mode {self.mode} requires --checkpoint-path.")
+        if self.placement_arm not in PLACEMENT_ARMS:
+            raise ValueError(f"placement_arm must be one of {PLACEMENT_ARMS}.")
+        if self.only_conditions:
+            from .placement import CONDITIONS
+            unknown = {c.strip() for c in self.only_conditions.split(",") if c.strip()} - set(CONDITIONS)
+            if unknown:
+                raise ValueError(f"only_conditions names unknown conditions {sorted(unknown)} "
+                                 f"(valid: {CONDITIONS}).")
+        if self.placement_max_items < 0:
+            raise ValueError("placement_max_items must be >= 0.")
         if self.code_len < 1:
             raise ValueError("code_len must be >= 1.")
         if self.hops < 0:

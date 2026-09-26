@@ -1,0 +1,75 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // PLACEMENT PROBE — flat arm. README §3.4.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/029_placement_flat.jsonc
+  //
+  // Is the flat baseline's §3.3 collapse a lost-in-the-middle effect? Re-score the
+  // three §3.3 flat checkpoints on the same test graphs, changing only WHERE the
+  // k+1 chain passages sit in the serialization: `random` (the §3.3 order, a
+  // reproduction check), and the chain as one contiguous block, forward or
+  // reversed, at relative position p in {0, .25, .5, .75, 1} among the other nodes.
+  // Scores are paired per graph, so every contrast is within-item.
+  //
+  //   k      k=2 (the flat arm starts to drop with size), k=4 (it has collapsed)
+  //   cells  32x512 and 128x128 (both ~16k tokens, inside max_train_len: the
+  //          few-long vs many-short contrast), 128x512 (65k, length extrapolation)
+  //
+  // One task per (seed, cell, k): 18 tasks, 11 conditions x 200 graphs each. The
+  // smoke (028) ran 30 items of 128x512 in 90 s including model load, so the
+  // largest task is ~2 h; 04:00 leaves margin.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "placement_flat",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 9,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100", "B200", "B300"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "placement",
+  "placement_arm": "flat",
+  "flat_ckpt": [
+    {"checkpoint_path": "./checkpoints/context/mainsweep_flat_0000_seed0/checkpoint-4000"},
+    {"checkpoint_path": "./checkpoints/context/mainsweep_flat_0001_seed1/checkpoint-4000"},
+    {"checkpoint_path": "./checkpoints/context/mainsweep_flat_s2_0000/checkpoint-4000"}
+  ],
+  "only_cells": ["32x512", "128x128", "128x512"],
+  "only_hops": ["2", "4"],
+
+  // The §3.3 main-sweep build, key for key — the probe reads its test splits.
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex"
+}

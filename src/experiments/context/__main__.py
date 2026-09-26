@@ -7,6 +7,10 @@ Three modes, run in this order:
     python3 -m src.experiments.context --mode train             # train on the capped mixture
     python3 -m src.experiments.context --mode grid --checkpoint-path ./checkpoints/...
 
+plus the flat arm (``flat_grid`` / ``flat_train``) and the placement probe
+(``placement``, README §3.4), which scores either arm's checkpoint with the gold
+chain moved through the context.
+
 The generic ``sweep`` runner invokes this once per resolved config, rendering each
 config key to the matching flag:
 
@@ -204,7 +208,16 @@ def build_parser():
 
     # ── grid mode ──────────────────────────────────────────────────────────────
     p.add_argument("--checkpoint-path", default=d.checkpoint_path,
-                   help="(grid) checkpoint directory to score.")
+                   help="(grid, placement) checkpoint directory to score.")
+
+    # ── placement mode (README §3.4) ───────────────────────────────────────────
+    p.add_argument("--placement-arm", choices=("flat", "graph"), default=d.placement_arm,
+                   help="(placement) which arm --checkpoint-path is.")
+    p.add_argument("--only-conditions", type=str, default=d.only_conditions,
+                   help="(placement) score only these conditions, comma-joined "
+                        "(e.g. random,fwd@0.50). Empty = all of placement.CONDITIONS.")
+    p.add_argument("--placement-max-items", type=int, default=d.placement_max_items,
+                   help="(placement) score only the first n test graphs per cell; 0 = all.")
 
     p.add_argument("--wandb-project", default=d.wandb_project)
 
@@ -252,6 +265,8 @@ def config_from_args(args):
         eval_steps=args.eval_steps, max_steps=args.max_steps, seed=args.seed,
         num_workers=args.num_workers, gradient_checkpointing=args.gradient_checkpointing,
         checkpoint_path=args.checkpoint_path,
+        placement_arm=args.placement_arm, only_conditions=args.only_conditions,
+        placement_max_items=args.placement_max_items,
         wandb_project=args.wandb_project,
     ).validate()
 
@@ -289,6 +304,12 @@ def main(argv=None):
         from .grid import run_grid_mode
         run_grid_mode(cfg, runs_jsonl=args.runs_jsonl, run_name=args.run_name,
                       sweep_id=args.sweep_id)
+        return 0
+
+    if cfg.mode == "placement":
+        from .placement import run_placement_mode
+        run_placement_mode(cfg, runs_jsonl=args.runs_jsonl, run_name=args.run_name,
+                           sweep_id=args.sweep_id)
         return 0
 
     if cfg.mode == "flat_grid":

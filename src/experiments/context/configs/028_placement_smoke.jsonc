@@ -1,0 +1,70 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // PLACEMENT PROBE — smoke + cost calibration. Run before 029/030. README §3.4.
+  //
+  //   python3 -m sweep src.experiments.context src/experiments/context/configs/028_placement_smoke.jsonc
+  //
+  // Both arms, on the most expensive split the probe touches (128x512, 65k tokens),
+  // 10 graphs x 3 conditions each. What to read off it:
+  //   * s/item per arm, for the walltime of 029/030 — cost goes as ~L^1.7, so this
+  //     cell bounds every other one;
+  //   * `random` must match the first 10 items of the §3.3 cell — the flat arm against
+  //     flat_trained_grid.jsonl, the graph arm against mainsweep_grid/grid.jsonl;
+  //   * the graph arm's fwd/rev rows should equal `random` up to bf16 noise.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "placement_smoke",
+  "results_dir": "src/experiments/context/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["H100", "B200", "B300"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "placement",
+  // The two arms, each with its own reported checkpoint (§3.3: flat seed 1 is the
+  // median flat seed, graph seed 1 the checkpoint the grid scored).
+  "arm": [
+    {"placement_arm": "flat",  "checkpoint_path": "./checkpoints/context/mainsweep_flat_0001_seed1/checkpoint-4000"},
+    {"placement_arm": "graph", "checkpoint_path": "./checkpoints/context/mainsweep_graph_0001_seed1/checkpoint-3000"}
+  ],
+  "only_cells": "128x512",
+  "only_hops": "2",
+  "only_conditions": "random,fwd@0.50,rev@1.00",
+  "placement_max_items": 10,
+
+  // The §3.3 main-sweep build, key for key — the probe reads its test splits.
+  "hop_counts": "1,2,3,4",
+  "fan_out": 2,
+  "node_counts": "16,32,64,128",
+  "token_counts": "64,128,256,512",
+  "max_train_len": 16384,
+  "n_train": 16000,
+  "n_dev": 200,
+  "n_test": 200,
+  "code_len": 3,
+  "id_pool": 4096,
+  "data_seed": 42,
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "lora_r": 64,
+  "dtype": "bf16",
+  "spd": true,
+  "max_spd": 8,
+  "rrwp": false,
+  "magnetic": true,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+  "k_hop": 0,
+  "graph_attn_impl": "flex"
+}
