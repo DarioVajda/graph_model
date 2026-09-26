@@ -67,12 +67,25 @@ MIXTURE_SPLITS = ("val", "test")
 #: here, it is the memory profile the token budget in `evaluate/scorers.py` was
 #: written to avoid, since the unfused path allocates the full ``(B, H, L, L)``.
 #:
-#: 128 is kgqa's value (`experiments/kgqa/train.py`). The cost of a cap that is
+#: 128 was kgqa's value (`experiments/kgqa/train.py`). The cost of a cap that is
 #: too high is bounded — L, N and now B are all bucketed, so the shape space is
 #: finite and each new member is a one-time autotune that inductor caches on disk
 #: and every cell of a campaign shares. The cost of one that is too low is a
 #: silent order-of-magnitude regression, which is what this one bought.
-FLEX_CACHE_SIZE_LIMIT = 128
+#:
+#: **512, because `mol/assistant` widened the shape space and 128 was sized
+#: before it existed.** An assistant example is a far bigger graph than anything
+#: the campaign had — ~74 nodes on a row carrying demonstrations against ~20 for
+#: an ordinary one, since each demonstration enters as its own component — so it
+#: reaches node buckets the other twenty tasks never touch. Measured on the first
+#: assistant anneal: **70 distinct flex shapes autotuned in the first 90 of 1,115
+#: steps**, still climbing at ~4 new shapes per 24 autotunes, and that is
+#: training alone. The first periodic eval had not fired yet, and eval is the
+#: case that blew the old 32 — sixteen tasks across two splits, length profiles
+#: with nothing in common, more distinct shapes than the whole of training.
+#: Crossing the cap mid-run is silent, and what it buys is the eager path this
+#: constant exists to keep the run off.
+FLEX_CACHE_SIZE_LIMIT = 512
 
 
 class WiringError(RuntimeError):
@@ -247,12 +260,23 @@ def splits_wanted(validators) -> set:
 
 
 def build_eval_sets(config: RunConfig, registry: Registry, mixture, splits,
-                    adapter_config=None, log=print) -> dict:
+                    adapter_config=None, log=print, extra_tasks=()) -> dict:
     """``{task: {split: TaskSource}}`` for the splits the validators want.
 
     In-mixture tasks contribute the splits their spec's ``eval_splits`` allows;
     held-out tasks contribute ``held_out`` and are taken from the *registry*, not
     the mixture, because by construction they are not in it.
+
+    ``extra_tasks`` names tasks to build the in-mixture splits for **although
+    they are not in this mixture**. That is exactly an `adapt` fork: the task it
+    adapts is the one the parent held out, so walking the mixture builds a source
+    for every task except the only one the leg measures. The fold A legs trained
+    2,000 steps against `in_mixture/mol/ring_size/test/em_accuracy` when no
+    source for `mol/ring_size` existed — the key is simply absent, the crossing
+    is `None`, and a null reads as "the trunk never got there" rather than "this
+    was never measured". Naming the task here is what makes the target reachable;
+    `_is_held_out` does not claim these tasks (they carry no ``held_out`` source
+    and are not in `molecule_held_out_names`), so `in_mixture` scores them.
 
     A source that was never built is logged and skipped rather than raised. An
     evaluation set is a measurement, and the rule the whole of D7 is built on is
@@ -272,11 +296,14 @@ def build_eval_sets(config: RunConfig, registry: Registry, mixture, splits,
             return
         out.setdefault(task, {})[split] = source
 
-    for entry in mixture.entries if mixture is not None else ():
-        spec = registry.get(entry.name)
+    names = [entry.name for entry in (mixture.entries if mixture is not None
+                                      else ())]
+    names += [name for name in extra_tasks if name not in names]
+    for name in names:
+        spec = registry.get(name)
         for split in MIXTURE_SPLITS:
             if split in splits and split in spec.eval_splits:
-                add(entry.name, split)
+                add(name, split)
 
     if "held_out" in splits:
         for spec in registry:

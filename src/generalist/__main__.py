@@ -167,8 +167,42 @@ def build_parser() -> argparse.ArgumentParser:
     fork_p.add_argument("--decay-steps", type=int, default=None,
                         help="anneal: length of the decay segment (default 10%% "
                              "of the parent's steps).")
+    fork_p.add_argument("--task", default=None,
+                        help="adapt: the task to adapt on, overriding the fork "
+                             "config's. `target.metric` is rewritten with it.")
+    fork_p.add_argument("--held-out-by", dest="held_out_by", default=None,
+                        help="adapt: the k-fold fold the parent trunk excluded, "
+                             "overriding the fork config's. It is checked "
+                             "against the fold table, so it travels with "
+                             "`--task` — one config drives nine Tier-A legs "
+                             "across two folds and the fold is not the "
+                             "config's to fix.")
+    fork_p.add_argument("--starts", default=None,
+                        help="adapt: comma-separated legs to run, from "
+                             "`parent` and `base` (default: the fork config's). "
+                             "`--starts parent` reuses a base leg already run "
+                             "for this task off another fold's trunk — the base "
+                             "leg does not depend on the parent, so running it "
+                             "again would be the same run twice.")
+    fork_p.add_argument("--target-metric", dest="target_metric", default=None,
+                        help="adapt: the whole target metric key, for a task "
+                             "whose metric differs and not just its task "
+                             "segment (g2s scores `roundtrip_match`, ChEBI-20 "
+                             "`bleu2`). Applied after `--task`.")
+    fork_p.add_argument("--target-value", dest="target_value", type=float,
+                        default=None,
+                        help="adapt: the threshold for `target.metric`. The "
+                             "threshold is per task and `--task` cannot infer "
+                             "it, so pass it alongside; it replaces the config's "
+                             "`value` and clears any `anchor`.")
     fork_p.add_argument("--run-dir", default=None,
                         help="where the child run lands (default: beside the parent).")
+    fork_p.add_argument("--continue-leg", dest="continue_leg",
+                        action="store_true",
+                        help="pick a leg up from its own newest complete "
+                             "checkpoint instead of starting the fork over. "
+                             "For a leg that died part-way; the same command "
+                             "otherwise.")
     fork_p.add_argument("--dry-run", action="store_true",
                         help="plan the fork and print it; write nothing, train nothing.")
 
@@ -493,6 +527,63 @@ def load_fork_config(path, args, config: RunConfig) -> dict:
         out.update(loaded)
     if args.decay_steps is not None:
         out["decay_steps"] = int(args.decay_steps)
+    # `KFOLD_TRANSFER.md`: an adapt fork is one task, and the study runs
+    # eighteen of them off three fork configs that differ only in which task they
+    # name. Overriding it here rather than writing eighteen near-identical files
+    # keeps the recipe — budget, schedule, eval cadence, target — in one place
+    # per task *kind*, which is where a reader would look for it anyway.
+    #
+    # `target.metric` names the task too, so it is rewritten with it: a target
+    # left pointing at the config's original task would silently never be
+    # crossed, which is the failure this whole study exists to avoid.
+    #
+    # A target is three things — a metric key, a threshold and a direction — and
+    # `--task` can only rewrite the first, so the other two travel on their own
+    # flags and the mismatches are refused rather than run. Two of them bit
+    # during the k-fold setup: `--task mol/bbbp` off the Tier-B file silently
+    # kept BACE's 0.7792, and `--task mol/chebi20` off the generation file
+    # rewrote g2s's `roundtrip_match` into a key ChEBI never emits.
+    if getattr(args, "held_out_by", None):
+        out["held_out_by"] = str(args.held_out_by)
+    if getattr(args, "starts", None):
+        out["starts"] = [part.strip() for part in args.starts.split(",")
+                         if part.strip()]
+    switched = bool(getattr(args, "task", None)) and args.task != out.get("task")
+    if getattr(args, "task", None):
+        previous = out.get("task")
+        out["task"] = args.task
+        target = out.get("target")
+        if isinstance(target, dict) and previous and target.get("metric"):
+            out["target"] = dict(target, metric=str(target["metric"]).replace(
+                previous, args.task))
+    # `--target-metric` for the case the whole key changes, not just its task
+    # segment: the metric follows the task's answer_kind, so g2s scores
+    # `roundtrip_match` and ChEBI-20 `bleu2` off the same fork config.
+    if getattr(args, "target_metric", None):
+        target = out.get("target")
+        if not isinstance(target, dict):
+            raise ConfigError(
+                "--target-metric: the fork config has no `target` to set it on")
+        out["target"] = dict(target, metric=str(args.target_metric))
+    # The threshold is per task and the metric key does not imply it, so `--task`
+    # alone would leave a BBBP leg carrying BACE's number — a wrong threshold is
+    # worse than a missing one, because it still produces a crossing. Passing it
+    # here clears `anchor`, which is what a config says while its number is owed.
+    if getattr(args, "target_value", None) is not None:
+        target = out.get("target")
+        if not isinstance(target, dict):
+            raise ConfigError(
+                "--target-value: the fork config has no `target` to set it on")
+        out["target"] = dict(target, value=float(args.target_value),
+                             anchor=None)
+    elif switched and isinstance(out.get("target"), dict) \
+            and out["target"].get("value") is not None:
+        raise ConfigError(
+            f"--task {args.task}: the fork config's target carries a threshold "
+            f"({out['target']['value']}) fixed for a different task. A "
+            "threshold is per task and the metric key does not imply it, so "
+            "pass `--target-value` with this task's own number — or use a "
+            "config whose target defers to an `anchor`.")
     out.setdefault("tokens_per_step", config.tokens_per_step)
     out.setdefault("seed", config.seed)
     # A leg continues the parent's training distribution, so it has to resolve the
@@ -542,9 +633,42 @@ def mode_fork(config: RunConfig, args) -> int:
     validators = build_validators(config.validator_specs())
     mixture = (None if wiring.unbuilt_tasks(registry, config)
                else wiring.resolve_mixture(config, registry))
-    eval_sets = wiring.build_eval_sets(config, registry, mixture,
-                                       wiring.splits_wanted(validators),
-                                       adapter_config)
+    splits_wanted = wiring.splits_wanted(validators)
+    if args.fork_mode == "adapt" and getattr(args, "task", None):
+        # An `adapt` leg measures exactly one task, and it is the one task the
+        # parent's mixture does NOT contain — so building from that mixture gets
+        # it exactly backwards twice over.
+        #
+        # It builds a source for all fifteen tasks the leg does not care about,
+        # and `in_mixture` takes its task list from `ctx.eval_sets`, so every
+        # firing scored all fifteen on two splits with the two generative ones
+        # included: ~13 minutes per evaluation against 76 seconds per fifty
+        # training steps, which is ~19 hours over two legs against a 10-hour
+        # wall clock.
+        #
+        # And it builds no source for the task the target names, so
+        # `in_mixture/mol/<task>/test/<metric>` was never produced at all and
+        # every crossing would have come back `None` — which reads as "the trunk
+        # never got there", not as "this was never measured".
+        #
+        # `mixture=None` plus `extra_tasks` says what the leg actually needs.
+        # `held_out` sources are still built (the branch keys off `splits`), and
+        # cost nothing here: the fork names `in_mixture`, so `only` excludes the
+        # `held_out` validator, and `_is_held_out` keeps those tasks out of
+        # `in_mixture`'s targets. Deliberately not done for `anneal`: that fork
+        # exists to produce the full suite over the whole mixture.
+        eval_sets = wiring.build_eval_sets(config, registry, None, splits_wanted,
+                                           adapter_config,
+                                           extra_tasks=(args.task,))
+        if args.task not in eval_sets:
+            raise ConfigError(
+                f"--task {args.task}: no evaluation set could be built for it, "
+                f"so an adapt leg would train with nothing to measure and report "
+                f"a null crossing that looks like a result. Built: "
+                f"{sorted(eval_sets)}")
+    else:
+        eval_sets = wiring.build_eval_sets(config, registry, mixture,
+                                           splits_wanted, adapter_config)
     lineage = Lineage(config.lineage_dir())
     trainer_factory, validate = wiring.fork_callables(
         config, registry=registry, adapter_config=adapter_config,
@@ -554,7 +678,8 @@ def mode_fork(config: RunConfig, args) -> int:
                   parent_mixture=parent_mixture,
                   run_dir=args.run_dir, results_dir=config.lineage_dir(),
                   lineage=lineage, trainer_factory=trainer_factory,
-                  validate=validate, runs_jsonl=config.runs_jsonl())
+                  validate=validate, runs_jsonl=config.runs_jsonl(),
+                  continue_leg=bool(getattr(args, "continue_leg", False)))
     print(json.dumps(result.to_json(), indent=2, sort_keys=True, default=str))
     return 0
 

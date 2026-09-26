@@ -1,0 +1,79 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` — an adaptation leg on bond_path or longest_chain.
+  //
+  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/kfold_fold_a_graph_s0/checkpoint-11140 \
+  //     --mode adapt \
+  //     --fork-config src/generalist/configs/forks/adapt_kfold_held_out_family.jsonc \
+  //     --config src/generalist/configs/probes/010_kfold_fold_a.jsonc \
+  //     --task mol/longest_chain
+  //
+  // **Why these two are not `adapt_kfold_tier_a.jsonc`.** They are held out of
+  // every mixture, not just of a fold, so their built sources include a
+  // `held_out` split — and `_is_held_out` is true for anything with one. That
+  // makes `in_mixture` skip them and `held_out` claim them, and `held_out`
+  // looks at the `held_out` split alone. Left as it comes, nobody scores the
+  // test split at all, `steps_to_target` returns null on both legs, and the
+  // fork reports a ratio of two nulls. That is not a hypothetical: it is how
+  // the LR screen failed, for the neighbouring reason that its threshold was a
+  // test number read on val.
+  //
+  // So the split set is asked for explicitly. `splits` is an option on the
+  // validator rather than a change to its class, so every trunk and anneal in
+  // the campaign still measures exactly what it measured before.
+  //
+  // These two also needed the data that makes the leg possible at all: until
+  // `splits_for`, `_draws` and `schema.validate` were each taught that a
+  // held-out family may carry the ordinary splits, the only rows that existed
+  // were the thousand held-out ones, and a fork would have trained and
+  // evaluated on the same thousand.
+  //
+  // ClinTox is the third permanently held-out task and is **not** usable here:
+  // `_partition_claims` gives its molecules the held_out role, so there is no
+  // train split to carve without moving `partition_version` and with it every
+  // split in the campaign. It stays a zero-shot number in fold C.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "task": "mol/bond_path",
+  "held_out_by": "A",
+
+  "budget_steps": 2000,
+  "eval_steps": 50,
+  "starts": ["parent", "base"],
+
+  // `held_out` claims the tasks no mixture trains, which is where these two
+  // live. Naming it is enough — a named validator fires at this fork's
+  // `eval_steps` whatever cadence it carries in the run config. A fork names
+  // validators, it does not configure them, so the `splits` restriction that
+  // used to sit here is gone: it scores val as well as test and the target
+  // reads the test key. The object form is refused.
+  "validators": ["held_out"],
+
+  "target": {
+    "metric": "held_out/mol/bond_path/test/em_accuracy",
+
+    // §6a, and these two are the awkward case. Every other task in the study is
+    // held out of *one* fold, so the other three trunks trained it and their
+    // test scores anchor it. bond_path and longest_chain are held out of every
+    // mixture: no trunk ever trained them and no specialist exists either, so
+    // there is no external number at all.
+    //
+    // The anchor is therefore the base leg's own final score at `budget_steps`.
+    // That is self-referential and the ratio means something narrower because of
+    // it — "how much sooner does the trunk reach what the backbone ends at"
+    // rather than "how much sooner does it reach competence". It is a real
+    // question and it is the one these two can answer; say which one is being
+    // answered wherever the number is quoted.
+    //
+    // The compensation is that these two are the only tasks with four
+    // independent parents. No trunk trained them, so a leg off A, B, C and D is
+    // four readings of the same quantity against one shared base leg, and the
+    // spread across folds is a free variance estimate that the other seventeen
+    // tasks do not get.
+    "anchor": "95% of the base leg's own final held_out/<task>/test/em_accuracy at budget_steps (§6a)",
+    "direction": "max",
+    "consecutive": 3,
+    "on_test": true
+  }
+}

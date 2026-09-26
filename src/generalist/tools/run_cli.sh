@@ -39,6 +39,18 @@
 # instead of a few minutes of autotuning per shape bucket. Empty (the default)
 # means a per-job cache, which is correct for a one-off.
 #
+# **It is a path relative to the repo root, not a cache name, and getting that
+# wrong is quiet.** The campaign caches live under `.inductor_cache/`, so this
+# wants `INDUCTOR_CACHE=.inductor_cache/generalist_instruct`; passing the bare
+# `generalist_instruct` resolves to a directory that does not exist, and the
+# launcher then says `absent -> per-job` on one line and carries on with a cold
+# cache. What that costs, measured on the assistant anneal: 70 kernel shapes
+# autotuned from scratch, ~31 minutes of a 44-minute job spent benchmarking, and
+# 2.25 steps/min against 28 on the warm cache. Three such jobs on one node
+# compile the same kernels at the same time and make each other slower still —
+# individual autotunes stretched from 3.5 s to 442 s. Check the `[launch]`
+# line says SHARED before letting a long job run.
+#
 # `data_prep`, `eval` and `fork` are the modes that belong here: each is one job
 # of a length that is known before it starts — a build, a scoring pass, or an
 # anneal, which trains exactly `decay_steps + 1` steps. `train` and `resume` go
@@ -113,7 +125,15 @@ if [ "$GPU" != "0" ]; then
     IFS='|' read -r -a _brands <<< "$GPUS"
     for brand in "${_brands[@]}"; do
       [ -z "$brand" ] && continue
-      CONSTRAINT="${CONSTRAINT:+$CONSTRAINT|}GPU_BRD:$brand"
+      # An entry that already names its feature class passes through. `GPU_BRD`
+      # is not the only one that matters: `GPU_BRD:A100` matches both the 80 GB
+      # ana and the 40 GB axa, and a graph-arm job on the latter dies with a
+      # CUDA OOM after it has queued, waited and loaded. `GPU_MEM:80GB` is the
+      # constraint that actually says what the job needs.
+      case "$brand" in
+        *:*) CONSTRAINT="${CONSTRAINT:+$CONSTRAINT|}$brand" ;;
+        *)   CONSTRAINT="${CONSTRAINT:+$CONSTRAINT|}GPU_BRD:$brand" ;;
+      esac
     done
   fi
   GPU_ARGS=(--gres "gpu:$GPU" --constraint "$CONSTRAINT")

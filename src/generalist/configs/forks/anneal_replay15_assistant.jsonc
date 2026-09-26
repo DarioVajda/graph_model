@@ -1,0 +1,109 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // §9.4's assistant leg. `anneal_replay_15.jsonc` with a second `add` entry, so
+  // the decay buys the assistant behaviour beside the text behaviour and the
+  // trunk is still never touched.
+  //
+  //   GPU=2 src/generalist/tools/run_cli.sh fork \
+  //     --from .../runs/molecule_generalist_instruct_graph_s0/checkpoint-11140 \
+  //     --mode anneal --fork-config src/generalist/configs/forks/anneal_replay15_assistant.jsonc \
+  //     --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \
+  //     --cell molecule_generalist_instruct_graph_s0 \
+  //     --run-dir src/generalist/results/runs/assistant_anneal_graph_s0
+  //
+  // WHAT IT ASKS. Whether a model that answers free-form questions about a
+  // molecule can be had for 15 % of a 1,114-step decay, without giving back the
+  // molecule accuracy the trunk was built for or the text behaviour the replay
+  // slice bought.
+  //
+  // THE CONTROL IS EXACT, and that is the whole reason this is a fork of a fork.
+  // `replay_anneal15_graph_s{0,1,2}` is this leg with the second `add` entry
+  // removed and nothing else changed, so the comparison is **paired within one
+  // arm** and the trunk's seed spread — which is wide enough that §2's property
+  // gap is not significant — is common to both sides and cancels.
+  //
+  // READ IT OVER THREE SEEDS. A single anneal's own spread on the property mean
+  // is 0.0076, against the 0.0021 seed-sd of the trunk the bars were written
+  // against. Seed 0 was the outlier on the replay screen and reversed the sign of
+  // the answer; the paired three-seed mean is the honest read and one seed is not.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "add": [
+    {"name": "text/replay", "share": 0.15, "block": "replay"},
+    // Its own block, so the four molecule blocks keep their ratios to each other
+    // exactly as they do under `anneal_replay_15.jsonc`. `mol/assistant` is a
+    // `mol/` task by name only — it is free text about a molecule, not a scored
+    // molecule task, and folding it into `tier_a` or `chebi` would silently move
+    // the ratio those blocks were sized by.
+    {"name": "mol/assistant", "share": 0.15, "block": "assistant"}
+  ],
+
+  // **1.5, and it is not the control's 1.7 — BACE is what stops it.** The scale
+  // multiplies the mixture's own feasible budget, `min(available / share)` over
+  // the corpora, so it is not a number that survives being copied between two
+  // mixtures. Adding a second 15 % leg takes every molecule share to 0.70 of the
+  // trunk's where the control takes them to 0.85, which raises that reference
+  // budget by 1 / 0.824 — and BACE, the smallest thing in the mixture, falls
+  // under its own 1 % floor before the scale reaches 1.7. Measured, the ceiling
+  // is 1.594, where BACE lands on 1.00 % exactly; 1.5 leaves it at 1.06 %, which
+  // is the margin a config sitting one rounding from a refusal does not have.
+  //
+  // That ceiling was measured with BACE's cap at 7 passes, i.e. 8,456 available
+  // examples. The cap is 8 now, so the pool is 9,664 and the ceiling is higher;
+  // 1.5 is further from a refusal than it was, not nearer. The scale stays at
+  // 1.5 regardless — it is what makes this the control's leg with one thing
+  // added, and the shares it resolves to are unchanged by the larger pool.
+  //
+  // What it resolves to: 53,757 examples over 1,115 steps at a mean of 339.8
+  // tokens, against the control's 60,017 at 304.4 — the assistant's examples are
+  // long (529.8 tokens a graph example against ~288 for an ordinary one, because
+  // 2,244 of its 9,873 rows carry demonstrations as extra graph components), so
+  // the same token budget buys fewer of them. `mol/assistant` 8,063 examples,
+  // `text/replay` 8,063, ChEBI-20 7,525, g2s 5,644.
+  //
+  // **And it is proportional, which is what makes the pairing hold.** Every
+  // molecule task except BACE and BBBP comes out at exactly the control's share
+  // x 0.824, so the leg really is the control's molecule mixture with a second
+  // slice taken out of all of it evenly. BACE and BBBP are clamped in both legs
+  // and land ~13 % heavier here relative to the rest; they are 1.1 % of the run
+  // each, and the whole of the difference between the two legs' molecule
+  // composition is in those two tasks.
+  "budget_scale": 1.5,
+
+  // **8, and it has to track the decay length.** See the same block in
+  // `anneal_replay_15.jsonc`, which this leg is paired against and which carries
+  // the arithmetic: a cap counts passes across the trunk and the leg, the trunk
+  // ends BACE, BBBP and ChEBI-20 at 5.93 epochs, and past the cap a task is
+  // retired rather than repeated. The three budget arms of §9.4 ran at 7, which
+  // was written for a 1,114-step decay; at 4x that retired BACE and BBBP for the
+  // last 1,900 steps and ChEBI-20 for the last 1,000, so those three columns of
+  // the 4x reading are budget and an early stop confounded. 7 and 8 resolve to
+  // identical shares to six decimals here at 1.5, so this changes nothing for
+  // the 1x and 2x legs, where nothing ever reached the cap.
+  "passes": {
+    "mol/bbbp": 8, "mol/bace": 8, "mol/chebi20": 8,
+    "mol/sider": 8, "mol/hiv": 8, "mol/tox21": 8,
+
+    // **14 is a cap, not a count, and this leg never reaches it.** The leg draws
+    // 8,063 assistant examples out of 9,873 composed rows — 0.82 of one pass, so
+    // no row is seen twice and any cap at or above 1 describes the same run.
+    //
+    // It has to be raised anyway, because `budget_scale` reads `passes` as the
+    // number of examples a corpus can *sustain*. At the spec's 2 the assistant
+    // offers 19,746, which at a 15 % design share caps the mixture's reference
+    // budget at 131,640 — far below what the molecule corpora support — so the
+    // assistant becomes the reference, the water-fill thins its block to exactly
+    // `share / scale`, and the leg is refused under the 80 % block floor for
+    // every scale above 1.25. Raising the cap is the first of the two remedies
+    // the refusal names, and here it is the honest one: the other, lowering the
+    // scale, would thin the molecule corpora and stop this being the control's
+    // leg with one thing added.
+    //
+    // 14 is twice the molecule corpora's 7 and the smallest round value that
+    // leaves the block unclamped at 1.5 (12 reaches 0.1489 of a design 0.15).
+    // A corpus builds only pass 0 either way, so this costs nothing to prepare.
+    "mol/assistant": 14
+  },
+
+  "eval_steps": 280
+}

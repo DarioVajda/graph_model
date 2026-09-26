@@ -96,6 +96,14 @@ def main(argv=None) -> int:
                              "how six forks were lost on 2026-09-11. The trunk "
                              "gets its brands from the config; a fork has no "
                              "config to read them from, so it has to be told.")
+    parser.add_argument("--time", default="08:00:00",
+                        help="wall clock per fork. `run_cli.sh` defaults to two "
+                             "hours and an anneal does not fit in it: the decay "
+                             "is only a tenth of the trunk, but it ends with the "
+                             "full validator suite over every task in the "
+                             "mixture, and the generative ones are most of that "
+                             "time. A fork that walls at 95 % has produced "
+                             "nothing.")
     parser.add_argument("--inductor-cache", default=".inductor_cache/generalist",
                         help="share compiled flex kernels with the trunk's cache. "
                              "Point it at the one the config names, or the fork "
@@ -151,6 +159,7 @@ def main(argv=None) -> int:
         env = dict(os.environ, GPU=args.gpus, WAIT="0",
                    INDUCTOR_CACHE=args.inductor_cache,
                    GPUS=args.gpu_brands,
+                   TIME=args.time,
                    NAME=f"anneal_{cell}")
         if depend:
             env["DEPENDENCY"] = depend

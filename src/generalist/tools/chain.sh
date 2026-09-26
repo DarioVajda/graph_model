@@ -125,7 +125,19 @@ if [ -n "$GPUS" ]; then
   IFS='|' read -r -a _brands <<< "$GPUS"
   for brand in "${_brands[@]}"; do
     [ -z "$brand" ] && continue
-    CONSTRAINT="${CONSTRAINT:+$CONSTRAINT|}GPU_BRD:$brand"
+    # A bare word is a brand and gets the `GPU_BRD:` prefix, which is what this
+    # has always done. An entry that already names a feature (`GPU_MEM:80GB`)
+    # passes through as written, because brand is the wrong criterion for a run
+    # that is bounded by card memory: `GPU_BRD:A100` matches both ana's 80 GB
+    # cards and axa's 40 GB ones, and a fold A seed that landed on axa died at
+    # step 13 with 37.9 GiB allocated out of 39.5 GiB. Constraining on the
+    # memory says the thing that is actually true of the job. `GPU_SKU` values
+    # are *not* features on this cluster and sbatch refuses them ("Invalid
+    # feature specification") — `scontrol show node <n>` lists what is.
+    case "$brand" in
+      *:*) CONSTRAINT="${CONSTRAINT:+$CONSTRAINT|}$brand" ;;
+      *)   CONSTRAINT="${CONSTRAINT:+$CONSTRAINT|}GPU_BRD:$brand" ;;
+    esac
   done
 fi
 
@@ -176,10 +188,22 @@ for i in $(seq 1 "$CHUNKS"); do
   mv -f "$SCRIPT.tmp.$$" "$SCRIPT"
 
   # MELLANOX_VISIBLE_DEVICES=none: see run_cli.sh and CLAUDE.md.
+  #
+  # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True: micro-batch token counts
+  # here are not uniform. The sampler sizes a micro-batch by a token budget, but
+  # `align_to_accumulation` reshapes a step to exactly `accumulation_steps`
+  # groups by *example count*, so a step whose bucket ladder over-produced can
+  # merge several long-sequence groups into one micro-batch well over budget.
+  # Those rare wide shapes arrive among thousands of narrow ones, which is the
+  # allocation pattern the caching allocator fragments worst on: a fold A seed
+  # died at step 13 asking for 768 MiB with 6.5 GiB reserved-but-unallocated
+  # already in hand. Expandable segments let the allocator grow a segment instead
+  # of hunting for a contiguous block, and cost nothing when it never has to.
   WRAP="srun --export=ALL,MELLANOX_VISIBLE_DEVICES=none \
 --container-image=$CONTAINER --container-mounts=/shared:/shared \
 env HOME=$HOME PYTHONUNBUFFERED=1 SWEEP_PROJECT_ROOT=$REPO SWEEP_VENV_BIN=$REPO/.venv/bin \
 SWEEP_LOGIN=$REPO/login.sh SWEEP_INDUCTOR_CACHE=$INDUCTOR_CACHE \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 bash $REPO/sweep/slurm_launch.sh gen_${GEN_RUN_NAME}_c$i $SCRIPT"
 
   ARGS=(-p "$PARTITION" -A "$ACCOUNT" -c "$CPUS" --mem "$MEM" -t "$TIME"

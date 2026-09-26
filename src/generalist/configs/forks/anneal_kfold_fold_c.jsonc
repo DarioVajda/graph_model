@@ -1,0 +1,49 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The `anneal` fork that closes fold C's trunk (`probes/012_kfold_fold_c.jsonc`).
+  //
+  //   src/generalist/tools/anneal_all.py \
+  //     --config src/generalist/configs/probes/012_kfold_fold_c.jsonc \
+  //     --fork-config src/generalist/configs/forks/anneal_kfold_fold_c.jsonc
+  //
+  // WHY THIS FILE EXISTS AT ALL. `anneal_molecule_generalist.jsonc` raises
+  // `passes` on all six finite molecule corpora, which is right for a trunk that
+  // trains all six. Fold C is the fold that **withholds five of them** — BACE,
+  // BBBP, HIV, Tox21 and SIDER are its held-out group — so naming them here asks
+  // to raise an allowance on tasks this mixture never trains, and `_with_passes`
+  // refuses it (correctly: silently ignoring a `passes` key aimed at an absent
+  // task makes a mistyped task name indistinguishable from a working config).
+  // That is what killed the first attempt at this fork. ChEBI-20 is the only one
+  // of the six fold C actually trains, so it is the only one named.
+  //
+  // WHY 9 AND NOT THE SHARED FILE'S 7. The fork's `passes` pays for the tail on
+  // top of whatever the trunk already spent, so it has to be read against *this
+  // fold's* trunk rather than the campaign's. §11 resolved fold C at
+  // `budget_scale` 1.25 with `task_passes: "mol/chebi20=8"`, and that 8 is not
+  // headroom — it is what the trunk consumes, raised from the base 6 precisely so
+  // ChEBI-20 is not retired mid-run. A decay appended to it therefore starts with
+  // the corpus at its cap and nothing left, which is the same trap one pass
+  // higher.
+  //
+  // One extra pass covers the decay with room. The decay is 10 % of 11,140 =
+  // 1,114 steps; at ~57 examples/step that is ~63.5k examples, of which
+  // ChEBI-20's 26.7 % share in this fold is ~17.0k against the 20,477 records a
+  // pass buys — 0.83 of a pass, inside one. Note the share is 26.7 %, not the
+  // 19.30 % the shared file's arithmetic assumes: dropping Tier B enlarges every
+  // surviving corpus's share, so the campaign's margins do not transfer.
+  //
+  // `mol/g2s` is in this fold's mixture and is deliberately not named: it is a
+  // generator whose passes are files on disk, built to 48 by
+  // `tools/build_g2s_tail.py` against this fold's demand of 41, and folds A and B
+  // annealed through it untouched.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "passes": {
+    "mol/chebi20": 9
+  },
+
+  // 280, as the shared file uses, and for its reasons: `eval_steps` scores the
+  // decay on the way down, two points are enough to see it behaving, and the
+  // number that matters is scored at the end of the leg regardless.
+  "eval_steps": 280
+}

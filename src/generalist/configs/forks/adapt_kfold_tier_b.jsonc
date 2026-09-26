@@ -1,0 +1,84 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` — one adaptation leg on one Tier-B property corpus.
+  //
+  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/kfold_fold_c_graph/checkpoint-11140 \
+  //     --mode adapt --fork-config src/generalist/configs/forks/adapt_kfold_tier_b.jsonc \
+  //     --config src/generalist/configs/probes/012_kfold_fold_c.jsonc \
+  //     --task mol/bace
+  //
+  // BACE, BBBP, HIV, Tox21 and SIDER — fold C. They train in the base mixture,
+  // so `in_mixture` scores them on val and test without being asked, and only
+  // the cadence has to come down.
+  //
+  // ClinTox is in fold C's table but is not runnable as a leg: its molecules
+  // carry the held_out role, so there is no train split to fork on. It stays a
+  // zero-shot number against the fold C trunk, which is the one trunk in the
+  // study that never saw a property label.
+  //
+  // **A corpus is small, so `passes` matters here in a way it does not for a
+  // generator.** A generator draws fresh examples every pass; a corpus walks
+  // `train_size` rows and then needs a repeat. §9.2's BACE legs were 1,000 steps
+  // of 32 examples over 1,208 molecules — 26.5 passes against a corpus default
+  // of six — so a leg left at the default retires its own task partway through
+  // and then trains on nothing. Set `passes` to cover the budget.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "task": "mol/bace",
+  "held_out_by": "C",
+
+  // §4: 1,000 steps for a Tier-B corpus, against 2,000 for a Tier-A family.
+  // These are small, converge fast, and a longer budget buys resolution on a
+  // curve that is already flat.
+  "budget_steps": 1000,
+  "eval_steps": 25,
+  "starts": ["parent", "base"],
+
+  // Measured, not guessed: `temp.gtds/leg_passes.py` resolves each leg's own
+  // one-task mixture at its own budget and reads `passes_needed` back. Over
+  // 1,000 steps that is BACE 37, BBBP 52, HIV 2 — so the 32 this file first
+  // carried would have retired BACE two thirds of the way through its leg and
+  // BBBP well before half, and a retired task leaves the mixture silently.
+  //
+  // 64 covers the worst of the three with margin. Raising a cap is
+  // share-neutral in a single-task mixture — there is nothing to take share
+  // from — and these are corpora, so a pass is a repeat of rows already built
+  // rather than data anyone has to prepare.
+  "passes": 64,
+
+  // Naming it is enough — a named validator fires at this fork's `eval_steps`,
+  // here 25, whatever cadence it carries in the run config. A fork names
+  // validators, it does not configure them; the object form is refused.
+  "validators": ["in_mixture"],
+
+  "target": {
+    // Tier-B corpora are `yesno`, so the anchor metric is AUROC, not accuracy:
+    // these sets are imbalanced and accuracy is degenerate on them.
+    "metric": "in_mixture/mol/bace/test/roc_auc",
+
+    // 95 % of the specialist's test AUROC. Note the val/test gap on these
+    // corpora changes sign by task — BACE val ~0.73 against test 0.8202, BBBP
+    // val ~0.97 against test 0.7056 — which is exactly why the threshold and the
+    // reading have to be on the same split.
+    //
+    // This is the one file in the study whose anchors exist: 0.95 x the
+    // three-seed specialist means of `molecules/TODO.md` §6.
+    //
+    //     mol/bace  0.95 x 0.8202 = 0.7792   (specialist sd 0.0120)
+    //     mol/bbbp  0.95 x 0.7056 = 0.6703   (sd 0.0229)
+    //     mol/hiv   0.95 x 0.7691 = 0.7306   (sd 0.0172)
+    //
+    // The value below is BACE's, matching the `task` above. **A BBBP or HIV leg
+    // must pass `--target-value` with its own number** — `--task` rewrites the
+    // metric key and cannot infer the threshold, so a leg run without it reads
+    // BBBP's curve against BACE's bar and crosses somewhere meaningless.
+    //
+    // Tox21 and SIDER have no anchor by design (§1: they are gradient tasks,
+    // never anchor numbers). They are not runnable as legs of this study.
+    "value": 0.7792,
+    "direction": "max",
+    "consecutive": 3,
+    "on_test": true
+  }
+}

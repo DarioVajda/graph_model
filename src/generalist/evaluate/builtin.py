@@ -127,14 +127,40 @@ class _ScoringValidator(BaseValidator):
     respect_eval_splits: bool = False
 
     def targets(self, ctx) -> list:
-        """``[(task, split, source, spec), ...]`` this validator will score."""
+        """``[(task, split, source, spec), ...]`` this validator will score.
+
+        The split set is an option so that it can be widened without changing
+        what any training run measures. `held_out` looks at ``held_out`` and
+        nothing else, which is right for the zero-shot transfer number it exists
+        to produce — but an `adapt` fork *trains* on one of those tasks and has
+        to read a number back on a split it did not train on, and the task is
+        still held out by `_is_held_out` (its sources include a ``held_out``
+        one), so `in_mixture` never claims it and no validator would score its
+        test split at all.
+
+        **``splits`` is read from the run config's validator spec, and a fork
+        config cannot set it.** A fork's ``validators`` is a list of *names*
+        (`fork._validator_names`); `wiring.validation_hook` turns them into a
+        set and runs those validators with ``event="manual"``, so a per-validator
+        option written in a fork config reaches nothing. This docstring
+        previously showed the object form as a fork config and it never worked:
+        it parsed, planned, compiled, trained and died at the first evaluation on
+        ``set(names)``. A fork that needs a split widened needs it widened in the
+        run config, or needs `_is_held_out` not to claim the task.
+
+        **The task list is ``ctx.eval_sets``, not the mixture**, which is the
+        other half of the same trap: a leg that trains one task scores every task
+        an evaluation set was built for unless the caller narrows it. `mode_fork`
+        narrows it for `adapt`; nothing else does.
+        """
+        splits = tuple(self.option("splits", self.splits))
         out = []
         for task in sorted(_sources(ctx)):
             spec = _spec(ctx, task)
             if not self.selects(ctx, task, spec):
                 continue
             for split, source in sorted(ctx.sources(task).items()):
-                if split not in self.splits:
+                if split not in splits:
                     continue
                 if self.respect_eval_splits and split not in spec.eval_splits:
                     continue

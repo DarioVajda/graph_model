@@ -136,9 +136,26 @@ def align_to_accumulation(batches: list, target: int) -> list:
     Reshaping only ever moves examples between micro-batches; it never adds,
     drops or reorders them, so the step's loss and gradient are unchanged (the
     loss is normalised per example over the whole step, and padding is masked).
-    What it does change is padding waste, which is why it merges the *smallest*
-    batches and splits the *largest*: both keep the batch sizes as even as the
-    bucketing left them.
+    What it does change is the peak memory a micro-batch needs, which is why it
+    merges the *cheapest* batches and splits the *dearest*.
+
+    **Cost is padded tokens, not examples, and getting that wrong crashes runs.**
+    The sampler already sizes every micro-batch it emits to the token budget: it
+    buckets by padded length and caps a bucket's batch at
+    ``micro_batch_tokens // bucket``, so a bucket of very long examples comes out
+    as *many batches of one*. Those one-item batches are the smallest thing in
+    the step by example count — and so exactly what a count-keyed merge reaches
+    for first. Collapsing them rebuilds the one micro-batch the sampler went to
+    the trouble of splitting: on the k-fold trunks that produced a 4 x 6,144-token
+    batch against a 1,024-token budget, and killed two of three fold A seeds
+    inside forty steps with 72 GiB allocated on an 80 GB card.
+
+    So a group's cost is what it actually costs — ``len(group) x max tokens in
+    group``, the padded rectangle the collator will build — and a merge picks the
+    pair whose *merged* cost is lowest, which keeps long examples apart instead
+    of stacking them. ``num_tokens`` rides on each item from ``MixtureDataset``;
+    if it is ever absent the cost degrades to the example count and this behaves
+    as it used to.
     """
     if target < 1:
         raise TrainerError(f"gradient_accumulation_steps must be >= 1, got {target}")
@@ -162,15 +179,56 @@ def align_to_accumulation(batches: list, target: int) -> list:
             f"raise tokens_per_step so a step holds at least one example per "
             f"micro-batch.")
 
+    def tokens_of(item):
+        # Anything without a `num_tokens` counts as one, so a caller holding
+        # plain values (the reshape does not care what an item is) still gets
+        # the old count-keyed behaviour rather than an AttributeError.
+        try:
+            return max(1, int(item.get("num_tokens", 1) or 1))
+        except (AttributeError, TypeError, ValueError):
+            return 1
+
+    def widest(group):
+        return max((tokens_of(item) for _p, item in group), default=1)
+
+    def cost(group):
+        return len(group) * widest(group)
+
+    def order(group):
+        # Deterministic tiebreak: two groups of equal cost must never be chosen
+        # between by dict or list order, or D4.1's "identical batch sequence"
+        # guarantee becomes a coin flip.
+        return (cost(group), min(p for p, _ in group))
+
     while len(groups) > target:
-        groups.sort(key=len)
-        smallest = groups.pop(0)
-        groups[0].extend(smallest)
+        # The cheapest *pair*, not the cheapest group rehomed. Picking a donor
+        # first and then a host is the obvious formulation and it is wrong: when
+        # the cheapest group is many short examples and every other group is one
+        # long example, moving the shorts into a long group pays the long group's
+        # width for all of them (9 x 6,144) where merging two long groups costs
+        # 2 x 6,144. Scoring the pair finds that; scoring a donor alone cannot.
+        best = None
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                merged = ((len(groups[i]) + len(groups[j]))
+                          * max(widest(groups[i]), widest(groups[j])))
+                key = (merged, min(p for p, _ in groups[i]),
+                       min(p for p, _ in groups[j]))
+                if best is None or key < best[0]:
+                    best = (key, i, j)
+        _key, i, j = best
+        groups[i] = groups[i] + groups[j]
+        groups.pop(j)
     while len(groups) < target:
-        groups.sort(key=len, reverse=True)
-        biggest = groups.pop(0)
-        half = len(biggest) // 2
-        groups.extend([biggest[:half], biggest[half:]])
+        # Only a group of two or more can be split, and `total >= target` above
+        # guarantees one exists. Ordering by cost rather than by size makes this
+        # explicit: the dearest group can now be a single very long example, and
+        # halving that would emit an empty micro-batch.
+        splittable = [i for i, g in enumerate(groups) if len(g) > 1]
+        pick = max(splittable, key=lambda i: order(groups[i]))
+        dearest = groups.pop(pick)
+        half = len(dearest) // 2
+        groups.extend([dearest[:half], dearest[half:]])
     # Deterministic order: the sorts above key on size alone, so two runs could
     # otherwise emit the same groups in a different order and the "identical
     # batch sequence" guarantee of D4.1 would be a coin flip. Ordering by each

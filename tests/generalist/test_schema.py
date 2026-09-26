@@ -191,9 +191,10 @@ def _malformed():
     add("domain", example_of("token", domain="kgqa"))
     add("split", example_of("token", split="validation"))
     add("split", example_of("token", split="held_out"))
-    add("split", Example(**{**example_of("token").__dict__, "split": "train",
-                           "task": "mol/bond_path"}),
-        spec_for("token", name="mol/bond_path", held_out=True))
+    # The converse — a `train` split on a held-out spec — is legal, and
+    # `test_a_held_out_spec_admits_the_ordinary_splits` pins it. An `adapt` fork
+    # trains on a held-out task, so it needs the ordinary three splits; what
+    # keeps that honest is the partition's role check, not this one.
     add("arm", example_of("token", arm="hybrid"))
     add("answer_kind", example_of("token", answer_kind="text"),
         spec_for("token"))
@@ -244,6 +245,29 @@ def test_validate_rejects_and_names_the_field(field, example, spec):
         validate(example, spec)
     message = str(excinfo.value)
     assert message.startswith(f"{field}:"), message
+
+
+def test_a_held_out_spec_admits_the_ordinary_splits():
+    """Only one direction of the held-out split rule is an invariant.
+
+    ``held_out`` on a task that is not held out stays an error: the split exists
+    to hold molecules no training run may see, and a task in the mixture has no
+    business owning any. The reverse used to be enforced too — a held-out spec
+    admitted ``held_out`` and nothing else — and that was too strong, because an
+    `adapt` fork trains on a held-out task and needs train/val/test to measure
+    it against.
+    """
+    held_out = spec_for("token", name="mol/bond_path", held_out=True)
+    for split in ("train", "val", "test", "held_out"):
+        example = Example(**{**example_of("token").__dict__, "split": split,
+                             "task": "mol/bond_path"})
+        validate(example, held_out)
+
+    ordinary = spec_for("token", name="mol/ring_count")
+    example = Example(**{**example_of("token").__dict__, "split": "held_out",
+                         "task": "mol/ring_count"})
+    with pytest.raises(SchemaError, match="not a held-out task"):
+        validate(example, ordinary)
 
 
 def test_yesno_words_come_from_the_module_that_scores_them():

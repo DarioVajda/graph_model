@@ -1,0 +1,86 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` — one adaptation leg on one Tier-A question family.
+  //
+  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/kfold_fold_a_graph_s0/checkpoint-11140 \
+  //     --mode adapt --fork-config src/generalist/configs/forks/adapt_kfold_tier_a.jsonc \
+  //     --config src/generalist/configs/probes/010_kfold_fold_a.jsonc \
+  //     --task mol/ring_membership
+  //
+  // `--task` overrides the `task` below and rewrites `target.metric` with it, so
+  // one file drives every Tier-A leg in the study rather than nine near-copies
+  // that can drift apart. The task named here is the default and the example.
+  //
+  // **This file is for the seven families that train in the base mixture** —
+  // ring_membership, aromatic_ring, ring_size, ring_count, fg_presence,
+  // fg_count, fg_atom_membership, stereo_potential, stereo_assigned. They are
+  // held out of *a fold*, not of the campaign, so their sources carry no
+  // `held_out` split, `_is_held_out` is false for them and `in_mixture` scores
+  // them on val and test as it scores anything else. bond_path and
+  // longest_chain are Tier-A too but are held out everywhere, which makes them
+  // a different case with a different validator — use
+  // `adapt_kfold_held_out_family.jsonc` for those two.
+  //
+  // WHAT IT MEASURES. Steps-to-target on one task the parent never trained on,
+  // run twice from identical configs — once from the fold trunk and once from
+  // base Llama. The ratio of the two crossing steps is the adaptation number.
+  //
+  // `held_out_by` is the fold the parent excluded. It is checked against
+  // `TRANSFER_FOLDS`, so pointing a fold A leg at a fold B trunk is refused
+  // rather than quietly measuring how recently the task was sampled. Change it
+  // to match the trunk in `--from`; it is not optional and it is not cosmetic.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "task": "mol/ring_membership",
+  "held_out_by": "A",
+
+  // §4: 2,000 steps for a Tier-A family. Both legs get the same budget, because
+  // steps-to-target is only comparable under one. A leg that never crosses
+  // records null, which is a real answer and not a gap.
+  "budget_steps": 2000,
+
+  // The target is crossed *between* evaluations, so this is the resolution of
+  // the number. 50 puts 40 evaluations in the budget; with `consecutive: 3` the
+  // finest crossing the design can report is 150 steps, which is 7.5 % of the
+  // budget and fine against a speedup expected in multiples.
+  "eval_steps": 50,
+
+  "starts": ["parent", "base"],
+
+  // `in_mixture` already scores val and test for these tasks. Naming it is all
+  // that is needed: a fork that names its validators runs them with
+  // `event="manual"` at its own `eval_steps`, so the 500-step cadence they carry
+  // in the run config — which would give a 2,000-step leg four evaluations —
+  // does not apply. A fork names validators, it does not configure them; the
+  // object form is refused.
+  "validators": ["in_mixture"],
+
+  "target": {
+    // `<validator>/<task>/<split>/<metric>`. `--task` rewrites the task segment.
+    // Tier-A families are `token`, so the metric is exact-match accuracy.
+    "metric": "in_mixture/mol/ring_membership/test/em_accuracy",
+
+    // §6a: no Tier-A family has a specialist, so the threshold is owed and the
+    // config says so rather than carrying a stand-in. `anchor` names where the
+    // number comes from; the leg runs its full budget and records every
+    // evaluation, and the crossing is read off the curve once the anchor lands.
+    //
+    // The anchor is a trunk from another fold. A task held out of fold A trains
+    // in the B, C and D mixtures, so those trunks' `in_mixture/<task>/test`
+    // scores are what a generalist that *did* have the task reaches — which is
+    // the comparison this study is about. It costs no extra run.
+    //
+    // Once it is known, pass it: `--target-value 0.xxxx`. That is per task, and
+    // `--task` cannot infer it.
+    "anchor": "95% of the mean in_mixture/<task>/test/em_accuracy over the three trunks that trained the task (§6a)",
+    "direction": "max",
+
+    // Required with `on_test`, and the reason the exemption is not a hole: a
+    // first-passage time over a noisy curve is biased early, because the first
+    // upward excursion past the line counts even when the level is not held.
+    // Three consecutive evaluations is the persistence rule.
+    "consecutive": 3,
+    "on_test": true
+  }
+}

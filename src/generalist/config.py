@@ -133,6 +133,17 @@ TIER_A_FAMILIES = (
     "stereo_potential", "stereo_assigned",
 )
 
+#: The three the molecules package holds out of *every* mixture
+#: (``HELD_OUT_TIER_A_TASKS`` + ``HELD_OUT_DATASETS``), restated here for the same
+#: reason as `TIER_A_FAMILIES`: so a mixture can be built without importing RDKit.
+#:
+#: They appear in `TRANSFER_FOLDS` because the fold table is the study's task
+#: partition, and a fold naming one of them is a no-op on the mixture — they were
+#: never in it. `KFOLD_TRANSFER.md` §3 records what that costs: every fold's trunk
+#: lacks all three, so they are a constant across the four trunks rather than a
+#: per-fold difference, and the study reads them as a cross-trunk control.
+HELD_OUT_EVERYWHERE = ("bond_path", "longest_chain", "clintox")
+
 #: Finite sources get at most six passes.
 #:
 #: §2 wrote three, and three is what the budget rule turns into a problem: the
@@ -175,7 +186,31 @@ CORPUS_PASSES = 6
 BLOCKS = {"tier_b": "tier_b", "tier_a": "tier_a", "chebi": "chebi", "g2s": "g2s"}
 
 
-def molecule_generalist_mixture() -> tuple:
+#: `KFOLD_TRANSFER.md` §3 — the four leave-cluster-out folds. A fold names the
+#: tasks its trunk must **not** see, so `mol/<name>` for each of these is dropped
+#: from that fold's mixture and the share is redistributed inside its own block.
+#:
+#: Grouping is by family and not at random, and the reason is the whole design:
+#: hold out `ring_size` while `ring_count` and `ring_membership` stay in and the
+#: measurement is "a near-twin was still in the trunk", which is both weaker and
+#: unanswerable. A fold removes a capability whole.
+#:
+#: `bond_path`, `longest_chain` and `clintox` are listed in the folds they belong
+#: to even though `molecules/data.py` holds them out of every mixture already.
+#: Listing them costs nothing — dropping a task the mixture never had is a no-op —
+#: and it keeps the fold table readable as the study's task partition rather than
+#: as a diff against whatever the adapter happens to hold out this month.
+TRANSFER_FOLDS = {
+    "A": ("ring_membership", "aromatic_ring", "ring_size", "ring_count",
+          "bond_path", "longest_chain"),
+    "B": ("fg_presence", "fg_count", "fg_atom_membership",
+          "stereo_potential", "stereo_assigned"),
+    "C": ("bace", "bbbp", "hiv", "tox21", "sider", "clintox"),
+    "D": ("g2s", "chebi20"),
+}
+
+
+def molecule_generalist_mixture(exclude: tuple = ()) -> tuple:
     """`MOLECULE_GENERALIST.md` §2's mixture, computed from its own rule.
 
     Tier B is weighted by ``size ** 0.5`` within its block, which is where §2's
@@ -187,31 +222,69 @@ def molecule_generalist_mixture() -> tuple:
     Weights are absolute example shares; ``registry.resolve`` normalises them,
     so they are readable as fractions of the run and still survive a task being
     dropped from a config.
+
+    ``exclude`` names bare tasks to leave out — one `KFOLD_TRANSFER.md` fold. The
+    share is redistributed **inside the removed task's own block**, which is what
+    `BLOCKS` means: a block is a design statement about what the model should be
+    (40 % property prediction, 25 % structure, 20 % captioning, 15 % generation)
+    and it must not drift because a fold took a task out of it. So the per-family
+    Tier-A weight is recomputed over the survivors rather than left at 1/9, and
+    Tier B's ``size ** 0.5`` rule is renormalised over the corpora that remain.
+
+    **A fold that empties a whole block cannot hold that block's share**, because
+    there is nobody inside it to redistribute to. Fold C removes all of Tier B
+    and fold D removes ChEBI and g2s outright, so those two trunks come out with
+    the remaining blocks proportionally enlarged — 25/20/15 becomes ~42/33/25 on
+    C — and they are structurally different models rather than "the generalist
+    minus a cluster". That is stated in `KFOLD_TRANSFER.md` §3 and it is why C and
+    D are never pooled with A and B.
+
+    With ``exclude`` empty this returns exactly what it always returned, so
+    `008`'s ``mixture_hash`` does not move.
     """
+    exclude = tuple(exclude)
+    known = (tuple(TIER_B_SIZES) + TIER_A_FAMILIES + ("chebi20", "g2s")
+             + tuple(HELD_OUT_EVERYWHERE))
+    unknown = sorted(set(exclude) - set(known))
+    if unknown:
+        raise ConfigError(
+            f"molecule_generalist_mixture: exclude names {unknown}, which is not "
+            f"a task of this mixture (have {sorted(known)}). A fold that names a "
+            "task nobody trains is a typo, not a no-op.")
+
     entries = []
 
-    root = {name: math.sqrt(size) for name, size in TIER_B_SIZES.items()}
-    total = sum(root.values())
-    for name in sorted(TIER_B_SIZES):
-        entries.append({"name": f"mol/{name}",
-                        "weight": BLOCK_SHARES["tier_b"] * root[name] / total,
-                        "passes": CORPUS_PASSES, "block": BLOCKS["tier_b"],
-                        # BACE and BBBP are two of the five sets this campaign
-                        # reports, and they are also the two the water-filling
-                        # thins first. A floor makes "the model barely trained on
-                        # a benchmark it is scored on" a refusal rather than a
-                        # number nobody looked at.
-                        "floor": 0.01 if name in ("bace", "bbbp") else None})
+    sizes = {n: s for n, s in TIER_B_SIZES.items() if n not in exclude}
+    if sizes:
+        root = {name: math.sqrt(size) for name, size in sizes.items()}
+        total = sum(root.values())
+        for name in sorted(sizes):
+            entries.append({"name": f"mol/{name}",
+                            "weight": BLOCK_SHARES["tier_b"] * root[name] / total,
+                            "passes": CORPUS_PASSES, "block": BLOCKS["tier_b"],
+                            # BACE and BBBP are two of the five sets this campaign
+                            # reports, and they are also the two the water-filling
+                            # thins first. A floor makes "the model barely trained on
+                            # a benchmark it is scored on" a refusal rather than a
+                            # number nobody looked at.
+                            "floor": 0.01 if name in ("bace", "bbbp") else None})
 
-    per_family = BLOCK_SHARES["tier_a"] / len(TIER_A_FAMILIES)
-    for name in TIER_A_FAMILIES:
-        entries.append({"name": f"mol/{name}", "weight": per_family,
-                        "block": BLOCKS["tier_a"]})
+    families = tuple(n for n in TIER_A_FAMILIES if n not in exclude)
+    if families:
+        per_family = BLOCK_SHARES["tier_a"] / len(families)
+        for name in families:
+            entries.append({"name": f"mol/{name}", "weight": per_family,
+                            "block": BLOCKS["tier_a"]})
 
-    entries.append({"name": "mol/chebi20", "weight": BLOCK_SHARES["chebi"],
-                    "passes": CORPUS_PASSES, "block": BLOCKS["chebi"]})
-    entries.append({"name": "mol/g2s", "weight": BLOCK_SHARES["g2s"],
-                    "block": BLOCKS["g2s"]})
+    if "chebi20" not in exclude:
+        entries.append({"name": "mol/chebi20", "weight": BLOCK_SHARES["chebi"],
+                        "passes": CORPUS_PASSES, "block": BLOCKS["chebi"]})
+    if "g2s" not in exclude:
+        entries.append({"name": "mol/g2s", "weight": BLOCK_SHARES["g2s"],
+                        "block": BLOCKS["g2s"]})
+    if not entries:
+        raise ConfigError("molecule_generalist_mixture: exclude empties the "
+                          "mixture; there is nothing left to train on.")
     return tuple(entries)
 
 
@@ -338,6 +411,12 @@ SMOKE_PROBE_MIXTURE = SMOKE_MIXTURE + (
 
 MIXTURES = {
     "molecule_generalist": molecule_generalist_mixture(),
+    # `KFOLD_TRANSFER.md` — one trunk mixture per fold, each missing that fold's
+    # cluster. Named `fold_<id>` so a run directory and a `mixture_hash` both say
+    # which trunk they came from without consulting the table.
+    **{f"molecule_generalist_fold_{fold}":
+       molecule_generalist_mixture(exclude=tasks)
+       for fold, tasks in TRANSFER_FOLDS.items()},
     "molecule_generalist_replay": molecule_generalist_replay_mixture(),
     "molecule_generalist_replay08": molecule_generalist_replay_mixture(REPLAY_SHARE_LOW),
     "smoke": SMOKE_MIXTURE,

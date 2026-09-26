@@ -1,0 +1,147 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` fold A — the topology trunk.
+  //
+  // `008` with one change: the mixture is `molecule_generalist_fold_A`, which
+  // drops `ring_membership`, `aromatic_ring`, `ring_size` and `ring_count` and
+  // redistributes their 25 % inside the Tier-A block, so the five surviving
+  // families go 2.78 % -> 5.0 % each and no other block moves. `bond_path` and
+  // `longest_chain` are named by the fold as well; they were never in the
+  // mixture, so naming them is a no-op here and a statement in the fold table.
+  //
+  // WHAT THIS TRUNK IS FOR. Six tasks — the four ring families plus the two
+  // topology ones — are absent from it, and the study measures how fast it
+  // learns them against how fast the bare instruct backbone does. On the trunk
+  // of record that comparison is impossible, because every task it would use is
+  // in its own mixture: it already scores 0.8152 on BACE test and 0.7558 on HIV
+  // test before an adapt leg trains a step, which is above the 95 % bar, so the
+  // crossing step is an artifact of the eval grid rather than a measurement.
+  //
+  // THREE SEEDS, AND THEY ARE THE POINT. Fold A is the pilot. One trunk seed
+  // cannot separate "pretraining helps" from "this trunk was a good draw", and
+  // the six tasks inside the fold are not independent replicates because they
+  // share a trunk. The existing three trunk seeds put `bond_path` EM at 0.068 /
+  // 0.078 / 0.080 and `clintox` accuracy at 0.492 / 0.476 / 0.382, so the
+  // starting score is tight on structure and loose on property — but the
+  // quantity this study reports is a *speedup*, a ratio of crossing steps, whose
+  // between-trunk variance nobody has measured. These three seeds measure it,
+  // and what they say decides whether folds B, C and D need three seeds or one.
+  //
+  // GRAPH ARM ONLY. The flat twin doubles the cost and answers a question this
+  // study is not asking; the encoding verdict is `molecules/PLAN.md` §8.4.8's and
+  // it is already settled.
+  //
+  // THE BUDGET IS `008`'S, UNCHANGED, AND THAT IS THE CONTROL. 11,140 steps at
+  // `tokens_per_step` 16,384 and `budget_scale` 2.0. Holding total tokens fixed
+  // across the folds is what keeps trunk size out of the comparison — each fold's
+  // trunk then hands more passes to its survivors, which is the water-fill doing
+  // its job.
+  //
+  // CHECK THE PASSES BEFORE SUBMITTING. Tier-A families and `g2s` carry no
+  // `passes` key, so an uncapped task that runs out does not retire quietly — it
+  // asks for a pass `data_prep` never built and raises `AdapterBuildError`. This
+  // fold nearly doubles each surviving family's share, so it consumes built
+  // passes at nearly twice the rate `008` did. `validate` reports what the
+  // mixture consumes against what the build holds; read it.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "kfold_fold_a",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      // Card memory, not brand. An entry containing a colon is passed to
+      // `--constraint` as written; a bare word would be prefixed `GPU_BRD:`.
+      //
+      // Brand was the wrong criterion and cost a seed. `GPU_BRD:A100` matches
+      // ana's 80 GB cards and axa's 40 GB ones alike, and seed 1 landed on axa
+      // and died at step 13 with 37.9 GiB allocated out of 39.5 GiB. The list
+      // below is every card on the cluster with at least 80 GB — A100 80GB and
+      // H100 at 80, B200 at 180, B300 at 288 — and it keeps the Ampere fleet in
+      // play, which matters because Blackwell is saturated most of the time.
+      //
+      // Note `GPU_SKU` values such as `A100_80GB_PCIE` are not usable here:
+      // sbatch refuses them ("Invalid feature specification"). `scontrol show
+      // node <n>` lists the features that exist.
+      //
+      // The trunk's nominal micro-batch is 1,024 tokens (16,384 / (8 x 2)), but
+      // nominal is not the peak: `align_to_accumulation` reshapes a step to
+      // exactly `accumulation_steps` groups by example count, so a handful of
+      // micro-batches come out far wider than the token budget suggests. 80 GB
+      // is sized for those, not for the average.
+      "gpus": ["GPU_MEM:80GB", "GPU_MEM:180GB", "GPU_MEM:288GB"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      "inductor_cache": ".inductor_cache/generalist_instruct",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "kfold_fold_a_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 8
+    }
+  ],
+
+  "seed": [0, 1, 2],
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+
+  "budget_scale": 2.0,
+  "max_steps": 11140,
+
+  "mixture": "molecule_generalist_fold_A",
+  "validators": "default",
+
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

@@ -100,6 +100,47 @@ class TestAlignToAccumulation:
         with pytest.raises(TrainerError, match="micro-batches"):
             align_to_accumulation([[1], [2]], 4)
 
+    def test_merging_does_not_stack_the_long_examples_together(self):
+        """The bug that killed two fold A seeds inside forty steps.
+
+        A long-sequence bucket comes out of the sampler as many batches of one,
+        because the bucket's cap is ``micro_batch_tokens // bucket``. By example
+        count those are the smallest groups in the step, so a count-keyed merge
+        collapses all four into each other and rebuilds exactly the oversized
+        micro-batch the sampler split up: 4 x 6,144 = 24,576 padded tokens.
+
+        Five groups have to become four, so one merge is unavoidable and some
+        group must get worse. The claim is that it picks the cheapest one
+        available — two long examples, 2 x 6,144 — rather than either stacking
+        all four or pouring the eight short examples into a long group, which
+        would pay 6,144 of width for every one of them (9 x 6,144).
+        """
+        long_items = [[{"num_tokens": 6144, "id": i}] for i in range(4)]
+        short_items = [[{"num_tokens": 64, "id": 100 + i} for i in range(8)]]
+        out = align_to_accumulation(long_items + short_items, 4)
+
+        assert len(out) == 4
+        ids = sorted(item["id"] for g in out for item in g)
+        assert ids == [0, 1, 2, 3] + list(range(100, 108))
+
+        def padded(group):
+            return len(group) * max(i["num_tokens"] for i in group)
+
+        assert max(padded(g) for g in out) == 2 * 6144
+        # The eight short examples stayed together rather than being rehomed
+        # into a long group.
+        assert any(len(g) == 8 and padded(g) == 8 * 64 for g in out), out
+
+    def test_splitting_never_emits_an_empty_micro_batch(self):
+        """Ordering by cost means the dearest group can be a single long
+        example, and halving that would yield an empty batch."""
+        batches = [[{"num_tokens": 8192, "id": 0}],
+                   [{"num_tokens": 8, "id": i} for i in range(1, 5)]]
+        out = align_to_accumulation(batches, 4)
+        assert len(out) == 4
+        assert all(group for group in out), out
+        assert sorted(i["id"] for g in out for i in g) == [0, 1, 2, 3, 4]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bit-exact resume

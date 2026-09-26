@@ -1,0 +1,149 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` fold C — the no-property trunk.
+  //
+  // `molecule_generalist_fold_C` drops all five training Tier-B corpora. The
+  // fold also names `clintox`, which the adapter holds out of every mixture
+  // already, so that name is a no-op here and a statement in the fold table.
+  //
+  // **THIS TRUNK IS NOT "THE GENERALIST MINUS A CLUSTER", AND THE WRITE-UP HAS
+  // TO SAY SO.** `BLOCKS` water-fills a removed task's share inside its own
+  // block, which is what keeps a fold from drifting the design — but fold C
+  // removes the *whole* Tier-B block and there is nobody inside it to
+  // redistribute to. The 40 % spills across the others. Resolved at the
+  // `budget_scale` this fold actually runs at, the blocks come out Tier-A 45.8 %
+  // (nine families at 5.09 % each), ChEBI 26.7 %, g2s 27.5 %, against a design
+  // of 25/20/15 renormalising to 41.7/33.3/25. So Tier-A and g2s both run over
+  // their renormalised design and ChEBI sits on the floor — it is the block the
+  // budget squeezes, which is the opposite of what "drop Tier-B" sounds like it
+  // should do.
+  //
+  // So fold C is a structurally different model. Its comparison against a fresh
+  // baseline is still internally valid — the five corpora really are absent from
+  // this trunk — but it answers "what does the property block contribute" rather
+  // than "does breadth help", and **it must never be pooled with folds A and B.**
+  // Fold D has the same defect for the same reason.
+  //
+  // It is run anyway because the question it does answer is worth an answer, and
+  // because `clintox` is measurable against no other trunk in this study.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "kfold_fold_c",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      // Card memory, not brand — see `010_kfold_fold_a.jsonc` for why. Every
+      // card here has at least 80 GB; `GPU_BRD:A100` would also match axa's
+      // 40 GB cards, which this trunk does not fit on.
+      "gpus": ["GPU_MEM:80GB", "GPU_MEM:180GB", "GPU_MEM:288GB"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      "inductor_cache": ".inductor_cache/generalist_instruct",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "kfold_fold_c_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 8
+    }
+  ],
+
+  "seed": [0],
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+
+  // 1.25 rather than the 2.0 every other fold runs at, and the step count is
+  // unchanged. Measured, not chosen: see the note under `task_passes`.
+  "budget_scale": 1.25,
+  "max_steps": 11140,
+
+  "mixture": "molecule_generalist_fold_C",
+
+  // Removing Tier B enlarges ChEBI's design share from 20 % to 33.3 %, and at
+  // `budget_scale` 2.0 `resolve` refuses the mixture outright — "shrinks block
+  // 'chebi' to 16.7 % of the run against its design share of 33.3 %, under the
+  // 80 % floor". The block floor is doing its job; this fold really is a
+  // different mixture.
+  //
+  // The error offers two repairs and **only one of them works here.** Raising
+  // ChEBI's repeat cap cannot move the share by even a rounding error, because
+  // ChEBI is the *reference* task: `resolve` sets the scaled budget to
+  // `chebi_available / chebi_share * budget_scale`, so doubling its cap doubles
+  // the budget and leaves the ratio exactly where it was. Measured across caps
+  // 6, 8 and 13 at a fixed scale, the resolved table is identical to the last
+  // digit — same shares, same per-task examples, same 583,199-example budget —
+  // and at scale 2.0 the refusal simply restates 16.7 % against a budget that
+  // grew by 13/6. A cap is not a share knob when the task sets the budget.
+  //
+  // So the scale comes down instead. The floor wants ChEBI at >= 80 % of 33.3 %,
+  // i.e. >= 26.7 %, and the share goes as 1/(3 * budget_scale): 2.0 gives 16.7 %,
+  // 1.5 gives 22.2 %, 1.25 gives 26.67 %. 1.25 is therefore the largest scale
+  // this fold admits, and it is the one to take — it keeps the run as close to
+  // the other folds as the floor allows. `max_steps` pins the horizon at 11,140
+  // either way, so what changes is the share mix, not the length.
+  //
+  // The cap still has to be raised, for the *other* reason. At 1.25 ChEBI is
+  // asked for 8 passes against a base cap of 6, and a corpus past its cap leaves
+  // the mixture mid-run with its share water-filled away, silently — the failure
+  // that cost three 4x anneals in §9.4. 8 is what `passes_needed` reports, and
+  // the table's `epochs` column (7.59) is not that number and should not be read
+  // as it. g2s wants 41 generator passes at this scale; the fold A cache holds
+  // 64, so nothing needs building.
+  "task_passes": "mol/chebi20=8",
+
+  "validators": "default",
+
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

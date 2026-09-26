@@ -41,6 +41,8 @@ from src.generalist.fork import (
     ADMISSION_PARTS,
     ALL_VALIDATORS,
     ForkError,
+    _check_target,
+    _validator_names,
     check_admission,
     check_criterion,
     fork,
@@ -496,6 +498,19 @@ class TestAForkInheritsTheParentsSpentBudget:
                          registry=parent["registry"])
         assert len(plan.legs) == 2
 
+    def test_adapt_passes_may_be_a_bare_number(self, parent, tmp_path):
+        """An anneal continues a whole mixture and its `passes` has to name the
+        task it raises. An adapt leg trains exactly one, so a bare number says
+        the same thing — and it is what lets one fork config drive nine legs
+        under `--task` without the task appearing in two places."""
+        config = {"task": HELD_OUT_TASK, "budget_steps": 4, "eval_steps": 2,
+                  "passes": 32, "run_dir": str(tmp_path / "c"),
+                  "target": {"metric": "held_out/t/held/val_f1", "value": 0.5}}
+        plan = plan_fork(parent["ckpt"], "adapt", config,
+                         registry=parent["registry"])
+        entry, = plan.legs[0].mixture_config
+        assert entry["name"] == HELD_OUT_TASK and entry["passes"] == 32
+
     def test_a_target_on_the_test_split_is_refused(self, parent, tmp_path):
         with pytest.raises(ForkError, match="test split"):
             plan_fork(parent["ckpt"], "adapt",
@@ -504,6 +519,57 @@ class TestAForkInheritsTheParentsSpentBudget:
                                   "value": 0.5},
                        "run_dir": str(tmp_path / "c")},
                       registry=parent["registry"])
+
+
+class TestAdaptHeldOutByFold:
+    """`held_out_by` is how a k-fold trunk says which tasks it never trained.
+
+    The fold table holds bare names and a task is namespaced, so the comparison
+    has to strip the namespace — matched whole, the check refuses every leg in
+    the study.
+    """
+
+    @pytest.fixture(autouse=True)
+    def folds(self, monkeypatch):
+        from src.generalist import fork as fork_mod
+        monkeypatch.setattr(fork_mod.cfg_mod, "TRANSFER_FOLDS",
+                            {"A": ("candidate",), "B": ("other",)},
+                            raising=False)
+        monkeypatch.setattr(fork_mod.cfg_mod, "HELD_OUT_EVERYWHERE",
+                            ("held",), raising=False)
+
+    def _config(self, tmp_path, task, fold):
+        return {"task": task, "held_out_by": fold, "budget_steps": 4,
+                "eval_steps": 2, "run_dir": str(tmp_path / "c"),
+                "target": {"metric": "held_out/t/held/val_f1", "value": 0.5}}
+
+    def test_a_namespaced_task_matches_the_fold_by_its_bare_name(
+            self, parent, tmp_path):
+        plan = plan_fork(parent["ckpt"], "adapt",
+                         self._config(tmp_path, CANDIDATE_TASK, "A"),
+                         registry=parent["registry"])
+        assert len(plan.legs) == 2
+
+    def test_the_wrong_fold_is_refused(self, parent, tmp_path):
+        with pytest.raises(ForkError, match="not in that fold"):
+            plan_fork(parent["ckpt"], "adapt",
+                      self._config(tmp_path, CANDIDATE_TASK, "B"),
+                      registry=parent["registry"])
+
+    def test_an_unknown_fold_is_refused(self, parent, tmp_path):
+        with pytest.raises(ForkError, match="is not a fold"):
+            plan_fork(parent["ckpt"], "adapt",
+                      self._config(tmp_path, CANDIDATE_TASK, "Z"),
+                      registry=parent["registry"])
+
+    def test_a_task_held_out_everywhere_admits_any_fold(self, parent, tmp_path):
+        """bond_path and longest_chain are in no mixture at all, so every trunk
+        is a valid parent and membership of one fold says nothing."""
+        for fold in ("A", "B"):
+            plan = plan_fork(parent["ckpt"], "adapt",
+                             self._config(tmp_path, HELD_OUT_TASK, fold),
+                             registry=parent["registry"])
+            assert len(plan.legs) == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -751,6 +817,124 @@ class TestStepsToTarget:
     def test_a_missing_metric_is_skipped_not_counted(self):
         history = [(10, {}), (20, {"m": 0.9})]
         assert steps_to_target(history, {"metric": "m", "value": 0.5}) == 20
+
+    def test_persistence_ignores_a_crossing_that_is_not_held(self):
+        """The whole point of `consecutive`: one excursion is not an arrival."""
+        history = [(10, {"m": 0.9}), (20, {"m": 0.1}), (30, {"m": 0.1})]
+        target = {"metric": "m", "value": 0.5, "consecutive": 3}
+        assert steps_to_target(history, target) is None
+        # The same curve without the rule reads the spike as the answer.
+        assert steps_to_target(history, {"metric": "m", "value": 0.5}) == 10
+
+    def test_persistence_returns_the_first_step_of_the_run(self):
+        """Not the step the rule is satisfied at — the question is when it
+        arrived, and the rule only decides whether it stayed. Returning the last
+        step would make the number depend on the rule's own length."""
+        history = [(10, {"m": 0.9}), (20, {"m": 0.1}), (30, {"m": 0.9}),
+                   (40, {"m": 0.9}), (50, {"m": 0.9})]
+        target = {"metric": "m", "value": 0.5, "consecutive": 3}
+        assert steps_to_target(history, target) == 30
+
+    def test_a_missing_metric_breaks_the_run_rather_than_being_skipped(self):
+        """With a log-spaced grid the gaps are large, so treating an absent
+        value as neutral would let two crossings far apart count as
+        persistence."""
+        history = [(10, {"m": 0.9}), (20, {}), (30, {"m": 0.9})]
+        target = {"metric": "m", "value": 0.5, "consecutive": 2}
+        assert steps_to_target(history, target) is None
+
+
+class TestAdaptTargetOnTest:
+
+    def test_a_test_split_target_is_refused_by_default(self):
+        with pytest.raises(ForkError, match="names a test split"):
+            _check_target({"metric": "held_out/mol/bond_path/test_f1",
+                           "value": 0.5})
+
+    def test_on_test_admits_it_but_demands_persistence(self):
+        """The exemption is not a hole: a first-passage time over a noisy
+        signal is biased early, and `consecutive` is what pays for reading it
+        on test at all."""
+        metric = "held_out/mol/bond_path/test_f1"
+        with pytest.raises(ForkError, match="consecutive"):
+            _check_target({"metric": metric, "value": 0.5, "on_test": True})
+        checked = _check_target({"metric": metric, "value": 0.5,
+                                 "on_test": True, "consecutive": 3})
+        assert checked["on_test"] is True
+        assert checked["consecutive"] == 3
+
+    def test_a_val_target_still_needs_no_opt_in(self):
+        checked = _check_target({"metric": "held_out/mol/bond_path/val_f1",
+                                 "value": 0.5})
+        assert checked["on_test"] is False
+        assert checked["consecutive"] == 1
+
+
+class TestADeferredAnchor:
+    """Eleven of the nineteen tasks have no threshold yet, and a stand-in in the
+    `value` slot is worse than none: 0.0 on a `max` target is met at the first
+    evaluation, so both legs cross immediately and the fork reports 1.0."""
+
+    METRIC = "in_mixture/mol/ring_membership/val/em_accuracy"
+
+    def test_a_target_with_neither_value_nor_anchor_is_refused(self):
+        with pytest.raises(ForkError, match="anchor"):
+            _check_target({"metric": self.METRIC})
+
+    def test_an_anchor_stands_in_for_the_value(self):
+        checked = _check_target({"metric": self.METRIC,
+                                 "anchor": "95% of the fold B trunk"})
+        assert checked["value"] is None
+        assert checked["anchor"] == "95% of the fold B trunk"
+
+    def test_a_value_and_an_anchor_together_are_refused(self):
+        with pytest.raises(ForkError, match="not both"):
+            _check_target({"metric": self.METRIC, "value": 0.5,
+                           "anchor": "95% of the fold B trunk"})
+
+    def test_an_empty_anchor_is_not_an_anchor(self):
+        with pytest.raises(ForkError, match="name a source"):
+            _check_target({"metric": self.METRIC, "anchor": "   "})
+
+    def test_a_deferred_target_crosses_nothing(self):
+        """The history is recorded either way — the crossing is a reading off
+        the curve, and it can be taken once the anchor exists."""
+        target = _check_target({"metric": self.METRIC, "anchor": "owed"})
+        history = [(50, {self.METRIC: 0.9}), (100, {self.METRIC: 0.95})]
+        assert steps_to_target(history, target) is None
+
+    def test_an_ordinary_value_still_keeps_no_anchor(self):
+        checked = _check_target({"metric": self.METRIC, "value": 0.5})
+        assert checked["anchor"] is None
+        assert checked["value"] == 0.5
+
+
+class TestValidatorNames:
+    """A fork names validators; the run config configures them.
+
+    The object form is what a run config takes, which is why it looked right in
+    a fork config. It parsed, planned, compiled and trained, and died at the
+    first periodic evaluation on `set(names)` — twenty minutes into a ten-hour
+    job, six legs at once."""
+
+    def test_names_pass_through(self):
+        assert _validator_names(["in_mixture"]) == ("in_mixture",)
+
+    def test_nothing_means_every_validator(self):
+        assert _validator_names(None) == (ALL_VALIDATORS,)
+        assert _validator_names([]) == (ALL_VALIDATORS,)
+
+    def test_the_run_config_object_form_is_refused(self):
+        with pytest.raises(ForkError, match="names, not objects"):
+            _validator_names([{"name": "in_mixture", "cadence": "steps:50"}])
+
+    def test_the_refusal_names_the_fix(self):
+        with pytest.raises(ForkError, match=r'\["in_mixture"\]'):
+            _validator_names([{"name": "in_mixture"}])
+
+    def test_one_bad_entry_among_good_ones_is_still_refused(self):
+        with pytest.raises(ForkError, match="names, not objects"):
+            _validator_names(["held_out", {"name": "in_mixture"}])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,45 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The `anneal` fork that closes fold D's trunk (`probes/013_kfold_fold_d.jsonc`).
+  //
+  //   src/generalist/tools/anneal_all.py \
+  //     --config src/generalist/configs/probes/013_kfold_fold_d.jsonc \
+  //     --fork-config src/generalist/configs/forks/anneal_kfold_fold_d.jsonc
+  //
+  // WHY THIS FILE EXISTS AT ALL. `anneal_molecule_generalist.jsonc` raises
+  // `passes` on all six finite molecule corpora, which is right for a trunk that
+  // trains all six. Fold D withholds the two generation tasks — `mol/g2s` and
+  // `mol/chebi20` — so naming ChEBI-20 here asks to raise an allowance on a task
+  // this mixture never trains, and `_with_passes` refuses it (correctly:
+  // silently ignoring a `passes` key aimed at an absent task makes a mistyped
+  // task name indistinguishable from a working config). That is what killed the
+  // first attempt at this fork.
+  //
+  // WHY 12, WHICH IS THE TRUNK'S OWN CAP AND NOT ONE ABOVE IT. Fold D is the one
+  // fold where the trunk config already carries the headroom a decay needs.
+  // Removing ChEBI-20 and g2s pushes Tier B from 40 % to 62 %, which asks BACE
+  // and BBBP for 9.62 epochs each against a base cap of 6 — so §11 raised them to
+  // 12 in `probes/013_kfold_fold_d.jsonc`, and 12 against 9.62 leaves 2.38 passes
+  // unspent when the trunk ends. The decay is a tenth of the trunk, so it wants
+  // about 0.96 of a pass more. That fits inside the 2.38 nearly three times over,
+  // and naming 12 here is what stops `_with_passes` seeing a *reduction* — the
+  // shared file's 7 is below this fold's trunk cap and would be refused or, worse,
+  // retire both corpora at once.
+  //
+  // SIDER, HIV and Tox21 are in this fold's mixture and are deliberately not
+  // named. The trunk does not raise them either: they are the large Tier B
+  // corpora, and at 62 % Tier B they reach roughly 0.8 and 0.7 epochs across the
+  // whole trunk against a base cap of 6. A cap that is nowhere near binding does
+  // not need to appear in this file, and naming one would only invite the next
+  // reader to think it does something.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "passes": {
+    "mol/bace": 12, "mol/bbbp": 12
+  },
+
+  // 280, as the shared file uses, and for its reasons: `eval_steps` scores the
+  // decay on the way down, two points are enough to see it behaving, and the
+  // number that matters is scored at the end of the leg regardless.
+  "eval_steps": 280
+}

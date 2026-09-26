@@ -1,0 +1,121 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` fold D — the no-generation trunk.
+  //
+  // `molecule_generalist_fold_D` drops `g2s` and `chebi20`, which are two whole
+  // blocks and 35 % of the mixture between them. Like fold C, the share has
+  // nowhere to go inside its own block, so Tier-B and Tier-A come out at roughly
+  // 62 % and 38 % against a design of 40 % and 25 %. **Not poolable with A and
+  // B**, for the reason fold C's header gives.
+  //
+  // Two tasks is a thin fold, and that is a property of the mixture rather than
+  // a choice: generation is two tasks. It is worth running because `g2s` is the
+  // task the assistant campaign found most sensitive to budget — monotone
+  // -0.0160 -> +0.0087 -> +0.0287 across three decay lengths — so how fast a
+  // trunk that has never generated a SMILES string learns to is a question with
+  // a known baseline behind it.
+  //
+  // `chebi20` carries `passes: 6` in the base mixture and this fold removes it,
+  // so the ChEBI cap stops being the binding constraint on `budget_scale`.
+  // `validate` will say what binds instead; read it before assuming 2.0 still
+  // resolves the way it does everywhere else.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "kfold_fold_d",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      // Card memory, not brand — see `010_kfold_fold_a.jsonc` for why. Every
+      // card here has at least 80 GB; `GPU_BRD:A100` would also match axa's
+      // 40 GB cards, which this trunk does not fit on.
+      "gpus": ["GPU_MEM:80GB", "GPU_MEM:180GB", "GPU_MEM:288GB"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      "inductor_cache": ".inductor_cache/generalist_instruct",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "kfold_fold_d_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 8
+    }
+  ],
+
+  "seed": [0],
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+
+  "budget_scale": 2.0,
+  "max_steps": 11140,
+
+  "mixture": "molecule_generalist_fold_D",
+
+  // Removing ChEBI and g2s pushes Tier B from 40 % to 62 %, and at the base cap
+  // of 6 passes BACE and BBBP are asked for 9.62 epochs each — so both would
+  // exhaust their cap mid-run and be **retired**: dropped from the mixture with
+  // their share water-filled away, silently. That is the failure that cost three
+  // 4x anneals in §9.4, found there only because an uncapped task crashed
+  // instead. `validate`'s "generator passes to build" line says 10 for both
+  // against the table's 6, and that disagreement is the signal.
+  //
+  // 12 covers the 9.62 with margin. Raising a cap is share-neutral for any task
+  // that was not being cut off — measured on dry runs in §9.4, identical to six
+  // decimals — so this changes nothing except that nothing disappears.
+  "task_passes": "mol/bace=12,mol/bbbp=12",
+
+  "validators": "default",
+
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}

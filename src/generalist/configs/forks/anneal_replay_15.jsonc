@@ -44,9 +44,29 @@
   // BACE is refused under its floor.
   "budget_scale": 1.7,
 
+  // **8, and it has to track the decay length.** A cap counts passes across the
+  // trunk *and* the leg, and the trunk ends BACE, BBBP and ChEBI-20 at 5.93
+  // epochs — so a cap of 7 hands the decay exactly one more pass of each. That
+  // is ~1,289 BACE records, which at its share lasts about 2,500 steps: fine for
+  // the 1,114-step decay the 7 was written against, and not fine for anything
+  // longer. Past the cap a task is not repeated, it is **retired** — dropped
+  // from the mixture for the rest of the run, with its share water-filled across
+  // what is left. At a 4,456-step decay that silently removed BACE and BBBP for
+  // the last 1,900 steps and ChEBI-20, a 14 % share, for the last 1,000.
+  //
+  // 8 covers every one of them at 4x with margin, and costs nothing anywhere
+  // else: 7 and 8 resolve to **identical shares to six decimals** in this leg at
+  // 1.7 and in `anneal_replay15_assistant.jsonc` at 1.5, both measured on a
+  // dry run. The cap only ever binds when a decay is long enough to reach it, so
+  // raising it is a no-op for every leg that was not being cut off. The
+  // `mixture_hash` does move, because `passes` is part of the hashed record.
+  //
+  // A longer decay than 4x needs this raised again — the arithmetic is
+  // (records a task still has) / (its share x examples per step) against the
+  // decay length.
   "passes": {
-    "mol/bbbp": 7, "mol/bace": 7, "mol/chebi20": 7,
-    "mol/sider": 7, "mol/hiv": 7, "mol/tox21": 7
+    "mol/bbbp": 8, "mol/bace": 8, "mol/chebi20": 8,
+    "mol/sider": 8, "mol/hiv": 8, "mol/tox21": 8
   },
 
   "eval_steps": 280

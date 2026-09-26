@@ -692,6 +692,85 @@ def test_a_fork_may_select_on_val(tmp_path):
     assert out["selection"]["split"] == "val"
 
 
+def _adapt_args(path, **overrides):
+    """A `fork --mode adapt` argv, with every override off by default."""
+    base = dict(decay_steps=None, fork_mode="adapt", fork_config=str(path),
+                task=None, target_metric=None, target_value=None,
+                starts=None, held_out_by=None)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _adapt_file(tmp_path, target, **extra):
+    path = tmp_path / "adapt.jsonc"
+    path.write_text(json.dumps(
+        dict({"task": "mol/bace", "budget_steps": 1000, "eval_steps": 25,
+              "target": target}, **extra)))
+    return path
+
+
+TIER_B_TARGET = {"metric": "in_mixture/mol/bace/test/roc_auc",
+                 "value": 0.7792, "direction": "max", "consecutive": 3,
+                 "on_test": True}
+
+
+class TestAdaptTargetOverrides:
+    """`--task` rewrites the metric key's task segment and nothing else, so the
+    other two thirds of a target travel on their own flags. Both mismatches
+    guarded here were live in `KFOLD_TRANSFER.md`'s fork configs."""
+
+    def test_task_rewrites_the_metrics_task_segment(self, tmp_path):
+        path = _adapt_file(tmp_path, TIER_B_TARGET)
+        out = cli.load_fork_config(
+            str(path), _adapt_args(path, task="mol/bbbp",
+                                   target_value=0.6703), _config())
+        assert out["target"]["metric"] == "in_mixture/mol/bbbp/test/roc_auc"
+        assert out["target"]["value"] == 0.6703
+        assert out["task"] == "mol/bbbp"
+
+    def test_switching_task_without_a_threshold_is_refused(self, tmp_path):
+        """A wrong threshold is worse than a missing one: it still crosses."""
+        path = _adapt_file(tmp_path, TIER_B_TARGET)
+        with pytest.raises(Exception) as exc:
+            cli.load_fork_config(str(path),
+                                 _adapt_args(path, task="mol/bbbp"), _config())
+        assert "per task" in str(exc.value)
+
+    def test_a_deferred_target_needs_no_threshold_to_switch_task(self, tmp_path):
+        """An `anchor` has no number to inherit wrongly, so `--task` alone is
+        enough for the eleven tasks whose threshold is still owed."""
+        path = _adapt_file(tmp_path, {
+            "metric": "in_mixture/mol/ring_membership/test/em_accuracy",
+            "anchor": "95% of the fold B trunk", "consecutive": 3,
+            "on_test": True}, task="mol/ring_membership")
+        out = cli.load_fork_config(
+            str(path), _adapt_args(path, task="mol/fg_count"), _config())
+        assert out["target"]["metric"] == \
+            "in_mixture/mol/fg_count/test/em_accuracy"
+
+    def test_target_metric_replaces_the_whole_key(self, tmp_path):
+        """g2s is `smiles` and scores roundtrip_match; ChEBI-20 is `text` and
+        scores bleu2. Rewriting the task segment alone names a key ChEBI never
+        emits."""
+        path = _adapt_file(tmp_path, {
+            "metric": "in_mixture/mol/g2s/test/roundtrip_match",
+            "anchor": "owed", "consecutive": 3, "on_test": True},
+            task="mol/g2s")
+        out = cli.load_fork_config(str(path), _adapt_args(
+            path, task="mol/chebi20",
+            target_metric="in_mixture/mol/chebi20/test/bleu2"), _config())
+        assert out["target"]["metric"] == "in_mixture/mol/chebi20/test/bleu2"
+
+    def test_starts_and_held_out_by_override_the_config(self, tmp_path):
+        path = _adapt_file(tmp_path, TIER_B_TARGET,
+                           starts=["parent", "base"], held_out_by="C")
+        out = cli.load_fork_config(
+            str(path), _adapt_args(path, starts="parent", held_out_by="A"),
+            _config())
+        assert out["starts"] == ["parent"]
+        assert out["held_out_by"] == "A"
+
+
 def test_a_fork_inherits_the_recipes_anneal_floor(tmp_path):
     """§7: an anneal decays to ``lr/10``, and that is a property of the recipe."""
     args = argparse.Namespace(decay_steps=None, fork_mode="anneal",

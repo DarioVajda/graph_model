@@ -793,12 +793,40 @@ def test_generator_test_examples_come_from_test_role_molecules(built):
 # Held-out tasks, the registry, and load's refusals (D2.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_a_held_out_task_cannot_be_built_for_a_training_split(built):
+def test_a_held_out_corpus_cannot_be_built_for_a_training_split(built):
+    """ClinTox is held out of the *splits*, not just out of the mixtures.
+
+    `_partition_claims` gives its molecules the ``held_out`` role, and
+    `_draw_tier_b` drops a train-role draw that is not train-role, so there is
+    nothing for a train split to be carved from. That is a stronger statement
+    than the one the two Tier-A families below make, and it is deliberate.
+    """
     config, _manifest = built
-    for task in ("bond_path", "longest_chain", "clintox"):
-        assert M.splits_for(task) == ("held_out",)
-        with pytest.raises(M.AdapterBuildError, match="held out"):
-            M.load(f"{MOLECULE_PREFIX}{task}", "train", "graph", config=config)
+    assert M.splits_for("clintox") == ("held_out",)
+    with pytest.raises(M.AdapterBuildError, match="held out"):
+        M.load(f"{MOLECULE_PREFIX}clintox", "train", "graph", config=config)
+
+
+def test_a_held_out_generator_builds_every_split(built):
+    """bond_path and longest_chain carry train/val/test as well as held_out.
+
+    An `adapt` fork trains on a held-out task — that is the whole of the mode —
+    and the k-fold transfer study measures the two topology families that way.
+    Without the ordinary three splits such a fork would train and evaluate on
+    the same thousand held-out rows.
+
+    Being buildable is not being trainable: `is_held_out` still refuses both
+    from every mixture, which
+    `test_the_registry_refuses_a_held_out_task_in_a_mixture` pins.
+    """
+    config, _manifest = built
+    # `splits_for` is a pure function of the task name, so both families are
+    # checked; only bond_path is in BUILT_TASKS, so only it can be loaded.
+    for task in M.HELD_OUT_TIER_A_TASKS:
+        assert M.splits_for(task) == ("train", "val", "test", "held_out")
+    loaded = M.load(f"{MOLECULE_PREFIX}bond_path", "train", "graph",
+                    config=config)
+    assert len(loaded) > 0
 
 
 def test_the_registry_refuses_a_held_out_task_in_a_mixture(built):

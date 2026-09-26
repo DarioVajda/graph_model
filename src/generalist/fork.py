@@ -72,12 +72,14 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 from . import checkpoint as ckpt_mod
+from . import config as cfg_mod
 from .lineage import FORK_MODES, Lineage, append_line, utc_now
 from .registry import Registry, is_held_out, resolve
 from .schedule import Schedule, ScheduleError
@@ -504,8 +506,36 @@ def plan_fork(from_ckpt: str, mode: str, config: dict, *,
         parent_state=parent_state, parent_schedule=parent_schedule,
         run_dir=run_dir, legs=tuple(built["legs"]), config=config,
         config_diff=config_diff,
-        validators=tuple(config.get("validators") or ()) or (ALL_VALIDATORS,),
+        validators=_validator_names(config.get("validators")),
         criterion=built.get("criterion"), target=built.get("target"))
+
+
+def _validator_names(validators) -> tuple:
+    """``validators`` as a tuple of names, refusing the object form.
+
+    A fork names validators; it does not configure them. `validation_hook`
+    turns the names into a `set` and runs those validators with `event="manual"`,
+    which fires them at the fork's own `eval_steps` **whatever cadence they carry
+    in the run config** — so a per-validator `cadence`, `splits` or `max_samples`
+    written here has nothing to act on.
+
+    The object form is refused rather than ignored because ignoring it is how it
+    survived: `{"name": "in_mixture", "cadence": "steps:50"}` parsed, planned and
+    trained, and only died at the first periodic evaluation — twenty minutes and
+    a full compile into a ten-hour job — with `TypeError: unhashable type:
+    'dict'` from `set(names)`. Six legs of the k-fold study were lost that way on
+    2026-09-22. A fork config is read at job start, so the failure lands once per
+    leg, long after submission, and the queue looks healthy the whole time.
+    """
+    names = tuple(validators or ()) or (ALL_VALIDATORS,)
+    bad = [item for item in names if not isinstance(item, str)]
+    if bad:
+        raise ForkError(
+            f"fork: `validators` takes names, not objects — got {bad!r}. Write "
+            f'"validators": ["in_mixture"]. Naming a validator already makes it '
+            f"fire at the fork's `eval_steps`; per-validator `cadence`, "
+            f"`splits` and `max_samples` belong in the run config, not here.")
+    return names
 
 
 def _plan_anneal(*, config, parent_mixture, parent_schedule, parent_step,
@@ -642,11 +672,48 @@ def _plan_adapt(*, config, tokens_per_step, seed, run_dir, registry,
     if registry is None:
         raise ForkError("adapt: needs a registry to resolve the task's spec")
     spec = registry.get(task)
-    if not is_held_out(spec) and not config.get("allow_in_mixture_task"):
+    # "Held out" is a property of the parent, not of the registry.
+    #
+    # `is_held_out` answers the global question — a task absent from *every*
+    # mixture. That was the whole of it while the only held-out tasks were
+    # bond_path, longest_chain and clintox. The k-fold study makes it a per-run
+    # question instead: `molecule_generalist_fold_A` is the full mixture minus
+    # fold A, so ring_membership is held out of that trunk and in the mixture of
+    # every other one. Naming the fold says which trunk this fork may branch and
+    # gets checked against the fold table, so a config that points a fold A leg
+    # at a fold B trunk is refused here rather than quietly measuring how
+    # recently the task was sampled.
+    fold = config.get("held_out_by")
+    if fold is not None:
+        folds = getattr(cfg_mod, "TRANSFER_FOLDS", {})
+        if fold not in folds:
+            raise ForkError(
+                f"adapt: held_out_by {fold!r} is not a fold. Known: "
+                f"{sorted(folds)}")
+        # bond_path, longest_chain and clintox are held out of *every* mixture,
+        # not of one fold, so no trunk trained them and every fold is a valid
+        # parent. They appear in the fold table anyway — it is the study's task
+        # partition — and checking membership alone would refuse three of the
+        # four parents each of them legitimately has.
+        #
+        # The fold table holds bare names (`ring_membership`) and a task is
+        # namespaced (`mol/ring_membership`), so the comparison is on the bare
+        # name — matching the namespaced one against the table refuses every
+        # leg in the study.
+        everywhere = getattr(cfg_mod, "HELD_OUT_EVERYWHERE", ())
+        bare = task.split("/")[-1]
+        if bare not in everywhere and bare not in folds[fold]:
+            raise ForkError(
+                f"adapt: held_out_by is {fold!r} but {task} is not in that fold "
+                f"({list(folds[fold])}), so the fold {fold} trunk trained on it "
+                "and steps-to-target from that parent is not an adaptation "
+                "number.")
+    elif not is_held_out(spec) and not config.get("allow_in_mixture_task"):
         raise ForkError(
             f"adapt: {task} is not held out. Steps-to-target from the parent is only "
             "an adaptation number for a task the parent never trained on — on an "
             "in-mixture task it measures how recently the task was sampled. Set "
+            "`held_out_by: <fold>` when the parent is a k-fold trunk, or "
             "`allow_in_mixture_task: true` if this is a deliberate control.")
 
     budget_steps = int(config.get("budget_steps") or 0)
@@ -675,9 +742,18 @@ def _plan_adapt(*, config, tokens_per_step, seed, run_dir, registry,
     # a leg that trains one task for a specialist's budget wants a specialist's
     # number of epochs — §9.2's BACE legs are 1,000 steps of 32 examples over
     # 1,208 molecules, which is 26.5 passes against a corpus default of six.
+    #
+    # An anneal continues a whole mixture, so its `passes` has to say which task
+    # it is raising. An adapt leg trains exactly one, so a bare number is
+    # unambiguous and is expanded here — which is what lets one fork config drive
+    # nine legs under `--task` without naming a task in two places and letting
+    # the two drift apart.
+    passes = config.get("passes")
+    if passes is not None and not isinstance(passes, dict):
+        passes = {task: passes}
     mixture_config = _with_passes(({"name": task,
                                     "weight": float(config.get("weight", 1.0))},),
-                                  config.get("passes"), mode="adapt")
+                                  passes, mode="adapt")
 
     legs = []
     for leg_seed in seeds:
@@ -751,25 +827,86 @@ def _min_factor(config: dict, parent_state: dict) -> float:
 
 
 def _check_target(target) -> dict:
+    """Validate an adapt target, which is either a threshold or a promise of one.
+
+    `value` is the threshold. `anchor` is the alternative: a string naming where
+    the threshold will come from, for a leg whose anchor does not exist yet. The
+    leg then runs its full budget, records every evaluation, and reports a null
+    crossing — the curves are the durable artefact and the crossing is a reading
+    off them that can be taken later.
+
+    The two are mutually exclusive on purpose. A stand-in number in the `value`
+    slot is the failure mode this guards against: 0.0 on a `max` target is met
+    at the first evaluation, both legs cross immediately, and the fork reports a
+    ratio of 1.0 that looks like a result. `anchor` fails loudly instead, in the
+    one place a reader looks for the number.
+    """
     if not isinstance(target, dict) or not target.get("metric"):
         raise ForkError(
             "adapt: config needs `target` as {\"metric\": …, \"value\": …, "
             "\"direction\": \"max\"|\"min\"} — steps-to-*what* is the number.")
-    if target.get("value") is None:
-        raise ForkError("adapt: target needs a `value` to reach")
+    value, anchor = target.get("value"), target.get("anchor")
+    if value is not None and anchor:
+        raise ForkError(
+            "adapt: target takes `value` or `anchor`, not both. `anchor` means "
+            "the threshold is not known yet; a config that has the number "
+            "should carry it.")
+    if value is None and not anchor:
+        raise ForkError(
+            "adapt: target needs a `value` to reach, or an `anchor` naming "
+            "where the threshold will come from.")
+    if anchor is not None and not str(anchor).strip():
+        raise ForkError("adapt: target.anchor must name a source, not be empty")
     direction = target.get("direction", "max")
     if direction not in ("max", "min"):
         raise ForkError(f"adapt: target.direction must be 'max' or 'min', "
                         f"got {direction!r}")
-    if _names_test_split(target["metric"]):
-        # D7.4: the harness refuses any selection key naming the test split. An
-        # adapt target *is* a selection rule — it decides when the run has
-        # arrived — so it falls under the same refusal.
+    consecutive = int(target.get("consecutive", 1))
+    if consecutive < 1:
+        raise ForkError(f"adapt: target.consecutive must be >= 1, got "
+                        f"{consecutive}")
+    if _names_test_split(target["metric"]) and not target.get("on_test"):
+        # D7.4: the harness refuses any selection key naming the test split, and
+        # for every other mode an adapt target would be one — it decides when the
+        # run has arrived.
         raise ForkError(
             f"adapt: target metric {target['metric']!r} names a test split. "
-            "Selection against test is refused (D7.4); target the val split.")
-    return {"metric": str(target["metric"]), "value": float(target["value"]),
-            "direction": direction}
+            "Selection against test is refused (D7.4); target the val split, or "
+            "set `on_test: true` if the crossing is a measurement rather than a "
+            "selection — see the conditions in the `on_test` note below.")
+    if target.get("on_test"):
+        # The exemption, and why it is not a hole in D7.4.
+        #
+        # D7.4 exists because a key naming test lets the run's *outcome* depend
+        # on test: an early stop, a checkpoint pick, a hyperparameter chosen
+        # because it scored well. None of those happen on an adapt fork. `target`
+        # is read exactly once, by `steps_to_target`, after both legs have run
+        # their full `budget_steps`; it stops nothing, picks nothing and changes
+        # no weights. The reported quantity *is* the crossing step, and the
+        # threshold is a constant fixed before the fork was submitted.
+        #
+        # Reading it on val instead is not the conservative choice here, it is
+        # the wrong one. The threshold is a fraction of a specialist's *test*
+        # score, and the val/test gap on these corpora changes sign by task —
+        # BBBP val ~0.97 against test 0.7056, BACE val ~0.73 against test 0.8202.
+        # A val-side crossing of a test-side number is not a measurement of
+        # anything, which is how the LR screen came back null on both arms.
+        #
+        # What it does cost is bias: a first-passage time over a noisy signal is
+        # optimistic, because the first upward excursion past the line counts
+        # even when the level is not held. `consecutive` is the defence, and on
+        # test it is required rather than merely advised.
+        if consecutive < 2:
+            raise ForkError(
+                "adapt: a target with `on_test` needs `consecutive` >= 2. A "
+                "single crossing of a noisy curve is a first-passage time, "
+                "which is biased early; the persistence rule is what makes the "
+                "number a measurement.")
+    return {"metric": str(target["metric"]),
+            "value": None if value is None else float(value),
+            "anchor": None if anchor is None else str(anchor).strip(),
+            "direction": direction, "consecutive": consecutive,
+            "on_test": bool(target.get("on_test"))}
 
 
 def _names_test_split(key: str) -> bool:
@@ -1039,17 +1176,41 @@ def steps_to_target(history, target: dict):
     The *first* crossing, not the best value: adaptation efficiency is how long
     it took to get there, and a run that crosses at step 200 and dips afterwards
     still crossed at 200. The resolution is the fork's ``eval_steps``.
+
+    ``target["consecutive"]`` (default 1) is how many evaluations in a row must
+    meet the threshold before the crossing counts, and the step returned is the
+    *first* of that run — the question is still when the model arrived, and the
+    persistence rule only decides whether it stayed. Anything else would make
+    the number depend on the rule's own length.
+
+    The run has to be consecutive in the evaluation grid, so a step that is
+    missing the metric entirely breaks it rather than being skipped over: with a
+    log-spaced grid the gaps are large, and treating an absent value as neutral
+    would let two crossings an hour apart count as persistence.
+
+    A target carrying an `anchor` instead of a `value` has no threshold yet, so
+    there is nothing to cross and the answer is ``None``. The history is
+    unaffected, which is the point: the crossing gets read off it once the
+    anchor exists.
     """
-    if not target:
+    if not target or target.get("value") is None:
         return None
     key, value = target["metric"], float(target["value"])
     want_max = target.get("direction", "max") == "max"
+    need = max(1, int(target.get("consecutive", 1)))
+    streak_start, streak = None, 0
     for step, metrics in sorted(history, key=lambda pair: pair[0]):
         got = (metrics or {}).get(key)
-        if got is None:
+        met = got is not None and (
+            (float(got) >= value) if want_max else (float(got) <= value))
+        if not met:
+            streak_start, streak = None, 0
             continue
-        if (float(got) >= value) if want_max else (float(got) <= value):
-            return int(step)
+        if streak == 0:
+            streak_start = int(step)
+        streak += 1
+        if streak >= need:
+            return streak_start
     return None
 
 
@@ -1087,11 +1248,27 @@ def _launch_rank() -> int:
     return 0
 
 
-def _leg_start_checkpoint(plan: ForkPlan, leg, copy_checkpoint: bool):
+def _checkpoint_step(path: str) -> int:
+    match = re.fullmatch(r"checkpoint-(\d+)", os.path.basename(path or ""))
+    return int(match.group(1)) if match else -1
+
+
+def _leg_start_checkpoint(plan: ForkPlan, leg, copy_checkpoint: bool,
+                          continue_leg: bool = False):
     """Where a leg starts from — the path only, nothing created.
 
     Every rank needs this to fill in ``start_checkpoint``; only rank 0 puts
     anything there.
+
+    ``continue_leg`` picks up a leg that died part-way instead of starting it
+    over. A long decay that runs out of a generated task's passes, or loses its
+    node, has usually already written most of its checkpoints, and each one
+    carries the leg's schedule, the sampler's per-task pass and cursor, and the
+    RNG — so continuing from the newest complete one is data-identical to the
+    run that never died, and costs nothing that was already paid for. It is
+    opt-in because the same command without it means "run this fork", and a
+    fork that silently continued someone else's half-finished directory would
+    be the more surprising default.
     """
     if leg.start != "parent":
         return None
@@ -1104,7 +1281,12 @@ def _leg_start_checkpoint(plan: ForkPlan, leg, copy_checkpoint: bool):
                 "the fork's appended segment would have to be written into "
                 "the parent. A fork never writes to its parent.")
         return plan.parent_ckpt
-    return os.path.join(leg.output_dir, os.path.basename(plan.parent_ckpt))
+    origin = os.path.join(leg.output_dir, os.path.basename(plan.parent_ckpt))
+    if continue_leg:
+        found = ckpt_mod.latest(leg.output_dir)
+        if found is not None and _checkpoint_step(found) > _checkpoint_step(origin):
+            return found
+    return origin
 
 
 def _await_prepared(marker: str, plan: ForkPlan) -> None:
@@ -1122,7 +1304,7 @@ def _await_prepared(marker: str, plan: ForkPlan) -> None:
 
 def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
                  results_dir: str = None, copy_checkpoint: bool = True,
-                 runs_jsonl: str = None) -> ForkPlan:
+                 runs_jsonl: str = None, continue_leg: bool = False) -> ForkPlan:
     """Everything on disk that must exist before a leg trains.
 
     In order, because the order is what makes a crash recoverable: pin the
@@ -1152,7 +1334,7 @@ def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
         _await_prepared(marker, plan)
         plan.legs = tuple(
             replace(leg, start_checkpoint=_leg_start_checkpoint(
-                plan, leg, copy_checkpoint))
+                plan, leg, copy_checkpoint, continue_leg))
             for leg in plan.legs)
         return plan
 
@@ -1168,9 +1350,11 @@ def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
     legs = []
     for leg in plan.legs:
         os.makedirs(leg.output_dir, exist_ok=True)
-        start_ckpt = _leg_start_checkpoint(plan, leg, copy_checkpoint)
+        start_ckpt = _leg_start_checkpoint(plan, leg, copy_checkpoint,
+                                           continue_leg)
+        origin = os.path.join(leg.output_dir, os.path.basename(plan.parent_ckpt))
         if leg.start == "parent":
-            if copy_checkpoint:
+            if copy_checkpoint and start_ckpt == origin:
                 if not os.path.exists(start_ckpt):
                     shutil.copytree(plan.parent_ckpt, start_ckpt)
                 # The child's schedule lives in the child's copy.
@@ -1182,6 +1366,15 @@ def prepare_fork(plan: ForkPlan, *, lineage: Lineage = None,
                 _write_json(os.path.join(start_ckpt, ckpt_mod.SCHEDULE_FILE),
                             leg.schedule.to_json())
                 ckpt_mod.pin(start_ckpt, reason=f"fork origin ({plan.mode})")
+            elif copy_checkpoint:
+                # A continuation. This checkpoint was written by the leg itself,
+                # so its `schedule.json` is already the leg's — rewriting it
+                # would put a freshly planned schedule inside a directory whose
+                # `files` list was hashed around the old one.
+                ckpt_mod.pin(start_ckpt,
+                             reason=f"fork continuation ({plan.mode})")
+                logger.info("generalist: leg %r continues from %s rather than "
+                            "%s", leg.name, start_ckpt, origin)
         legs.append(replace(leg, start_checkpoint=start_ckpt))
     plan.legs = tuple(legs)
 
@@ -1260,7 +1453,8 @@ def fork(from_ckpt: str, mode: str, config: dict, *, registry: Registry = None,
          parent_mixture=None, run_dir: str = None, results_dir: str = None,
          lineage: Lineage = None, trainer_factory: Callable = None,
          validate: Callable = None, runs_jsonl: str = None,
-         copy_checkpoint: bool = True) -> ForkResult:
+         copy_checkpoint: bool = True,
+         continue_leg: bool = False) -> ForkResult:
     """Plan a fork, lay it down on disk, and run its legs.
 
     With no ``trainer_factory`` the fork stops after :func:`prepare_fork`: the
@@ -1273,12 +1467,16 @@ def fork(from_ckpt: str, mode: str, config: dict, *, registry: Registry = None,
     ``eval_steps`` for ``adapt``. It receives a :class:`ValidationRequest` and
     returns a flat ``{metric: value}`` dict; the fork never interprets the keys
     beyond the criterion's and the target's.
+
+    ``continue_leg`` restarts a leg that died part-way from its own newest
+    complete checkpoint instead of from the origin copy; see
+    :func:`_leg_start_checkpoint`.
     """
     plan = plan_fork(from_ckpt, mode, config, registry=registry,
                      parent_mixture=parent_mixture, run_dir=run_dir)
     lineage = lineage or Lineage(results_dir or os.path.dirname(plan.run_dir))
     plan = prepare_fork(plan, lineage=lineage, copy_checkpoint=copy_checkpoint,
-                        runs_jsonl=runs_jsonl)
+                        runs_jsonl=runs_jsonl, continue_leg=continue_leg)
 
     result = ForkResult(plan=plan)
     if trainer_factory is None:
@@ -1332,11 +1530,37 @@ def _run_leg(plan: ForkPlan, leg: ForkLeg, trainer_factory: Callable,
             trainer=trainer, validators=plan.validators, scratch_dir=scratch,
             plan=plan)) or {})
 
+    def keep(step: int, metrics: dict) -> None:
+        """Hold the measurement in memory **and** on disk, as it is taken.
+
+        `result.json` is written once, after every leg has run, so until then a
+        leg's curve exists only in `out.history`. A fork is two legs in one job
+        and they run in sequence, so a wall clock or a lost node during the
+        second leg takes the first leg's finished 2,000 steps and forty
+        evaluations with it — and `continue_leg` cannot rebuild them, because
+        resuming a leg that already reached `max_steps` trains nothing and
+        therefore evaluates nothing. The curve is the durable artefact of an
+        `adapt` fork (the crossing is only a reading off it), so it is written
+        as it is produced rather than held to the end.
+
+        Append-only JSONL, one line per evaluation, rank 0 only — the same guard
+        `_write_result` needs and for the same reason. A truncated final line is
+        the worst a kill can leave, and a reader can drop it; `result.json`
+        remains the record when the fork completes.
+        """
+        out.history.append((step, metrics))
+        if _launch_rank() != 0:
+            return
+        try:
+            with open(os.path.join(leg.output_dir, "history.jsonl"), "a") as fh:
+                fh.write(json.dumps({"step": int(step), "metrics": metrics}) + "\n")
+        except OSError as exc:      # never lose a leg over its own audit trail
+            print(f"[fork] {leg.name}: could not append history at {step}: {exc}")
+
     if leg.eval_steps and validate is not None:
         os.makedirs(scratch, exist_ok=True)
         trainer.add_callback(_periodic_validation(
-            int(leg.eval_steps), request_for,
-            lambda step, metrics: out.history.append((step, metrics))))
+            int(leg.eval_steps), request_for, keep))
 
     if leg.resume:
         # anneal / admit continue the parent run: optimizer moments, RNG, sampler
@@ -1354,7 +1578,7 @@ def _run_leg(plan: ForkPlan, leg: ForkLeg, trainer_factory: Callable,
         os.makedirs(scratch, exist_ok=True)
         out.metrics = request_for("end", out.final_step)
         if out.metrics:
-            out.history.append((out.final_step, out.metrics))
+            keep(out.final_step, out.metrics)
     out.steps_to_target = steps_to_target(out.history, plan.target)
     return out
 

@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 #: before the base collator sees them. ``GraphCollatorV2`` reads named keys and
 #: ignores everything else, so leaving them on is harmless — but a collator that is
 #: swapped later must not have to know about them, so the side channel is explicit.
-SIDE_KEYS = ("task_id", "example_index", "step")
+SIDE_KEYS = ("task_id", "example_index", "step", "num_tokens")
 
 #: Coarse, task-agnostic bucket ladders for D4.3. Powers of two from these floors;
 #: the point is only that the table is a function of size and not of task, so a
@@ -450,6 +450,10 @@ class MixtureDataset(torch.utils.data.IterableDataset):
         self.rank = int(rank)
         self.world_size = int(world_size)
         self.yield_batches = bool(yield_batches)
+        #: ``(task, pass_id) -> num_tokens`` per example, memoised because
+        #: ``TaskSource.lengths()`` copies both lists on every call and ``_item``
+        #: runs once per example.
+        self._token_lengths: dict = {}
 
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
@@ -484,7 +488,24 @@ class MixtureDataset(torch.utils.data.IterableDataset):
         item["task_id"] = self.sampler.task_ids[draw.task]
         item["example_index"] = int(draw.index)
         item["step"] = int(step)
+        # The same token count `batches_for_step` buckets on, carried forward so
+        # that whatever regroups these micro-batches downstream can size them the
+        # way the sampler did. `align_to_accumulation` reshapes a step to exactly
+        # `accumulation_steps` groups, and it has to merge by padded token cost:
+        # keying on example count instead makes the many one-item batches that a
+        # long-sequence bucket produces look like the *cheapest* things to merge,
+        # and collapsing them together builds a micro-batch many times over
+        # budget.
+        item["num_tokens"] = int(self._tokens_for(draw.task, draw.pass_id)
+                                 [draw.index])
         return item
+
+    def _tokens_for(self, task: str, pass_id: int):
+        key = (task, pass_id)
+        if key not in self._token_lengths:
+            self._token_lengths[key] = self.sampler.source(task,
+                                                           pass_id).lengths()[1]
+        return self._token_lengths[key]
 
 
 def wrap_collator(base_collator: Callable, task_ids_key: str = "task_ids") -> Callable:

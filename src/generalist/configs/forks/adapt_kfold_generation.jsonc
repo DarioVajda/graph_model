@@ -1,0 +1,80 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` — an adaptation leg on ChEBI-20 or graph-to-SMILES.
+  //
+  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //     --from src/generalist/results/runs/kfold_fold_d_graph/checkpoint-11140 \
+  //     --mode adapt --fork-config src/generalist/configs/forks/adapt_kfold_generation.jsonc \
+  //     --config src/generalist/configs/probes/013_kfold_fold_d.jsonc \
+  //     --task mol/g2s
+  //
+  // Fold D, and the thin one: generation is two tasks, which is a property of
+  // the mixture rather than a choice. It is worth running because g2s is the
+  // task the assistant campaign found most sensitive to budget — monotone
+  // -0.0160 -> +0.0087 -> +0.0287 across three decay lengths — so how fast a
+  // trunk that has never generated a SMILES string learns to is a question with
+  // a known baseline behind it.
+  //
+  // **Two things differ from every other leg in the study.**
+  //
+  // First, these are generative, not teacher-forced, so an evaluation costs far
+  // more than a `token` or `yesno` one. `eval_steps` is 100 rather than 25 or
+  // 50 and `max_samples` is capped: with `consecutive: 3` the finest crossing
+  // reportable is 300 steps against a 3,000-step budget, which is 10 % — coarser
+  // than the other legs and the price of the metric being a generation.
+  //
+  // Second, `budget_steps` is 3,000 rather than 2,000. ChEBI and g2s are the
+  // slowest tasks in the mixture to move, and a Tier-A budget would have both
+  // legs record null, which reports nothing about either.
+  //
+  // The metric differs per task and `--task` does not rewrite it: g2s is
+  // `smiles` and scores `roundtrip_match`, ChEBI-20 is `text` and scores
+  // `bleu2`. Swap both the task and the metric together, or the leg silently
+  // targets a key that is never emitted and returns null.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "task": "mol/g2s",
+  "held_out_by": "D",
+
+  "budget_steps": 3000,
+  "eval_steps": 100,
+  "starts": ["parent", "base"],
+
+  // Measured by `temp.gtds/leg_passes.py`: over 3,000 steps a one-task mixture
+  // asks g2s for 42 passes and ChEBI-20 for 7. The 16 this file first carried
+  // was not inert for g2s at all — a generator past its cap retires exactly as
+  // a corpus does, and the leg would have spent its last two thirds training on
+  // nothing.
+  //
+  // 64 covers both, and g2s has 60 built passes already, so nothing has to be
+  // prepared for it.
+  "passes": 64,
+
+  // Naming it is enough — a named validator fires at this fork's `eval_steps`,
+  // here 100, whatever cadence it carries in the run config. A fork names
+  // validators, it does not configure them, so the `max_samples` cap that used
+  // to sit here is gone and the sample count is the run config's. That matters
+  // more here than anywhere else in the study: these are generative, so a cap
+  // set too high is what turns thirty evaluations into the wall clock. Check the
+  // run config's `max_samples` before raising this fork's budget. The object
+  // form is refused.
+  "validators": ["in_mixture"],
+
+  "target": {
+    // For ChEBI-20 this becomes `in_mixture/mol/chebi20/test/bleu2`.
+    "metric": "in_mixture/mol/g2s/test/roundtrip_match",
+
+    // §6a: neither generative task has a specialist, so the anchor is a trunk
+    // from another fold, as for the Tier-A families. ChEBI-20 is held out of
+    // fold C and g2s of fold D, so each is trained by the other three trunks and
+    // `in_mixture/<task>/test` on those is the number.
+    //
+    // The metric differs per task, so both halves travel together:
+    //   g2s      in_mixture/mol/g2s/test/roundtrip_match  --target-value 0.xxxx
+    //   chebi20  in_mixture/mol/chebi20/test/bleu2        --target-value 0.xxxx
+    "anchor": "95% of the mean in_mixture/<task>/test/<metric> over the three trunks that trained the task (§6a)",
+    "direction": "max",
+    "consecutive": 3,
+    "on_test": true
+  }
+}

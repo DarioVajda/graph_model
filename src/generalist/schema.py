@@ -350,12 +350,23 @@ def validate(example: Example, spec, yes_no_words=None) -> None:
 
     if example.split not in SPLITS:
         raise SchemaError(f"split: {example.split!r} is not one of {SPLITS}")
-    if getattr(spec, "held_out", False):
-        if example.split != "held_out":
-            raise SchemaError(
-                f"split: {spec.name!r} is held out and admits only 'held_out', "
-                f"got {example.split!r}")
-    elif example.split == "held_out":
+    # Only one direction of this is an invariant. A `held_out` split on a task
+    # that is not held out is always wrong — the split exists to hold molecules
+    # no training run may see, and a task in the mixture has no business owning
+    # any.
+    #
+    # The converse used to be enforced too: a held-out task admitted `held_out`
+    # and nothing else. That was true while the only thing anyone did with
+    # bond_path, longest_chain and clintox was score them zero-shot, and it is
+    # too strong now. An `adapt` fork *trains* on a held-out task — that is what
+    # the mode is for — and measuring it needs the ordinary three splits, drawn
+    # from the ordinary role pools, or the fork trains and evaluates on the same
+    # thousand rows. What keeps that honest is not this check but the two that
+    # are split-aware: `_partition_claims` gives each molecule one role, and
+    # `_check_roles` refuses a train-split example whose key is not train-role.
+    # Held-out tasks stay out of every *mixture* through `registry.is_held_out`,
+    # which is a separate gate and unchanged.
+    if not getattr(spec, "held_out", False) and example.split == "held_out":
         raise SchemaError(
             f"split: 'held_out' on {example.task!r}, which is not a held-out task")
 

@@ -160,6 +160,13 @@ REGRESSION_CORPORA = ("esol", "freesolv", "lipo")
 
 CHEBI_TASK = "chebi20"
 G2S_TASK = "g2s"
+ASSISTANT_TASK = "assistant"
+
+#: Where `tools/intent_pipeline.sh` leaves the composed assistant set. Under
+#: ``results/``, so it is not committed and a checkout cannot rebuild it — the
+#: pipeline is the only thing that produces it (§9.4).
+ASSISTANT_DIR = os.path.join(_REPO_ROOT, "src", "generalist", "results",
+                             "assistant", "final", "composed")
 
 #: `MOLECULE_GENERALIST.md` §5, verbatim. No atom labels.
 G2S_QUESTION = "Question: write the canonical SMILES for this molecule."
@@ -246,6 +253,13 @@ class MoleculeAdapterConfig:
     #: default; flip this to keep them once that conflation is measured.
     chebi_allow_disconnected: bool = False
 
+    # ── the assistant set (§9.4) ─────────────────────────────────────────────
+    #: The directory holding `train.jsonl` / `test.jsonl` from
+    #: `tools/assistant_compose.py`. A **location**, and popped from
+    #: `build_version` for the same reason `chebi_dir` is — see the note there
+    #: for what that costs.
+    assistant_dir: str = ASSISTANT_DIR
+
     # ── seeds and cache ──────────────────────────────────────────────────────
     data_seed: int = 0
     cache_root: str = DEFAULT_CACHE_ROOT
@@ -314,7 +328,16 @@ class MoleculeAdapterConfig:
     def build_version(self) -> str:
         """Hash of every input that changes a built example's bytes (D3.2)."""
         payload = asdict(self)
-        for drop in ("cache_root", "chebi_dir", "max_spd"):
+        # `assistant_dir` joins the other two locations here, and it is the one
+        # that costs something. A corpus's *content* normally reaches this hash
+        # through `source_digests` -> `partition_version`, but the assistant set
+        # cannot go there: it holds no roles, and moving the partition hash to
+        # record it would orphan the partition every build in the repo reads. So
+        # the composed set sits outside every hash, and a *changed* set under an
+        # unchanged `build_version` will be read from the old artifact. The
+        # sidecar records `assistant_digest` so the mismatch is at least visible;
+        # pass `rebuild=True`, or delete the artifact, after recomposing.
+        for drop in ("cache_root", "chebi_dir", "max_spd", "assistant_dir"):
             payload.pop(drop, None)
         # ``answer_eos: false`` is what every build before 2026-09-10 produced,
         # so a config that pins it must land on the build it already has rather
@@ -666,6 +689,26 @@ def task_specs(config: MoleculeAdapterConfig, arm: str = "graph") -> dict:
         metric="roundtrip_match", passes=1,
         cap_per_pass=config.g2s_cap_per_pass, max_new_tokens=256,
         question_template=G2S_QUESTION)
+
+    # §9.4. A corpus, because the rows are composed offline and re-walked, not
+    # generated per pass.
+    #
+    # **`metric` is `bleu2` and that number is not the correctness of this task.**
+    # It is ChEBI-20's metric, reused so the training loop has something to plot
+    # against a free-text answer. What §9.4 is judged on — does the reply answer
+    # the question, does it still state every rendered statement, does it assert
+    # anything the statements do not license — is computed offline against the
+    # rendered statements, which is possible at all because the answer was
+    # composed from RDKit facts rather than written. An overlap score against one
+    # voicing of an answer whose `brief` varies row by row cannot measure any of
+    # those three, and quoting it as if it could is the mistake this section has
+    # already made about unmeasured filters.
+    #
+    # `eval_splits` is `test` alone: the composed set is train/test and has no
+    # val, so naming one would fail at load rather than at resolve.
+    add(f"{MOLECULE_PREFIX}{ASSISTANT_TASK}", kind="corpus", answer_kind="text",
+        metric="bleu2", passes=2, max_new_tokens=160,
+        eval_splits=("test",), question_template=None)
 
     return specs
 
@@ -1100,17 +1143,40 @@ def _graphs_for(config, task, arm, draws, pass_id, answer_kind: str = ""):
     or the margin readout would score the terminator instead of the answer.
     """
     from ...experiments.molecules.data import flat_serialize, prompt_format
-    from ...experiments.molecules.dataset import build_flat_example, build_graph_example
+    from ...experiments.molecules.dataset import (build_assistant_example,
+                                                  build_flat_example,
+                                                  build_graph_example)
 
     cfg = _run_config(config, task, arm)
     fmt = prompt_format(config.prompt_style, config.model_name)
     terminated = answer_kind in GENERATIVE_ANSWER_KINDS
     suffix = fmt.answer_suffix if terminated else ""
 
+    if task == ASSISTANT_TASK and arm != "graph":
+        # Not "unsupported yet" — undecided. A flat twin has no component to put
+        # a demonstration's molecule in, so its SMILES has to go inline in the
+        # prompt beside `assistant.shot_text`, and *where* it goes is the whole
+        # matched-form question this arm exists to answer. `build_flat_example`
+        # has no shot mechanism, and quietly dropping the demonstrations would
+        # build a set that trains and scores and answers a different question
+        # from the graph arm's. Decide it with §9.4's flat control, not here.
+        raise AdapterBuildError(
+            f"{MOLECULE_PREFIX}{ASSISTANT_TASK}: no {arm!r} arm. The few-shot "
+            "demonstrations are disconnected graph components and there is no "
+            "settled flat form for them; build this task with arms=('graph',).")
+
     graphs = []
     for i, (mol, question, raw_answer, named, _key, _meta) in enumerate(draws):
         answer = f"{raw_answer}{suffix}"
-        if arm == "graph":
+        if task == ASSISTANT_TASK:
+            # `atom_labels` on and `named` honoured as passed, both unlike
+            # `build_graph_example` — see that function's docstring for why the
+            # decision cannot come from the task name here.
+            from ..assistant import shot_molecules
+
+            graphs.append(build_assistant_example(
+                mol, question, answer, named, shot_molecules(_meta), cfg))
+        elif arm == "graph":
             graphs.append(build_graph_example(mol, question, answer, named, cfg))
         elif task == G2S_TASK:
             notation = _notation_for(arm, task)
@@ -1469,15 +1535,64 @@ def _resolve(config):
 def splits_for(task: str) -> tuple:
     """Which splits a task may be built for.
 
-    A held-out task admits ``held_out`` and nothing else, in both enforcement
-    points (D2.1): the schema refuses the example, and this refuses the build.
+    A held-out **corpus** admits ``held_out`` and nothing else, in both
+    enforcement points (D2.1): the schema refuses the example, and this refuses
+    the build.
+
+    A held-out **Tier-A generator** additionally admits the ordinary three, and
+    the reason is `KFOLD_TRANSFER.md`. Holding a task out of every mixture is
+    what makes it measurable as *novel*, and that is unchanged — `is_held_out`
+    still refuses it from every training mixture, so no trunk trains on it. But
+    an `adapt` fork has to train on something, and with ``held_out`` as the only
+    split it would train and evaluate on the same 1,000 rows, which is not a
+    measurement. Building train/val/test as well gives the fork a train split to
+    adapt on and a test split to read the curve from, and costs the trunks
+    nothing: they cannot reach the task at all.
+
+    The train split draws train-role molecules, so its graphs are ones the trunk
+    saw through *other* tasks. That is the same molecule-level exposure every
+    other Tier-A task has — the question is new, the graphs are not — and making
+    it uniform across the study is the point.
+
+    **ClinTox stays `held_out`-only and this is the one task the k-fold cannot
+    reach yet.** `_partition_claims` gives every ClinTox molecule a held_out
+    role, and `_draw_tier_b` drops a train row whose molecule is not train-role,
+    so a train split here would come out empty. Admitting it means either moving
+    it into the partition as a training corpus — which changes
+    ``partition_version`` and therefore every split in every campaign — or
+    carving its train/val/test out of the held_out role, which is cleaner than
+    what the other tasks get and needs its own branch in `_draw_tier_b`.
     """
-    if task in HELD_OUT_TIER_A_TASKS or task in HELD_OUT_CORPORA:
+    if task in HELD_OUT_CORPORA:
         return ("held_out",)
+    if task in HELD_OUT_TIER_A_TASKS:
+        return ("train", "val", "test", "held_out")
+    # The assistant set is composed, not drawn, and `assistant_compose.py` writes
+    # two files. Holding a val slice back would mean re-composing, and the split
+    # it would be carved from is the one the fork trains on.
+    if task == ASSISTANT_TASK:
+        return ("train", "test")
     return ("train", "val", "test")
 
 
 def all_tasks(config: MoleculeAdapterConfig) -> tuple:
+    """Everything a default ``data_prep`` builds.
+
+    **`assistant` is registered but deliberately not here.** Every other task
+    builds from raw corpora that a checkout already has; the assistant set comes
+    out of `tools/intent_pipeline.sh`, which is six stages and four GPU-hours,
+    and lands under an uncommitted ``results/``. Putting it in the default list
+    would make a full data_prep on a fresh machine fail on the one task most runs
+    do not want. Build it explicitly::
+
+        run_cli.sh data_prep --only mol/assistant --config <cfg> --cell <cell>
+
+    `data_prep` itself resolves from the *mixture* rather than from this tuple,
+    so a fork config that names `mol/assistant` picks it up without the flag. A
+    mixture that names it with nothing built is refused by `registry.resolve` for
+    a missing `mean_tokens`, which is the failure that names the omission at the
+    moment it matters.
+    """
     return (TIER_A_TRAIN_TASKS + HELD_OUT_TIER_A_TASKS
             + tuple(config.tier_b_corpora) + HELD_OUT_CORPORA
             + (CHEBI_TASK, G2S_TASK))
@@ -1585,15 +1700,118 @@ def _draws(config, task, split, pass_id, part, pools, chebi):
         return _draw_tier_a(config, task, split, pass_id,
                             pools[_role_for(split)])
     if task in HELD_OUT_TIER_A_TASKS:
-        return _draw_tier_a(config, task, "held_out", pass_id,
-                            _held_out_pool(config, part))
+        # These two families are absent from every mixture, so for a long while
+        # `held_out` was the only split anyone ever asked them for and the branch
+        # could hardcode it. The k-fold study asks for the other three: an adapt
+        # leg has to train on `bond_path` and read a number back on a split it
+        # did not train on, which needs train/val/test drawn from the ordinary
+        # role pools. Dispatch on the split; `held_out` keeps its own pool and so
+        # keeps meaning exactly what §4 says it means — molecules training never
+        # saw in any form.
+        if split == "held_out":
+            return _draw_tier_a(config, task, "held_out", pass_id,
+                                _held_out_pool(config, part))
+        return _draw_tier_a(config, task, split, pass_id,
+                            pools[_role_for(split)])
     if task in HELD_OUT_CORPORA:
         return _draw_held_out_corpus(config, task, part)
     if task == CHEBI_TASK:
         return _draw_chebi(config, split, part, chebi)
     if task == G2S_TASK:
         return _draw_g2s(config, split, pass_id, pools[_role_for(split)])
+    if task == ASSISTANT_TASK:
+        return _draw_assistant(config, split)
     return _draw_tier_b(config, task, split, part)
+
+
+def _draw_assistant(config, split: str):
+    """§9.4's composed rows, read off disk. The one draw that draws nothing.
+
+    Every other family here samples molecules and renders a question against
+    them. This one is handed rows that were already built, voiced and filtered by
+    `tools/intent_pipeline.sh`, so the whole job is to parse them back into the
+    adapter's six-tuple and carry the demonstrations through.
+
+    **The demonstrations ride in ``meta``, as data rather than as molecules.**
+    `_materialise` writes ``meta`` into the sidecar as JSON, so a live RDKit mol
+    here would not survive the round trip; `_graphs_for` rebuilds them from the
+    keys with `assistant.shot_molecules`, which is the same function
+    `assistant_graphs.py` measured the set with.
+
+    The role check in `_check_roles` is live on this task and worth keeping:
+    ``key`` is the §3 partition key, because `intent_build` drew its molecules by
+    role from the same partition, so a composed set built under a different
+    partition fails here rather than leaking into a train split.
+    """
+    path = os.path.join(config.assistant_dir, f"{split}.jsonl")
+    if not os.path.exists(path):
+        raise AdapterBuildError(
+            f"{path} is missing. The assistant set is composed, not generated: "
+            "run `src/generalist/tools/intent_pipeline.sh --out <dir>` and point "
+            "`assistant_dir` at its `composed/`. Unlike every other task here, a "
+            "checkout cannot rebuild it — `results/` is not committed.")
+
+    from rdkit import Chem
+
+    from ..assistant import named_atoms_for, question_text
+
+    draws, dropped = [], 0
+    with open(path) as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            mol = Chem.MolFromSmiles(row["key"])
+            if mol is None:
+                # The key is a canonical SMILES this pipeline wrote, so an
+                # unparseable one is a corrupt file rather than a hard molecule.
+                dropped += 1
+                continue
+            meta = {"id": row["id"], "task": row["task"], "twist": row["twist"],
+                    "source": row["source"], "situation": row["situation"],
+                    "brief": row["brief"], "writer": row["writer"],
+                    # What the offline correctness pass scores against. These are
+                    # the computed statements, not the voiced answer, and they
+                    # are the reason a free-text reply can be scored at all.
+                    #
+                    # Carried in full — `statements`, `answers`, `verdict`,
+                    # `gloss`, `skeleton`, `turns` — so `tools/assistant_score.py`
+                    # can rebuild the render dict from the artifact alone.
+                    # `intent_accept` wrote the composed row as a renaming of
+                    # that dict, and keeping the whole renaming here is what made
+                    # `accepted/` and `composed/` survive the deletion of every
+                    # upstream stage: a row that describes itself needs nothing
+                    # else to still be readable.
+                    "statements": row["statements"],
+                    "answers": row["answers"],
+                    "verdict": row["verdict"],
+                    "gloss": row["gloss"],
+                    "skeleton": row["skeleton"],
+                    "turns": row["turns"],
+                    "rendered_reply": row["rendered_reply"],
+                    "facts": row["facts"],
+                    "shots": [{"key": s["key"], "question": s["question"],
+                               "answer": s["answer"]} for s in row["shots"]]}
+            # `" " + answer`, the same as `_draw_chebi` and for the same reason:
+            # a ``text`` answer is stored as ``answer[1:]``, so the space is what
+            # makes the prompt tail ``"\nA: That's right. …"`` rather than
+            # ``"\nA:That's right. …"``. Without it `_materialise` silently eats
+            # the reply's first character, and a one-character reply becomes the
+            # empty string the schema then refuses.
+            draws.append((mol, question_text(row), " " + row["answer"],
+                          named_atoms_for(row["facts"]), row["key"], meta))
+
+    if not draws:
+        raise AdapterBuildError(f"{path} holds no usable rows")
+    shots: dict = {}
+    for draw in draws:
+        count = len(draw[5]["shots"])
+        shots[count] = shots.get(count, 0) + 1
+    stats = {"n": len(draws), "dropped": dropped,
+             "by_shot_count": {str(k): shots[k] for k in sorted(shots)},
+             # Recorded because it reaches no hash — see `build_version`.
+             "assistant_digest": _file_digest(path)}
+    return draws, stats
 
 
 def _role_for(split: str) -> str:

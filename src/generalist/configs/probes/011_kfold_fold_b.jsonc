@@ -1,0 +1,106 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // `KFOLD_TRANSFER.md` fold B — the groups-and-stereo trunk.
+  //
+  // `010` with one change: `molecule_generalist_fold_B` drops `fg_presence`,
+  // `fg_count`, `fg_atom_membership`, `stereo_potential` and `stereo_assigned`,
+  // and redistributes their share inside the Tier-A block, so the surviving six
+  // families go 2.78 % -> 4.17 % each and no other block moves.
+  //
+  // B bundles two small families rather than one. That is allowed by the holdout
+  // rule, which only requires that no task's siblings are left behind: fg is
+  // removed whole and stereo is removed whole, so neither has a near-twin in the
+  // trunk to leak through.
+  //
+  // ONE SEED UNTIL FOLD A REPORTS. Fold A's three seeds measure the
+  // between-trunk variance of the *speedup*, which nobody has. If it is small,
+  // one seed here is defensible and the task-level comparisons carry the
+  // statistics; if it is large, this fold gets two more seeds and the study
+  // costs what it costs. Deciding that before the measurement exists would be
+  // guessing.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "kfold_fold_b",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      // Card memory, not brand — see `010_kfold_fold_a.jsonc` for why. Every
+      // card here has at least 80 GB; `GPU_BRD:A100` would also match axa's
+      // 40 GB cards, which this trunk does not fit on.
+      "gpus": ["GPU_MEM:80GB", "GPU_MEM:180GB", "GPU_MEM:288GB"],
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "24:00:00",
+      "inductor_cache": ".inductor_cache/generalist_instruct",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "chain": {
+    "chunks": 1,
+    "dependency": "afterany"
+  },
+
+  "arms": [
+    {
+      "run_name": "kfold_fold_b_graph",
+      "arm": "graph",
+      "bias": "spd+magnetic",
+      "tokens_per_step": 16384,
+      "accumulation_steps": 8
+    }
+  ],
+
+  "seed": [0],
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+
+  "budget_scale": 2.0,
+  "max_steps": 11140,
+
+  "mixture": "molecule_generalist_fold_B",
+  "validators": "default",
+
+  "impl": "v2-flex",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+
+  "encoding": "rich_levi",
+  "stereo_tags": true,
+  "question_node": "on",
+  "ordering": "rcm",
+  "max_length": 512,
+  "tier_a_cap_per_pass": 4000,
+  "g2s_cap_per_pass": 4000,
+  "held_out_size": 1000,
+  "chebi_heavy_atom_cap": 64,
+  "chebi_allow_disconnected": false,
+  "data_seed": 0,
+
+  "loss_norm": "per_example",
+  "lr": 1e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 1e-5,
+  "warmup_steps": 200,
+  "rewarm_steps": 200,
+  "weight_decay": 0.1,
+
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "logging_steps": 10,
+  "milestone_steps": 2000,
+
+  "wandb_project": null
+}
