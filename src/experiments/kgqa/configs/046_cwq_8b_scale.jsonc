@@ -1,0 +1,79 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // CWQ 8B scale run (2026-09-23): 042's CWQ GTLM headline recipe moved to
+  // Llama-3.1-8B, one seed. Triggered by 044 (WebQSP, same move): test F1
+  // .7607 / Hits@1 .8084 / Hit .8440 against 029's 1B .7351 ± .0076 — +2.6
+  // F1, ~3.4x the 1B seed spread, and above the 1B flat control (.7490).
+  //
+  // Recipe = 042 verbatim except model_name. In particular the epoch count
+  // stays at 8: this run is sized for turnaround, not for the last point of
+  // F1. (044's dev F1 was still creeping up at epoch 15, so CWQ may leave a
+  // little on the table; that is an accepted cost.) lr 1e-4 / bias_lr 5e-3
+  // unchanged, as in 044.
+  //
+  // Wall-clock, scaled from measurements rather than parameter count: 044
+  // cost ~4.2x the 1B's GPU-time per training example, and 042 took ~10 h
+  // on 4 GPUs, so ~35-45 h here. The time limit leaves headroom for the
+  // slower 8B generative evals.
+  //
+  // No shared inductor cache: 042's was compiled for the 1B's head_dim 64
+  // and would not hit for the 8B's 128.
+  //
+  // Requires 045's cache (built 2026-09-23, job 165276).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/046_cwq_8b_scale.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_8b_scale",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300",
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "700G",
+      "time": "72:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": 0,
+
+  "mode": "train",
+  "question_node": "isolated",
+
+  "dataset": "cwq",
+  "max_nodes": 1024,
+  "versions": 1,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "num_epochs": 8,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "eval_steps": 1465,            // every half epoch (2,930 steps/epoch at 4 x 1 x 2)
+  "gen_eval_samples": 512,       // fixed seeded dev subsample for selection
+  "gen_max_samples": null,       // final scoring: full splits
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

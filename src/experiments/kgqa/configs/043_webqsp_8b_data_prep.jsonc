@@ -1,0 +1,45 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Cache build for 044 (WebQSP 8B scale probe): 028's `isolated` cache,
+  // re-keyed for Llama-3.1-8B. data_config_key() embeds model_name, so the
+  // 1B cache is not picked up even though the two models share the Llama-3
+  // tokenizer. Everything else is 028 verbatim.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/043_webqsp_8b_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "webqsp_8b_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "64G",
+      "time": "01:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "question_node": "isolated",
+
+  "dataset": "webqsp",
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "max_nodes": 512,
+  "n_max": 50,
+  "versions": 8,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

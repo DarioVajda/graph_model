@@ -1,0 +1,92 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // WebQSP 8B follow-up to 044 (2026-09-23): a second seed of 044's recipe
+  // and two seeds at half the learning rate.
+  //
+  // 044's dev F1 (246 questions) sat in a noisy 64-72 band from epoch 2.5 to
+  // 7.4, while the cosine schedule held lr near its 1e-4 peak. It stepped up
+  // to 75-77 only once lr fell below ~6e-5, and it ended at 77.9 with lr at
+  // its 1e-5 floor. Dev loss rose from epoch 1.2 on (1.09 -> 1.87) and train
+  // loss ended at 0.18 against the 1B's 0.33. Both say the peak lr is on the
+  // high side for 8B, so lr 5e-5 at an unchanged 15 epochs is the arm. The
+  // seed arm comes first because any delta worth finding here (~1 F1) is the
+  // size of the 1B seed spread (±0.8), which one 8B seed cannot resolve.
+  //
+  //   arm A: lr 1e-4, seed 1        (pairs with 044's seed 0)
+  //   arm B: lr 5e-5, seeds 0 and 1
+  //
+  // Everything else is 044 verbatim. It runs as 2-rank DDP at 1 x 4, the
+  // same 8 examples per optimizer step and the same schedule as 044's
+  // 4 x 1 x 2 (the step count is world-size-aware; 2 ranks validated by 041).
+  // Expected ~7-8 h per run: 044 took 3.7 h on 4 GPUs.
+  //
+  // Requires 043's cache.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/047_webqsp_8b_seeds_lr.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "webqsp_8b_seeds_lr",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200",
+      "gpus_per_config": 2,
+      "cpus": 16,
+      "mem": "160G",
+      "time": "20:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "arm": [
+    { "lr": 1e-4, "seed": 1 },
+    { "lr": 5e-5, "seed": 0 },
+    { "lr": 5e-5, "seed": 1 }
+  ],
+
+  "mode": "train",
+  "question_node": "isolated",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 1,
+  "accumulation_steps": 4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

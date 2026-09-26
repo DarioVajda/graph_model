@@ -1,0 +1,77 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // CWQ 8B at lr 5e-5 (2026-09-23): 046 with the peak learning rate halved.
+  // Runs alongside 046, which stays at lr 1e-4.
+  //
+  // This is an lr arm rather than a second seed of 046. The 044 WebQSP curve
+  // (see 047's header) points at 1e-4 being high for 8B: dev F1 stalled while
+  // lr was near its peak and gained only once it decayed below ~6e-5. CWQ
+  // makes that worse, because 8 CWQ epochs are 23,440 optimizer steps against
+  // WebQSP's 4,890, so the high-lr stretch is ~5x longer in steps. If 047
+  // confirms 5e-5 on WebQSP, this run is already the CWQ number at the better
+  // setting. If it does not, 046 stands. A seed replicate would only have
+  // narrowed the error bar on a setting that may not be the one to report.
+  //
+  // Same seed as 046 (0), so the pair differs in lr only. Everything else,
+  // including the 8 epochs, is 046 verbatim. Expected ~40-45 h: 042 at 1B
+  // ran ~10 h on 4 B200s, and 044 measured the 8B at ~4.2x the 1B's GPU-time
+  // per training example.
+  //
+  // Requires 045's cache.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/048_cwq_8b_lr5e5.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_8b_lr5e5",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200",
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "700G",
+      "time": "72:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": 0,
+
+  "mode": "train",
+  "question_node": "isolated",
+
+  "dataset": "cwq",
+  "max_nodes": 1024,
+  "versions": 1,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "num_epochs": 8,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "lr": 5e-5,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "eval_steps": 1465,
+  "gen_eval_samples": 512,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

@@ -1,0 +1,85 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // WebQSP 8B, lr 5e-5 for 30 epochs (2026-09-23). This is 047's lr 5e-5 arm
+  // at double the epochs: at the lower peak lr, do the gains keep coming, or
+  // do they turn over? 044's dev loss rose from epoch 1.2 on, so memorisation
+  // could win out on a long enough schedule. Read it against 047's 15-epoch
+  // 5e-5 seeds.
+  //
+  // Everything else is 044 verbatim, seed 0. It runs on 4x H100 as 4-rank DDP
+  // at 1 x 2 (8 examples per step, as 044). Expected ~15-20 h.
+  //
+  // The first attempt (job 165491, 256G) was host-OOM-killed at step 5600
+  // (epoch ~17), partway through writing that checkpoint. Host memory was
+  // already at the 256G cap, and the checkpoint save's spike pushed one rank
+  // over. 044 survived 15 epochs on the same 256G, so resident memory grows
+  // with run length. The retry resumes from checkpoint-5400, the last complete
+  // one, at 512G. The half-written checkpoint was moved aside to
+  // partial-checkpoint-5600-oom.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/050_webqsp_8b_lr5e5_e30.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "webqsp_8b_lr5e5_e30",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "H100",
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "512G",
+      "time": "40:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": 0,
+  "resume_from": "./checkpoints/kgqa/webqsp_8b_lr5e5_e30_0000/checkpoint-5400",
+
+  "mode": "train",
+  "question_node": "isolated",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "num_epochs": 30,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "lr": 5e-5,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

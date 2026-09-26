@@ -1,0 +1,46 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // CWQ cache for a possible 8B follow-up to 044: 040's `isolated` build,
+  // re-keyed for Llama-3.1-8B (data_config_key() embeds model_name). Built
+  // ahead of 044's verdict so a CWQ 8B run can start as soon as WebQSP says
+  // it is worth it; if 044 shows no scale gain, this cache is simply unused.
+  // Everything else is 040 verbatim (~40 min, 200G).
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/045_cwq_8b_data_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_8b_data_prep",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200:1", "B300:1"],
+      "cpus": 8,
+      "mem": "200G",
+      "time": "03:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+
+  "question_node": "isolated",
+
+  "dataset": "cwq",
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "max_nodes": 1024,
+  "n_max": 50,
+  "versions": 1,
+  "data_seed": 42,
+  "data_format_version": 3,
+  "spd": true,
+  "magnetic": true,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25
+}

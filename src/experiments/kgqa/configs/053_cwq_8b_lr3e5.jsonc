@@ -1,0 +1,73 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // CWQ 8B at lr 3e-5 (2026-09-24): 048 with the peak learning rate lowered
+  // one more step, to find where the lr gain on CWQ stops.
+  //
+  // At every half-epoch dev eval so far, 048 (lr 5e-5) has run 2-5 F1 ahead of
+  // 046 (lr 1e-4). 046 plateaued at 64-65 from epoch 6, while 048 was still
+  // climbing at epoch 5 (66.8). WebQSP showed the same direction (5e-5 over
+  // 1e-4 by +1.1 test F1, 2 seeds each). CWQ has more room for a lower lr than
+  // WebQSP: 8 CWQ epochs are 23,440 optimizer steps against WebQSP's 4,890.
+  //
+  // Everything else is 048 verbatim, seed 0, 8 epochs. Measured ~22-24 h on
+  // 4 B200/B300. Either GPU type is accepted so it starts on whichever frees
+  // first.
+  //
+  // Requires 045's cache.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/053_cwq_8b_lr3e5.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "cwq_8b_lr3e5",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "700G",
+      "time": "36:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": 0,
+
+  "mode": "train",
+  "question_node": "isolated",
+
+  "dataset": "cwq",
+  "max_nodes": 1024,
+  "versions": 1,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "num_epochs": 8,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "lr": 3e-5,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "eval_steps": 1465,
+  "gen_eval_samples": 512,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

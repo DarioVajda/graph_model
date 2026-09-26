@@ -557,6 +557,119 @@ configs use is not enough. `TextGraphDataset.compute_rrwp` now sizes its Arrow
 floats, so the default 1000-row writer batch would have overflowed Arrow's
 2³¹-element array cap.
 
+### Base-model scale: Llama-3.1-8B on WebQSP (2026-09-23, complete)
+
+README goal #3, the one scale run before architecture conclusions. Config
+[`configs/044_webqsp_8b_scale.jsonc`](configs/044_webqsp_8b_scale.jsonc) (job
+165295; cache from [`043`](configs/043_webqsp_8b_data_prep.jsonc)) is 029's
+`isolated` arm with only the backbone swapped to Llama-3.1-8B base: lr 1e-4
+and bias_lr 5e-3 kept, 15 epochs, graph arm only, one seed. It ran as 4-rank
+DDP at 1 x 2, which is the same effective batch and schedule as 029's 2 x 4.
+
+| arm | test F1 | Hits@1 | Hit* | EM |
+|---|---:|---:|---:|---:|
+| 1B, `isolated` (029, 3 seeds) | 0.7351 ± 0.0076 | 0.7803 | 0.8325 | — |
+| 1B flat control (021) | 0.7490 ± 0.0003 | 0.7995 | 0.8501 | — |
+| **8B, `isolated` (044, seed 0)** | **0.7607** | **0.8084** | **0.8440** | 0.4140 |
+
+**Verdicts:**
+
+1. **Scale helps the graph arm: +2.6 test F1**, about 3.4x the 1B seed spread.
+   This is one seed, so treat it as a clear effect whose exact size is not yet
+   pinned down. Hits@1 80.8 now clears SR-GNN-RAG (78.9) by ~2 points, not 0.15.
+2. **The 8B graph arm beats the 1B flat control** (76.1 vs 74.9). That is not
+   the goal-#2 comparison, which needs flat at 8B too and was not run. It does
+   show that part of the 1B graph-vs-flat gap was reader capacity.
+3. **Learning is faster, not just higher.** Dev F1 reached 70 by epoch 2.5,
+   where the 1B took about 10 epochs. It was still rising at epoch 14.7 (best
+   dev 77.9 at the last eval), so 15 epochs slightly undertrains the 8B.
+4. **Cost:** 3 h 44 min on 4x B300, including a ~20 min cold flex compile and
+   the final test eval. Training ran at ~2.1 s/step. That is ~4.2x the 1B's
+   GPU-time per training example, well below the ~6x that parameter count
+   predicts. Flex autotune logs `No valid triton configs ... out of resource`
+   at head_dim 128. The message is harmless: the oversized candidates are
+   skipped and the ones that fit are used.
+
+**Follow-up: lr, epochs and adapter regularization (2026-09-24, complete).**
+044's dev curve pointed at lr 1e-4 being high for 8B: dev F1 sat in a noisy 64-72
+band while the cosine schedule held lr near its peak, and it gained only once lr
+fell below ~6e-5. Dev loss rose from epoch 1.2 on, and train loss ended at 0.18
+against the 1B's 0.33. Configs:
+[`047`](configs/047_webqsp_8b_seeds_lr.jsonc) (seeds and lr),
+[`049`](configs/049_webqsp_8b_e22.jsonc) (22 epochs),
+[`050`](configs/050_webqsp_8b_lr5e5_e30.jsonc) (lr 5e-5, 30 epochs),
+[`051`](configs/051_webqsp_8b_regularization.jsonc) (dropout and rank). All keep
+8 examples per optimizer step; only the rank count and the GPU type vary.
+
+| lr | epochs | lora_r | lora_dropout | seeds | test F1 | Hits@1 | Hit* |
+|---:|---:|---:|---:|---|---:|---:|---:|
+| 1e-4 | 15 | 64 | 0.15 | 0, 1 | 0.7637 ± 0.0030 | 0.8096 | 0.8445 |
+| 1e-4 | 22 | 64 | 0.15 | 0 | 0.7637 | 0.8120 | 0.8471 |
+| 1e-4 | 15 | 64 | 0.25 | 0 | 0.7670 | 0.8047 | 0.8471 |
+| 1e-4 | 15 | 16 | 0.15 | 0 | 0.7780 | 0.8170 | 0.8538 |
+| **5e-5** | 15 | 64 | 0.15 | 0, 1 | **0.7749 ± 0.0041** | **0.8231** | **0.8529** |
+| 5e-5 | 30 | 64 | 0.15 | 0 | 0.7768 | 0.8176 | 0.8550 |
+| 5e-5 | 15 | 16 | 0.15 | 0 | 0.7683 | 0.8206 | 0.8569 |
+
+**Verdicts:**
+
+1. **lr 5e-5 beats 1e-4 by +1.1 test F1.** Both 5e-5 seeds land above both 1e-4
+   seeds. With two seeds per side the effect is consistent, but its size is not
+   yet tight. The 8B graph arm now sits +4.0 over the 1B graph arm (73.5) and
+   +2.6 over the 1B flat control (74.9).
+2. **Epochs are not the lever.** 22 epochs at 1e-4 lands exactly on the 15-epoch
+   mean. 30 epochs at 5e-5 lands +0.2 over its 15-epoch mean, inside the noise:
+   dev F1 reached ~76-77 by epoch 12 and then held a 75-79 band for 18 epochs
+   without turning over. 15 epochs is enough at either lr.
+3. **Smaller adapter, yes; more dropout, no.** lora_r 16 at lr 1e-4 matches the
+   5e-5 arm (+1.7 over its same-seed control, one seed). lora_dropout 0.25 is
+   +0.6, inside the 1e-4 seed spread. Both effective changes reduce how hard
+   the 8B fits the train set.
+4. **The two gains do not stack.** lr 5e-5 with r16
+   ([`052`](configs/052_webqsp_8b_lr5e5_r16.jsonc)) lands at 76.83, about 1 F1
+   under either parent at the same seed (77.90, 77.80). Dev F1 plateaued at
+   76-78 from epoch ~4 on, so the run is not undertrained on schedule: lowering
+   either knob captures the gain, and lowering both costs a little. lr 5e-5 at
+   r64 stays the recipe.
+5. **Host memory grows with run length at 8B.** 050's first attempt was
+   OOM-killed at epoch ~17 on 256G (4 ranks), partway through writing a
+   checkpoint. 049's first attempt stalled at epoch ~20 on 160G (2 ranks) until
+   the NCCL allreduce timed out after 30 min. Both resumed cleanly with
+   `--resume-from` at double the memory. Size runs past 15 epochs at ≥128G per
+   rank.
+
+CWQ at 8B, same recipe at 042's 8 epochs:
+[`configs/046_cwq_8b_scale.jsonc`](configs/046_cwq_8b_scale.jsonc) (job 165393,
+lr 1e-4) and [`configs/048_cwq_8b_lr5e5.jsonc`](configs/048_cwq_8b_lr5e5.jsonc)
+(job 165487, lr 5e-5), with the cache from
+[`045`](configs/045_cwq_8b_data_prep.jsonc), plus
+[`053`](configs/053_cwq_8b_lr3e5.jsonc) (job 165853, lr 3e-5). Measured at
+~2.2 s/step on 4 GPUs, so ~21-24 h per run including the test eval.
+
+| lr | epochs | seed | best dev-512 F1 | test F1 | Hits@1 | Hit* |
+|---:|---:|---|---:|---:|---:|---:|
+| 1e-4 | 8 | 0 | 64.6 (ep 6.5) | 0.5903 | 0.6109 | 0.6403 |
+| **5e-5** | 8 | 0 | 68.1 (ep 6.5) | **0.6206** | **0.6449** | **0.6729** |
+| 3e-5 | 8 | 0 | 65.7 (ep 8.0) | 0.6032 | 0.6270 | 0.6565 |
+
+At lr 1e-4 the 8B graph arm lands +3.8 F1 over the 1B graph arm on the same
+recipe (042, 55.2 over 3 seeds) and +0.4 over the 1B flat control (58.6). That
+is the first CWQ run where the graph arm is not below flat. It sits 0.4 F1 and
+0.6 Hits@1 under dense-retrieval GNN-RAG (59.4 / 61.7) and +5.7 F1 over the
+retrieval-matched SR-only GNN-RAG (53.3). Dev-512 plateaued at 64-65 from
+epoch 6 and ran ~5.5 over test, in line with the 1B selection inflation.
+
+lr 5e-5 adds another +3.0 F1 on top, the same direction as WebQSP but three
+times the size. It ran 2-5 dev F1 ahead of lr 1e-4 at every eval from epoch
+2 on. At 62.06 F1 / 64.49 Hits@1 it is +6.9 F1 over the 1B graph arm, +3.5
+over the 1B flat control, and above both dense-retrieval GNN-RAG (59.4 / 61.7)
+and GNN-RAG + RA (60.4 / 62.8), on the sparser SR retrieval. One seed per lr.
+
+lr 3e-5 turns back down: 60.32 F1, -1.7 under 5e-5, though still over 1e-4.
+It trailed 5e-5 on dev at every eval, flattened at 65-66 from epoch 4.5, and
+never reached 5e-5's 67-68 band, so the 8-epoch budget is not what held it
+back. lr 5e-5 is the CWQ optimum on this grid, as on WebQSP.
+
 ### Data-format v2 sweeps (historical)
 
 All v2-era sweeps, merged (test set, 1628 questions, sorted by test F1; per-sweep

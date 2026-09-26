@@ -1,0 +1,93 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // WebQSP base-model scale probe (2026-09-23): the best graph-native recipe
+  // (029's `isolated` arm, 73.51 ± 0.76 test F1 at Llama-3.2-1B) moved to
+  // Llama-3.1-8B base — README goal #3, the one scale run before drawing
+  // architecture conclusions. GTLM arm only, one seed.
+  //
+  // Recipe = 029 `isolated` verbatim except:
+  //   - model_name  Llama-3.2-1B -> Llama-3.1-8B (same tokenizer and RoPE
+  //     family; base, like the 1B).
+  //   - lr stays 1e-4. LoRA learning rates transfer across model size far
+  //     better than full fine-tuning ones, and 1e-4 sits inside the usual
+  //     8B LoRA range. bias_lr stays 5e-3: the bias module does not widen
+  //     with the backbone, and 3e-2 already destabilised the 1B (025).
+  //   - 15 epochs kept. The 1B dev F1 plateaued by epoch ~11-14 and was
+  //     already memorising (train 96.7 vs test 72.6); a larger model should
+  //     need fewer passes, not more. Extend only if dev F1 is still rising.
+  //   - 4-rank DDP at batch 1 x accum 2: 8 examples per optimizer step,
+  //     the same effective batch, step count and schedule as 029's 2 x 4 on
+  //     one GPU (the world-size-aware schedule from 042). The generative
+  //     eval shards by rank.
+  //
+  // Wall-clock is estimated, not measured: 029 took ~3 h on one B200; ~6x
+  // the compute per step at 8B, divided over 4 ranks, gives ~5-7 h plus a
+  // cold flex compile.
+  //
+  // Requires 043's cache.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/044_webqsp_8b_scale.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "webqsp_8b_scale",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B300",
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "256G",
+      "time": "16:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": 0,
+
+  "mode": "train",
+  "question_node": "isolated",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "lr": 1e-4,
+  "bias_lr": 5e-3,
+  "lora_r": 64,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,          // full 246-question dev per checkpoint (029's protocol)
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}

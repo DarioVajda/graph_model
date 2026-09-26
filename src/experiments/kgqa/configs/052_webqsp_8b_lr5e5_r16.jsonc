@@ -1,0 +1,83 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // WebQSP 8B, lr 5e-5 with lora_r 16 (2026-09-24). This combines the two
+  // changes that each helped over 044 (lr 1e-4, r64: 76.37 ± 0.30 over 2 seeds):
+  //   lr 5e-5, r64 (047):  77.49 ± 0.41 (2 seeds)
+  //   lr 1e-4, r16 (051):  77.80 (seed 0)
+  // Both damp how hard the 8B fits the train set, so their gains may overlap
+  // rather than add. This run answers which.
+  //
+  // Seed 0, so it pairs with both parents' seed-0 runs (77.90 and 77.80).
+  // Everything else is 044 verbatim at 15 epochs, since the 22- and 30-epoch
+  // arms showed that epochs are not the lever.
+  //
+  // It runs on 4x H100 as 4-rank DDP at 1 x 2 (8 examples per step). 050
+  // measured ~1.1 s/step there, so expect ~3 h. mem 384G: 044 finished 15
+  // epochs on 256G at 4 ranks but sat at the cap, and 050 died past epoch 15
+  // on the same 256G.
+  //
+  //   python3 -m sweep src.experiments.kgqa src/experiments/kgqa/configs/052_webqsp_8b_lr5e5_r16.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+  "name": "webqsp_8b_lr5e5_r16",
+  "results_dir": "src/experiments/kgqa/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "H100",
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "384G",
+      "time": "08:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "seed": 0,
+
+  "mode": "train",
+  "question_node": "isolated",
+  "cvt_collapse": null,
+
+  "dataset": "webqsp",
+  "max_nodes": 512,
+  "versions": 8,
+  "n_max": 50,
+  "data_seed": 42,
+  "data_format_version": 3,
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "rel_mode": "last_1",
+  "num_epochs": 15,
+  "batch_size": 1,
+  "accumulation_steps": 2,
+  "lr": 5e-5,
+  "bias_lr": 5e-3,
+  "lora_r": 16,
+  "lora_dropout": 0.15,
+  "bias_weight_decay": 0.0,
+  "k_hop": 0,
+  "graph_attn_impl": "flex",
+  "dtype": "bf16",
+  "gradient_checkpointing": true,
+  "num_workers": 4,
+
+  "spd": true,
+  "magnetic": true,
+  "magnetic_shared": false,
+  "max_spd": 64,
+  "magnetic_dim": 128,
+  "magnetic_m": 128,
+  "magnetic_q": 0.25,
+
+  "eval_steps": 200,
+  "gen_eval_samples": null,
+  "gen_max_samples": null,
+  "gen_max_new_tokens": 256,
+
+  "wandb_project": "GraphLLM"
+}
