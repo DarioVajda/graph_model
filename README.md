@@ -1,6 +1,8 @@
 # Teaching LLMs to See Graphs: Unifying Text and Structural Reasoning
 
-### Anonymous Authors
+### Dario Vajda
+
+**Preprint:** [arXiv:2605.10247](https://arxiv.org/abs/2605.10247)
 
 ## Abstract
 
@@ -61,7 +63,9 @@ Install this repo as an editable package to reuse the model and utilities from a
 separate project (e.g. app-specific data pipelines) without copying code:
 
 ```bash
-pip install -e /path/to/graph_model      # `git pull` here → picked up on next run
+pip install -e /path/to/graph_model      # same machine: `git pull` here → picked up on next run
+# or, from another machine / for a pinned build:
+pip install "gtlm @ git+ssh://git@github.com/DarioVajda/graph_model.git@main"
 ```
 
 Then import the library (top-level package is `gtlm`, not `src`):
@@ -126,3 +130,19 @@ python -m src.experiments.<your_experiment>.test \
 ```
 
 Results are appended to `src/experiments/<your_experiment>/results.json`.
+
+## Citation
+
+This repository contains the code for the following preprint. Ongoing work extends GTLM with K-hop attention masking, a Flex Attention implementation, and thorough evaluation on Knowledge Graph question answering and relational deep learning.
+
+```bibtex
+@misc{vajda2026teachingllmsgraphsunifying,
+      title={Teaching LLMs to See Graphs: Unifying Text and Structural Reasoning}, 
+      author={Dario Vajda},
+      year={2026},
+      eprint={2605.10247},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2605.10247}, 
+}
+```
