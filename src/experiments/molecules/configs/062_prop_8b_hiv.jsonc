@@ -1,0 +1,84 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 062 — HIV graph arm on Llama-3.1-8B, two learning rates (2026-09-26). Two
+  // cells, one seed, 4-rank DDP each. The BACE/BBBP half is `061`, whose header
+  // carries the scope (graph arm only, not `039`'s ladder).
+  //
+  // RECIPE. `033`'s HIV graph cell verbatim (rich_levi, spd+magnetic, max_spd 32,
+  // bias_lr 1e-2, lora_r 16, lora_dropout 0.05, question node on, 10 epochs,
+  // eval every 200 optimizer steps), seed 1 to pair with `033`'s seed-1 cell.
+  // The 10 epochs are not cut: at 1B the best HIV checkpoints fell at epochs
+  // 7-9, so a shorter schedule would report a different recipe.
+  //
+  // LR PAIR {5e-5, 1e-4}: the 1B rate and half of it, for the reason in `061`.
+  // Nothing above 1e-4 — at 1B, 3e-4 cost the HIV graph arm 0.109 AUROC.
+  //
+  // WHY DDP HERE AND NOWHERE ELSE. The 1B cell ran 6.2 h on one B300; at the
+  // 2.8-4.2x 8B factor that is 17-26 h on one card. Four ranks at batch 4 x
+  // accum 2 consume the same 32 examples per optimizer step as `033`'s 4 x 8 on
+  // one card, and the step count divides by world size (`train.py`), so the
+  // schedule and the eval cadence are unchanged. ChEBI-20 at 8B scaled close to
+  // linearly from 2 to 4 ranks (8h05 -> 4h12), so expect ~4.5-7 h per cell.
+  //
+  // TIME 20 h, ~3x the upper estimate: a slow card, a cold compile on every rank
+  // and a doubled final eval all fit, and a timeout here would lose the run.
+  //
+  // MEMORY. The eval-loader worker leak behind HIV's old 125 GB peak is fixed
+  // (`dataloader_persistent_workers=False`); the same cell now peaks at 50.7 GB
+  // host per process. Four ranks plus 8B weight staging is ~250 GB, so 500G.
+  // GPU memory at 1B was 57.8 GB; the 8B prediction of 90-120 GB fits B200/B300.
+  //
+  // KNOWN WART. The molecules trainer has no rank-zero guard, so each cell writes
+  // two rows to `runs.jsonl` and runs its final evaluation twice. Checkpoints
+  // are clean. De-duplicate on `sweep_run` when aggregating.
+  //
+  // Requires `060`'s artifacts.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/062_prop_8b_hiv.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "062_prop_8b_hiv",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "cpus": 32,
+      "mem": "500G",
+      "time": "20:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+
+  "lr": [5e-5, 1e-4],
+
+  "task": "hiv",
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+  "bias_lr": 1e-2,
+  "seed": 1,
+  "data_seed": 0,
+  "question_node": "on",
+
+  "num_epochs": 10,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 2,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

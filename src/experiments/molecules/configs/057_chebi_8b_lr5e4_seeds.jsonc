@@ -1,0 +1,68 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 057 — 055's lr 5e-4 cell at seeds 1 and 2. 2 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // With the left-padding fix in `generate.py`, 055's seed-0 val BLEU-2 put
+  // 5e-4 at 0.5863 against 3e-4 at 0.5666 — a gap of 0.0197, just under the
+  // ~0.02 tie line 055 fixed in advance, while the three 3e-4 seeds themselves
+  // spread by sd 0.010 on val. One seed cannot separate the two rates, so 5e-4
+  // gets seeds 1 and 2 and the lr is then chosen on three-seed val means.
+  // Everything else is 055's recipe; seed 0 is 055's 0001_lr0.0005_seed0.
+  //
+  // 8 CPUs and num_workers 1 instead of 055's 16 and 3: on 2026-09-24 every
+  // B200/B300 node had idle cards but no free CPUs, so the request has to fit
+  // the first 8-CPU gap. Loader workers do not touch the sample order (the
+  // shuffle is drawn in the main process), so this changes throughput only.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "057_chebi_8b_lr5e4_seeds",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "cpus": 8,
+      "mem": "160G",
+      "time": "05:30:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-4, "bias_lr": 5e-3, "seed": 1 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-4, "bias_lr": 5e-3, "seed": 2 }
+  ],
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 1,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

@@ -1,0 +1,74 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 063 — `062`'s lr 1e-4 HIV cell again, on a different node (2026-09-26).
+  // Recipe identical to `062` cell 0001 in every field; only placement and the
+  // compile cache move.
+  //
+  // WHY. `062`'s lr 1e-4 cell (job 171938_1, ixb4) runs at ~2.4 s/step against
+  // ~1.1 s/step for its lr 5e-5 twin on ixb2. It is not compiling — its autotune
+  // count is flat — and the GPUs do not report throttling. One rank sits at 100%
+  // CPU with 4x the CPU time of the other three, which idle at ~40% GPU
+  // waiting on it at every allreduce; on ixb2 all four ranks are balanced. At that
+  // pace the cell finishes ~8 h after launch. The molecules trainer has no
+  // resume path, so this is a fresh start that runs alongside 171938_1; whichever
+  // finishes first is kept and the other is cancelled.
+  //
+  // PLACEMENT. ixb4 excluded. The only Blackwell node with four free cards when
+  // this was written was ixb1 (reboot requested but not draining).
+  //
+  // CACHE. `inductor_cache` points at `062` cell 0000's per-job cache, which
+  // already holds every flex shape HIV touches, so this cell starts warm instead
+  // of paying ~90 autotunes. Kernels do not depend on the learning rate.
+  //
+  // TIME 12 h, ~3.5x the ~3.3 h expected at the healthy cell's pace.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/063_prop_8b_hiv_lr1e4_rerun.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "063_prop_8b_hiv_lr1e4_rerun",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "exclude": "ixb4",
+      "cpus": 32,
+      "mem": "500G",
+      "time": "12:00:00",
+      "inductor_cache": "/shared/workspace/povejmo/graph_model/.inductor_cache/062_prop_8b_hiv_0000_lr5e-05",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+
+  "lr": 1e-4,
+
+  "task": "hiv",
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+  "bias_lr": 1e-2,
+  "seed": 1,
+  "data_seed": 0,
+  "question_node": "on",
+
+  "num_epochs": 10,
+  "eval_steps": 200,
+  "batch_size": 4,
+  "accumulation_steps": 2,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

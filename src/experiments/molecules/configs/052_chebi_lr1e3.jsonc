@@ -1,0 +1,105 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 052 — THE TOP OF THE LEARNING-RATE AXIS, lr 1e-3. 3 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHERE THE AXIS STANDS ──────────────────────────────────────────────────
+  //
+  // Test BLEU-2, published protocol, benchmark denominator, last checkpoint:
+  //
+  //     2e-4   0.4512 +-0.0012   SEM +-0.0008   (048, 2 seeds)
+  //     3e-4   0.4545 +-0.0189   SEM +-0.0109   (051, 3 seeds)
+  //     5e-4   0.4686 +-0.0215   SEM +-0.0124   (049+050, 3 seeds)
+  //
+  // The rise from 2e-4 to 5e-4 is +0.0174 against a combined standard error of
+  // ~0.0124 — about 1.4 sigma, a trend rather than a result. On val the ordering
+  // is not even monotone: 0.4757, 0.4756, 0.4872, with 3e-4 landing on top of
+  // 2e-4 instead of between its neighbours. So this is two points that agree and
+  // one that is higher, with overlapping bars.
+  //
+  // 1e-3 is worth spending 18 GPU-hours on anyway. It is a 2x step, and the last
+  // 2.5x step paid; LoRA at r16 updates a small enough fraction that 1e-3 is the
+  // top of the ordinary adapter range rather than past it; and `bias_lr` has been
+  // sitting at 5e-3 throughout without trouble, so the structural bias tables
+  // tolerate an order of magnitude more than the backbone adapters do. It is also
+  // the last point on the only axis in this campaign that has paid every time it
+  // was pushed.
+  //
+  // ── WHAT "TOO MUCH" WOULD LOOK LIKE, DECIDED BEFORE THE RUN ────────────────
+  //
+  // 5e-4's spread is not smooth noise: seeds 0 and 2 land within 0.0003 of each
+  // other and seed 1 sits 0.037 below both. That is a discrete early-training
+  // event, and those do not scale gently — the mean holds until the bad mode
+  // becomes common, then the cell breaks rather than drifting. Two readings
+  // settle it, and both are fixed here in advance so the outcome is legible
+  // either way:
+  //
+  //   * the low mode takes the majority — 2 of 3 seeds in it; or
+  //   * eval loss turns upward before step 2,800, where all three 5e-4 seeds
+  //     turned.
+  //
+  // Either one means the edge is found, 5e-4 is the answer, and the lr axis is
+  // closed. A higher mean with a wider spread is not a failure: the obligation is
+  // an honest mean with an honest sd over enough seeds, not a low-variance
+  // operating point.
+  //
+  // ── ONE AXIS MOVES ─────────────────────────────────────────────────────────
+  //
+  // `bias_lr` stays at 5e-3 and does NOT scale with lr — `048` screened that axis
+  // and its low end won, so raising it alongside would confound the one thing
+  // being measured. Twelve epochs, cosine, last checkpoint, no dev selection,
+  // three seeds. Four cards with `accumulation_steps` 4, so an optimizer step is
+  // still 4 x 4 x 4 = 64 examples and the run is still 4,884 steps on the same
+  // checkpoint grid. Val and test scoring and the published-protocol rescore are
+  // chained onto the training array.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "052_chebi_lr1e3",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "cpus": 16,
+      "mem": "256G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 1e-3, "bias_lr": 5e-3 }
+  ],
+  "seed": [0, 1, 2],
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

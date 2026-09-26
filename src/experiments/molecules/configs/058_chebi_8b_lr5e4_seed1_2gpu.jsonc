@@ -1,0 +1,64 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 058 — 057's seed-1 cell (lr 5e-4), on 2 cards instead of 4. 1 run.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // On 2026-09-25 the 057 array sat pending with an estimated start of
+  // 2026-09-30: every B200/B300 node with idle cards had all of its CPUs
+  // allocated to CPU-only jobs, so no 4-card request could land anywhere. The
+  // only pair of cards with CPUs beside it was the one 056 was about to free on
+  // ixb1. This cell takes that pair the way 056 did — accumulation 8, so an
+  // optimizer step stays 2 x 4 x 8 = 64 examples and the run stays at 4,884
+  // steps on the same schedule; 056 measured ~8 h of wall time for that on two
+  // B200s. It is 057's 0000_seed1 in every other respect, and 057 keeps only
+  // its seed-2 task.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "058_chebi_8b_lr5e4_seed1_2gpu",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "160G",
+      "time": "10:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-4, "bias_lr": 5e-3, "seed": 1 }
+  ],
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 1,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

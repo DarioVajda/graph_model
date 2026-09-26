@@ -1,0 +1,53 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 060 — Llama-3.1-8B graph artifacts for BACE, BBBP and HIV (2026-09-26).
+  // No training. The graph-arm subset of `034`'s 8B half: three builds, one per
+  // dataset, feeding `061` (BACE/BBBP) and `062` (HIV).
+  //
+  // `model_name` is in the cache key, so the 1B artifacts are not reused even
+  // though the tokenizer is shared (`034`'s header has the reasoning). The 8B
+  // weights are already in the HF cache from the ChEBI-20 8B runs.
+  //
+  // COST: HIV graph `rich_levi` took 13m10s at 1B and dominates; BACE and BBBP
+  // are ~27x smaller. `max_spd` 32 matches `033`, the 1B graph leg these runs
+  // are compared against.
+  //
+  // HARDWARE. B200/B300 only, unlike `034`'s wide list. Slurm lands a wide list
+  // on the slowest free card, and here the training runs wait on this build, so
+  // the fastest CPUs are worth more than leaving Blackwell cards free.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/060_prop_8b_prep.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "060_prop_8b_prep",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "96G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+  "model_name": "meta-llama/Llama-3.1-8B",
+
+  "task": ["bace", "bbbp", "hiv"],
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+
+  "question_node": "on",
+  "seed": 0,
+  "data_seed": 0,
+  "max_spd": 32
+}

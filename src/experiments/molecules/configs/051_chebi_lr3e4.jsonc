@@ -1,0 +1,101 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 051 — THE INTERIOR LEARNING RATE, lr 3e-4. 3 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHY AN INTERIOR POINT ──────────────────────────────────────────────────
+  //
+  // The lr axis now reads, on val (n=1500, last checkpoint, BLEU-2):
+  //
+  //     5e-5   0.4120 +-0.0050   (048, 2 seeds)
+  //     2e-4   0.4757 +-0.0033   (048, 2 seeds)
+  //     5e-4   0.4872 +-0.0193   (049+050, 3 seeds)
+  //
+  // 5e-4 has the better mean on all four metrics, and it is the level the table
+  // wants. What it does not have is a reproducible one: its three seeds are
+  // {0.4974, 0.4650, 0.4993} on val and {0.4812, 0.4438, 0.4809} on test, two
+  // tight readings and one draw ~0.037 below both. 2e-4 at +-0.0012 on test has
+  // no such tail. So the choice as it stands is between a higher mean I cannot
+  // reproduce and a lower one I can.
+  //
+  // 3e-4 is the direct test of whether that is a real trade or an artefact of
+  // overshooting: if the level is carried by the learning rate and the tail is
+  // an instability that sets in somewhere above 2e-4, the interior point keeps
+  // most of the former without the latter. The low draw is worth attacking
+  // rather than averaging over, because it is not small — it is the whole
+  // difference between clearing InstructMol-GS and not.
+  //
+  // The tail also looks like an early-training event, which is what makes an lr
+  // change the right instrument: the low seed's eval loss is worse than both
+  // others at the FIRST checkpoint after warmup (700: 0.6689 vs 0.6655, 0.6591)
+  // and the gap never closes. Nothing that happens after step 2,800 — where all
+  // three turn upward in teacher-forced loss — explains it.
+  //
+  // ── ONE AXIS MOVES ─────────────────────────────────────────────────────────
+  //
+  // `bias_lr` stays at 5e-3, which beat 2e-2 at lr 2e-4 in `048`, so this cell
+  // differs from `049`/`050` in the learning rate and nothing else. Twelve
+  // epochs, cosine, last checkpoint, no dev selection: the extension to 16
+  // epochs is a separate question and is not folded in here, because a cell that
+  // moved both would answer neither.
+  //
+  // Three seeds, matching the spread every other cell in the campaign carries.
+  // Four cards with `accumulation_steps` 4, so an optimizer step is still
+  // 4 x 4 x 4 = 64 examples and the run is still 4,884 steps on the same
+  // checkpoint grid. Measured cost at this shape is ~1h30m a seed; all three run
+  // concurrently. Val and test scoring and the published-protocol rescore are
+  // chained onto the training array.
+  //
+  // The comparison against 2e-4 and 5e-4 is a VAL decision. Test is reported for
+  // whichever cell val picks; it does not pick it.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "051_chebi_lr3e4",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 3,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "cpus": 16,
+      "mem": "256G",
+      "time": "04:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 3e-4, "bias_lr": 5e-3 }
+  ],
+  "seed": [0, 1, 2],
+
+  "model_name": "meta-llama/Llama-3.2-1B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

@@ -1,0 +1,109 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 055 — CHEBI-20 AT 8B: lr {1e-4, 3e-4, 5e-4} at seed 0, plus seeds 1 and 2
+  // at 3e-4. 5 runs.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // ── WHY 8B, AND WHY ONLY HERE ──────────────────────────────────────────────
+  //
+  // On KGQA the 8B base bought +4.0 F1 over 1B, and the gain sat in free
+  // generation. ChEBI-20 captioning is the only molecule benchmark that is free
+  // generation; the property sets answer in one teacher-forced token, where a
+  // larger backbone has much less room. The 1B headline (049+050, lr 5e-4) is at
+  // parity with InstructMol-G (7B) — test BLEU-2 0.4686 +-0.0215 against 0.466 —
+  // so a backbone of matching size is the obvious next comparison.
+  //
+  // ── THE LR AXIS, FROM WEBQSP AT 8B ─────────────────────────────────────────
+  //
+  // WebQSP at 8B (kgqa 044-052) moved the optimum in a rank-dependent way:
+  //
+  //   * at lora_r 64, 8B wanted half the 1B rate — 5e-5 beat 1e-4 by +1.1 test
+  //     F1, both seeds of one above both of the other;
+  //   * at lora_r 16, which is this recipe's rank, the 1B rate carried over —
+  //     1e-4 at r16 gave 77.80, and dropping to 5e-5 at r16 cost ~1 F1 (76.83).
+  //
+  // So the 1B optimum, 5e-4, is a live candidate here, and the rank-64 rule puts
+  // the other one near half of it. The axis brackets both: 5e-4 (1B optimum),
+  // 3e-4 (the halving rule, rounded onto the 1B grid, where 3e-4 tied 2e-4 on val
+  // and led it on test), and 1e-4 as the floor. 1e-3 was already unstable at 1B
+  // (+-0.052), so nothing above 5e-4 is worth a window at 8B.
+  //
+  // ── SEEDS ──────────────────────────────────────────────────────────────────
+  //
+  // Seeds 1 and 2 go only at 3e-4, the middle of the bracket and the prior
+  // favourite, and are queued behind the three seed-0 runs. If val puts 3e-4 on
+  // top, the three-seed headline lands in one training window; if it puts 1e-4
+  // or 5e-4 on top, that lr gets seeds 1 and 2 in a follow-up and the 3e-4 seeds
+  // stay as a scaling-row sanity check. `bias_lr` stays at 5e-3, where 048 put it.
+  //
+  // Selection follows the 1B rule: lr on val BLEU-2 (1,500 rows, last checkpoint),
+  // test reported only for that lr, published protocol, benchmark denominator
+  // (3,300; the 39 over-cap molecules count as empty predictions). Seed-0 val is
+  // a one-seed read; at 1B the seed sd was ~0.02 BLEU-2, so a val gap under that
+  // does not separate two lrs and the tie goes to 3e-4, which already has seeds.
+  //
+  // ── RECIPE ─────────────────────────────────────────────────────────────────
+  //
+  // Identical to the 1B headline except the backbone and lr: twelve epochs,
+  // cosine, last checkpoint, 4 cards x micro-batch 4 x accumulation 4 = 64
+  // examples per step, 4,884 steps. The trainer has no resume, so the 16 h limit
+  // covers a whole run with margin (~4.2x the 1B's 1.5 h, plus compile). Val and
+  // test scoring and the published-protocol rescore are chained onto the array.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "055_chebi_8b_lr_screen",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 5,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 4,
+      "cpus": 16,
+      "mem": "256G",
+      "time": "16:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 3e-4, "bias_lr": 5e-3, "seed": 0 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-4, "bias_lr": 5e-3, "seed": 0 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 1e-4, "bias_lr": 5e-3, "seed": 0 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 3e-4, "bias_lr": 5e-3, "seed": 1 },
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 3e-4, "bias_lr": 5e-3, "seed": 2 }
+  ],
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 4,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

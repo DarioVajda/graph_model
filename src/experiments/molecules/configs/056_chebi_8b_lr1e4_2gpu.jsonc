@@ -1,0 +1,63 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 056 — 055's lr 1e-4 seed-0 cell, on 2 cards instead of 4. 1 run.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // The B200 nodes had free cards only in twos and threes, so no 4-card cell
+  // could start while the 055 array waited for a whole B300 node. This cell
+  // moved to 2 cards with accumulation 8, which keeps an optimizer step at
+  // 2 x 4 x 8 = 64 examples and the run at 4,884 steps on the same schedule;
+  // only the wall time roughly doubles, hence the 24 h limit. It is 055's
+  // 0002_lr0.0001_seed0 in every other respect, and it is the lr least likely
+  // to win, so the cell that most likely carries the headline (3e-4) kept the
+  // 4-card slot.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "056_chebi_8b_lr1e4_2gpu",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200"],
+      "gpus_per_config": 2,
+      "cpus": 8,
+      "mem": "192G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 1e-4, "bias_lr": 5e-3, "seed": 0 }
+  ],
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

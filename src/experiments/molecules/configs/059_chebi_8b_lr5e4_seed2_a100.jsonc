@@ -1,0 +1,78 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 059 — 057's seed-2 cell (lr 5e-4), on four A100 40 GB cards. 1 run.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // On 2026-09-25 every B200/B300 and H100 card that was idle sat on a node
+  // with no free CPUs, and the queue put 057's start at 2026-09-30. The one
+  // node with idle cards AND CPUs beside them was axa: eight A100 40 GB cards
+  // and four free CPUs. Hence 4 CPUs and num_workers 0 (the shuffle is drawn in
+  // the main process, so this changes throughput only).
+  //
+  // Micro-batch 2 with accumulation 8, not 4 x 4: the 8B's training peak on a
+  // 40 GB card is unmeasured, and the cap-128 structural bias is what OOMed
+  // generation at 40 GB before. An optimizer step stays 4 x 2 x 8 = 64
+  // examples and the run stays at 4,884 steps on the same schedule.
+  //
+  // Gradient checkpointing on. Without it the first forward at micro-batch 2
+  // OOMed each 40 GB card (one extra GiB asked with 0.7 free). Recomputing
+  // activations changes the wall time, not the gradients. It is 057's
+  // 0001_seed2 in every other respect.
+  //
+  // Cancelled at step 29 (~12 s/step, ~16 h projected): 057's own B200 task
+  // started at 04:05 GMT+2 on the original recipe. No result comes from here;
+  // what stays is the two train.py fixes it forced (per-rank set_device before
+  // the model is built, non-reentrant checkpointing under LoRA) and the
+  // measurement that the 8B trains in ~23-26 GB per card at micro-batch 2 with
+  // checkpointing on.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "059_chebi_8b_lr5e4_seed2_a100",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["A100"],
+      "gpus_per_config": 4,
+      "cpus": 4,
+      "mem": "160G",
+      "time": "24:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "task": "chebi20",
+  "arm_recipe": [
+    { "arm": "graph", "bias": "spd+magnetic", "encoding": "rich_levi",
+      "lr": 5e-4, "bias_lr": 5e-3, "seed": 2 }
+  ],
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "data_seed": 0,
+  "question_node": "on",
+  "num_epochs": 12,
+  "lr_schedule": "cosine",
+  "eval_steps": 700,
+  "batch_size": 2,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 0,
+  "gradient_checkpointing": true,
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}

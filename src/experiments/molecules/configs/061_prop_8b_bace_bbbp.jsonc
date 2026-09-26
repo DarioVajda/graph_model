@@ -1,0 +1,82 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 061 — BACE and BBBP graph arm on Llama-3.1-8B, two learning rates each
+  // (2026-09-26). Four cells, one seed, one GPU each. HIV is `062`.
+  //
+  // This is not `039`'s ladder: graph arm only, no flat arm, one seed, and a
+  // two-point lr pair instead of `037`'s screen. It answers one question — what
+  // the property-prediction graph arm scores at 8B — and does not settle the
+  // graph-vs-flat comparison at 8B.
+  //
+  // RECIPE. `033`'s graph cells verbatim (rich_levi, spd+magnetic, max_spd 32,
+  // bias_lr 1e-2, lora_r 16, lora_dropout 0.05, batch 4 x accum 8, question node
+  // on, 40 epochs, eval every 50 steps), with only the backbone and lr moved.
+  // Seed 1 pairs each cell with `033`'s seed-1 cell at 1B.
+  //
+  // LR PAIR {1.5e-4, 3e-4}: the 1B rate and half of it. Both earlier 8B moves
+  // in this repo landed on half the 1B rate — KGQA 1e-4 -> 5e-5, ChEBI-20
+  // 1e-3 -> 5e-4 — and on both the next rate down lost, so the pair does not go
+  // below 1B/2.
+  //
+  // TIME. At 1B these cells ran 45-68 min on one card. ChEBI-20 measured the 8B
+  // at 2.8x the 1B wall clock on the same hardware; `039` assumed 4.2x. That puts
+  // BBBP, the longer of the two, at 3.0-4.5 h. `time` 12 h is ~2.7x the upper
+  // estimate, so a slow card or a cold compile cache cannot kill a run.
+  //
+  // HARDWARE. B200/B300. GPU memory at 1B was 21 GB for these cells, so 8B fits
+  // either card with room to spare.
+  //
+  // Requires `060`'s artifacts.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/061_prop_8b_bace_bbbp.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "061_prop_8b_bace_bbbp",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 4,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 4,
+      "mem": "128G",
+      "time": "12:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+
+  "cell": [
+    { "task": "bace", "lr": 1.5e-4 },
+    { "task": "bace", "lr": 3e-4 },
+    { "task": "bbbp", "lr": 1.5e-4 },
+    { "task": "bbbp", "lr": 3e-4 }
+  ],
+
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+  "bias_lr": 1e-2,
+  "seed": 1,
+  "data_seed": 0,
+  "question_node": "on",
+
+  "num_epochs": 40,
+  "eval_steps": 50,
+  "batch_size": 4,
+  "accumulation_steps": 8,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

@@ -1,0 +1,74 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // 064 — score the 8B HIV best checkpoints on test (2026-09-26). `--mode eval`,
+  // no training.
+  //
+  // WHY. `062`'s lr 5e-5 cell (job 171938_0) trained all 10,280 steps and then
+  // died in `_load_best_model`: reloading the LoRA adapter at the end of
+  // training hit `CUDA error: out of memory` on every rank, because the caching
+  // allocator was still holding ~177 GB of the B200's memory from training. The
+  // run wrote no record. The checkpoints are complete on disk, and
+  // `trainer_state.json` names the best one (checkpoint-9400, val AUROC 0.8443),
+  // so the result is recoverable without retraining. `063` (lr 1e-4, job
+  // 171946) ran the same code and did not hit the OOM (peak 169 GB); it wrote
+  // its own record, so it has no cell here.
+  //
+  // WHAT THIS MEASURES. `evaluate_checkpoint.py` reloads through
+  // `GTLMLlamaForCausalLM.from_pretrained`, which restores the adapter and
+  // `bias_parameters.pt`, and recomputes test AUROC from the per-example
+  // scores. That is the number the training run would have logged as its
+  // headline: test AUROC at the best-val checkpoint. There is no recorded
+  // accuracy to check the reload against, so the reload check reports
+  // unverified; the val AUROC in `trainer_state.json` is the cross-check.
+  //
+  // One card, fresh process, so the OOM that killed training cannot recur.
+  //
+  //   python3 -m sweep src.experiments.molecules src/experiments/molecules/configs/064_prop_8b_hiv_eval.jsonc
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "name": "064_prop_8b_hiv_eval",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 2,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "03:00:00",
+      "inductor_cache": "/shared/workspace/povejmo/graph_model/.inductor_cache/062_prop_8b_hiv_0000_lr5e-05",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "eval",
+  "model_name": "meta-llama/Llama-3.1-8B",
+
+  "cell": [
+    { "checkpoint": "/shared/workspace/povejmo/graph_model/checkpoints/062_prop_8b_hiv_0000_lr5e-05/checkpoint-9400",
+      "lr": 5e-5 }
+  ],
+
+  "task": "hiv",
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+  "bias_lr": 1e-2,
+  "seed": 1,
+  "data_seed": 0,
+  "question_node": "on",
+
+  "batch_size": 4,
+  "lora": true,
+  "lora_r": 16,
+  "num_workers": 3,
+
+  "impl": "v2-flex",
+  "flex_compile_mode": "max-autotune-no-cudagraphs",
+  "max_spd": 32
+}

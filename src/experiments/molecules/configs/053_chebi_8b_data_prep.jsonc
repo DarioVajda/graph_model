@@ -1,0 +1,52 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // 053 — CHEBI-20 GRAPH CACHE FOR LLAMA-3.1-8B. Data prep only, 1 job.
+  //
+  //   python3 -m sweep src.experiments.molecules <this file>
+  //
+  // The model name is part of the dataset cache key, so the 8B runs (054, 055)
+  // need their own build even though the Llama-3 tokenizer is shared with the
+  // 1B. Same build as the 1B headline cells: own split, eos-terminated captions,
+  // 128-heavy-atom cap, disconnected molecules kept, rich_levi. Building it once
+  // here keeps the parallel training array from racing on the cache lock. The
+  // 1B build took ~10 min.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "053_chebi_8b_data_prep",
+  "results_dir": "src/experiments/molecules/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": ["L4", "A100", "H100", "B200", "B300"],
+      "gpus_per_config": 1,
+      "cpus": 8,
+      "mem": "128G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "mode": "data_prep",
+  "task": "chebi20",
+  "arm": "graph",
+  "bias": "spd+magnetic",
+  "encoding": "rich_levi",
+
+  "model_name": "meta-llama/Llama-3.1-8B",
+  "prompt_style": "plain",
+
+  "chebi_heavy_atom_cap": 128,
+  "chebi_allow_disconnected": true,
+
+  "seed": 0,
+  "data_seed": 0,
+  "question_node": "on",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25
+}
