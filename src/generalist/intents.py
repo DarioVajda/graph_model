@@ -31,7 +31,7 @@ catches them is a filter discovering a build bug:
 import json
 import os
 
-from .assistant import Fact
+from .assistant import Fact, MOLECULE_LEVEL_PIVOT
 from .render import (OFF_SHEET_FAMILIES, TASKS, UNANSWERABLE_FAMILIES,
                      can_clarify, render)
 
@@ -246,14 +246,34 @@ def _draw_facts(sheet, task, rng):
                 return distinct[:min(high, len(distinct))]
         return []
 
-    pivot = pool[0]
+    # **The pivot's scope is drawn rather than inherited from the sheet.** A
+    # sheet carries several facts per sampled atom against a handful about the
+    # whole molecule, so it runs about 81 % atom-level, and a pivot taken off
+    # the shuffled pool inherits that: 74.9 % of the first set's rows were
+    # atom-level only against 20.1 % molecule-level. The first leg's case study
+    # then answered every atom-level question correctly and most molecule-level
+    # ones wrongly, which is the same split read twice. `compare` and `triage`
+    # are exempt because they are defined over atoms and return above.
+    molecule_level = [f for f in pool if not f.atoms]
+    atom_level = [f for f in pool if f.atoms]
+    scoped = pool
+    if molecule_level and atom_level:
+        scoped = (molecule_level if rng.random() < MOLECULE_LEVEL_PIVOT
+                  else atom_level)
+
+    pivot = scoped[0]
     if task == "decide":
         # A `decide` verdict is a predicate over the pivot's value, and the only
         # values there are predicates for are a yes/no and a count. Drawn on a
         # SMILES or a caption the constraint degenerates to "I need that on
         # file" and the verdict is yes every time, which is a cell with one
         # answer in it.
-        scalar = [f for f in pool if f.kind in ("yesno", "count")]
+        scalar = [f for f in scoped if f.kind in ("yesno", "count")]
+        if not scalar:
+            # The drawn scope holds no predicate to build a constraint over, so
+            # take one from the other rather than dropping the intent: a scope
+            # balance is worth less than the cell it would empty.
+            scalar = [f for f in pool if f.kind in ("yesno", "count")]
         if not scalar:
             return []
         pivot = scalar[0]

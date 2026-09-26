@@ -10,13 +10,15 @@ nothing.
 
 from __future__ import annotations
 
+import collections
 import random
 
 import pytest
 from rdkit import Chem
 
 from src.generalist.assistant import (
-    Fact, LEAKY_FORMS, SHOT_COUNTS, SHOT_FRACTION, answer_invents_atom,
+    Fact, LEAKY_FORMS, SHOT_COUNTS, SHOT_FRACTION, _subject_of,
+    answer_invents_atom,
     brief_key, claims_connectivity, demo_leaks_target, draw_brief,
     question_leaks, question_widens_scope,
     draw_shot_count, fact_polarity, fact_sheet, facts_contained, format_met,
@@ -78,6 +80,65 @@ class TestFactSheet:
         smiles = [f for f in facts if f.family == "smiles"][0]
         assert "@" not in smiles.value
         assert Chem.CanonSmiles(smiles.value) == smiles.value
+
+    def test_fg_presence_carries_both_polarities(self):
+        """The defect that cost the first assistant leg its grounding: emitting
+        `fg_presence` for absent groups only made the family's value a constant,
+        the set stated "it contains no X" 1,180 times and "it contains an X"
+        never, and the model learned to answer no to every group question while
+        scoring 0.994 on the same question in its own validator."""
+        seen = set()
+        for i, smiles in enumerate((ASPIRIN, CAFFEINE, "CCOCC", "N#CCNCC#N")):
+            for fact in fact_sheet(_mol(smiles), rng=random.Random(i)):
+                if fact.family == "fg_presence":
+                    seen.add(fact.value)
+        assert seen == {"yes", "no"}
+
+    def test_a_positive_fg_presence_states_the_group_it_found(self):
+        """The article is load-bearing — the sentence goes to the writer, and
+        into a false premise verbatim through `render._negate`."""
+        facts = [f for f in fact_sheet(_mol("CCOCC"), rng=random.Random(0))
+                 if f.family == "fg_presence" and f.value == "yes"]
+        assert facts, "diethyl ether contains an ether"
+        fact = facts[0]
+        assert fact.text == "It contains an ether."
+        # Every downstream reader has to find the group, not the clause.
+        assert _subject_of(fact) == "ether"
+
+    def test_a_positive_fg_presence_does_not_license_the_wide_negative(self):
+        """`ungrounded_claims` exempts a group from the widening check when the
+        sheet holds a molecule-level fact about it. Only the *negative* form is
+        that licence: matching on the family alone would wave through "contains
+        no ether" for a molecule whose sheet says it has one."""
+        facts = [Fact("fg_presence", "It contains an ether.", "yes", "yesno"),
+                 Fact("fg_atom_membership", "atom 3 (C) is not part of an "
+                      "ether.", "no", "yesno", atoms=[3])]
+        assert ungrounded_claims("The molecule contains no ether.", facts)
+
+    def test_the_atom_level_group_is_drawn_not_taken_in_dict_order(self):
+        """`for name in present: ... break` took `present[0]`, so which group an
+        atom-level question asked about was a function of `FUNCTIONAL_GROUPS`'
+        declaration order rather than of the molecule: 53 % of the first set's
+        3,889 such facts were about hydroxyl or ether, and sulfonamide got
+        0.8 %."""
+        paracetamol = "CC(=O)Nc1ccc(O)cc1"       # an amide and a hydroxyl
+        asked = set()
+        for seed in range(30):
+            for fact in fact_sheet(_mol(paracetamol), rng=random.Random(seed)):
+                if fact.family == "fg_atom_membership":
+                    asked.add(_subject_of(fact))
+        assert len(asked) > 1, f"only ever asked about {asked}"
+
+    def test_atom_level_group_membership_is_not_almost_always_no(self):
+        """The same line held the family at a yes-rate of 0.149, because a
+        randomly drawn atom is rarely inside one particular group."""
+        values = collections.Counter()
+        for seed in range(40):
+            for fact in fact_sheet(_mol("CC(=O)Nc1ccc(O)cc1"),
+                                   rng=random.Random(seed)):
+                if fact.family == "fg_atom_membership":
+                    values[fact.value] += 1
+        assert values["yes"] and values["no"]
 
     def test_atom_facts_number_atoms_the_way_the_questions_do(self):
         """Tier-A asks about "atom 14", 1-based. A sheet that numbered from zero

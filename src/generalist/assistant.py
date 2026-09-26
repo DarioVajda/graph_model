@@ -211,17 +211,33 @@ def fact_sheet(mol, *, rng: random.Random, tier_b=(), caption: str = "",
                           f"{assigned} stereocenter(s) have a defined "
                           "configuration.", assigned, "count"))
 
-    # Functional groups: every group it contains, with its count, and two it does
-    # not — a set written only from present groups teaches a model that the
-    # answer to "does it contain X" is always yes.
+    # Functional groups: every group it contains, with its count, and then
+    # `fg_presence` drawn from both sides.
+    #
+    # **Both sides is the whole point, and taking only the absent ones is how
+    # this went wrong the first time.** The guard against "the answer to 'does
+    # it contain X' is always yes" was written by emitting `fg_presence` for
+    # absent groups only — which inverted the bias rather than removing it and
+    # made the family's value a constant. Measured on the set that built:
+    # 1,180 `fg_presence` facts, yes-rate **0.000**, and a model that answers
+    # "no" to every functional-group question it is asked while scoring 0.994
+    # on the same question in its own validator. A family whose value never
+    # varies teaches its prior and nothing else, so draw up to two from each
+    # side and let the molecule decide how many there are to draw.
     present, absent = [], []
+    members_by_group = {}
     for name in FUNCTIONAL_GROUPS:
         matches = mol.GetSubstructMatches(_SMARTS[name])
+        members_by_group[name] = {i for match in matches for i in match}
         (present if matches else absent).append((name, len(matches)))
     for name, count in present:
         if count <= MAX_COUNT:
             facts.append(Fact("fg_count", f"It contains {count} {name}(s).",
                               count, "count"))
+    for name, _ in rng.sample(present, min(2, len(present))):
+        facts.append(Fact("fg_presence",
+                          f"It contains {_article(name)} {name}.", "yes",
+                          "yesno"))
     for name, _ in rng.sample(absent, min(2, len(absent))):
         facts.append(Fact("fg_presence", f"It contains no {name}.", "no",
                           "yesno"))
@@ -254,16 +270,25 @@ def fact_sheet(mol, *, rng: random.Random, tier_b=(), caption: str = "",
                     f"{smallest} atoms.")
             facts.append(Fact("ring_size", text, smallest, "count",
                               atoms=[idx + 1]))
-        for name, _count in present:
-            members = {i for match in mol.GetSubstructMatches(_SMARTS[name])
-                       for i in match}
-            member = idx in members
+        # One group per atom is enough, but *which* group has to be drawn rather
+        # than taken. Taking `present[0]` made the choice a function of
+        # `FUNCTIONAL_GROUPS`' dict order: measured on the set that built, 53 %
+        # of 3,889 atom-level group facts asked about hydroxyl or ether, and
+        # nitrile and sulfonamide together came to 2.8 %. Drawing also fixes the
+        # family's polarity, which the same line held at a yes-rate of 0.149 —
+        # a random atom is rarely inside one particular group, so half the draws
+        # come from the groups that do contain this atom when any do.
+        if present:
+            covering = [name for name, _ in present if idx in members_by_group[name]]
+            pool = ([name for name in covering] if covering and rng.random() < 0.5
+                    else [name for name, _ in present])
+            name = rng.choice(pool)
+            member = idx in members_by_group[name]
             facts.append(Fact("fg_atom_membership",
                               f"{label} is {'part' if member else 'not part'} "
                               f"of {_article(name)} {name}.",
                               "yes" if member else "no", "yesno",
                               atoms=[idx + 1]))
-            break                        # one group per atom is enough
 
     smiles = canonical_smiles(mol)
     if smiles:
@@ -354,6 +379,22 @@ FACT_COUNTS = (1, 1, 1, 2, 2, 3)
 
 #: Formats whose answer is the fact's value and nothing else.
 TERSE_FORMATS = ("answer in one word", "start the answer with the number")
+
+#: How often an intent's pivot is a fact about the whole molecule rather than
+#: about a named atom. It is a statement about what the set teaches rather than
+#: a correction to it: "how many rings does this have" and "is atom 12
+#: aromatic" are different questions, and a set that is three-quarters the
+#: second teaches the second — which is what the first leg's case study found,
+#: every atom-level question answered and most molecule-level ones missed.
+#:
+#: **Not the same number as the split it produces.** `compare` and `triage` are
+#: defined over atoms and draw before this applies, so they hold the atom-level
+#: share up from underneath. Measured over the 9,491-molecule pool: 0.00 gives
+#: 97.4 % atom-level, 0.42 gives 65.6 / 30.7, and **0.55 gives 56.1 / 39.8**
+#: with 4.1 % carrying both, which is the 55 / 40 this is set for. The build
+#: itself came out at 55.9 / 40.3 / 3.8 over 11,900 intents, so the simulation
+#: is worth trusting. Re-measure rather than re-derive if the task weights move.
+MOLECULE_LEVEL_PIVOT = 0.55
 
 
 def draw_brief(rng: random.Random) -> dict:
@@ -891,6 +932,9 @@ def _subject_of(fact) -> str:
     match = re.search(r"contains no ([a-z ]+?)\.", text)
     if match:
         return match.group(1).strip()
+    match = re.search(r"contains an? ([a-z ]+?)\.", text)
+    if match:
+        return match.group(1).strip()
     match = re.search(r"^atom (\d+)", text)
     if match:
         return f"atom {match.group(1)}"
@@ -1131,8 +1175,14 @@ def ungrounded_claims(answer: str, facts) -> list:
     if _ATOM_PROPERTY_RE.search(text):
         found.append("atom index read as an atomic property")
 
+    # Only a *negative* `fg_presence` licenses the wide negative. Since the
+    # family carries both polarities, "it contains an ether" is a licence to say
+    # the molecule has one and emphatically not a licence to say it has none —
+    # matching on the family alone would exempt the group from this check in
+    # exactly the case where the wide claim is false.
     wide = {_subject_of(f) for f in facts
-            if _fact_field(f, "family") == "fg_presence"}
+            if _fact_field(f, "family") == "fg_presence"
+            and _fact_field(f, "value") == "no"}
     for fact in facts:
         if _fact_field(fact, "family") != "fg_atom_membership":
             continue

@@ -371,6 +371,11 @@ def _negate(fact) -> str:
             article = _article(group) if group else "a"
             return re.sub(r"\bcontains no\b", f"contains {article}", text,
                           count=1)
+        if re.search(r"\bcontains an?\b", text):
+            # The same family's positive form, and the article has to go with
+            # the verb: falling through to the bare `contains` branch below
+            # yields "contains no an ether".
+            return re.sub(r"\bcontains an?\b", "contains no", text, count=1)
         # A polarity carried by the verb rather than by a "not": the HIV family
         # reads "It shows no activity against HIV replication", and falling
         # through to the wrapper below turned its false premise into the double
