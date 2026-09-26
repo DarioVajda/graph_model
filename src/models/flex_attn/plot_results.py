@@ -188,8 +188,21 @@ def _smart_yticks(ax, fmt=None) -> None:
 
 # ── figure builder ────────────────────────────────────────────────────────────
 
-def _annotate_ratios(ax_t, ax_m, drawn: list) -> None:
-    """Annotate each non-flash point with its ratio vs flash.
+def _annotate_ratios(ax_t, ax_m, drawn: list, baseline: str = "flash") -> None:
+    """Annotate each series against ``baseline``.
+
+    ``baseline="flash"`` labels every other series with its cost *relative to*
+    the bias-free floor (>1 = more expensive than flash).
+
+    ``baseline="eager"`` labels flex with its *speedup over* the dense path
+    (>1 = flex faster) and leaves flash unlabelled. This is the right framing
+    whenever the claim is about replacing eager: flash cannot express the graph
+    bias at all, so it is a lower bound on what any kernel could cost, not a
+    target the graph-attention layer is failing to hit. Flash stays plotted —
+    the gap is still readable off the log axis — it just stops being the
+    yardstick the annotations assert. Past the point where the baseline runs
+    out of memory there is nothing to divide by, so that boundary is marked
+    instead.
 
     Annotations are placed to the right of the dot (same y as the data point),
     which naturally separates eager and flex since they have different y-values.
@@ -197,53 +210,104 @@ def _annotate_ratios(ax_t, ax_m, drawn: list) -> None:
     running off the right edge.  A faint white background keeps text readable
     when it crosses a line.
     """
-    flash_ms = flash_gb = None
+    # Speedup-over-the-dense-path framing, vs cost-relative-to-the-floor.
+    invert = baseline == "eager"
+    skip = {baseline, "flash"} if invert else {baseline}
+
+    base_ms = base_gb = None
     for label, x, ms, gb in drawn:
-        if label == "flash":
-            flash_ms = dict(zip(x.tolist(), ms.tolist()))
-            flash_gb = dict(zip(x.tolist(), gb.tolist()))
+        if label == baseline:
+            base_ms = dict(zip(x.tolist(), ms.tolist()))
+            base_gb = dict(zip(x.tolist(), gb.tolist()))
             break
-    if flash_ms is None:
+    if base_ms is None:
         return
 
     _bbox = dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.7)
 
     global_last_x = max(xi for _, x, _, _ in drawn for xi in x.tolist())
 
-    for label, x, ms, gb in drawn:
-        if label == "flash":
-            continue
-        color = _STYLE[label]["color"]
-        x_list, ms_list, gb_list = x.tolist(), ms.tolist(), gb.tolist()
-        series_last_xi = x_list[-1]
+    if invert:
+        # Labels sit on the BASELINE curve, not on ours. Two reasons: the set of
+        # annotations then matches that curve's extent exactly (past its last
+        # point there is no ratio left to report, which the OOM rule below says
+        # instead), and it keeps text off the flex and flash curves, which
+        # nearly coincide on the memory panel. The value is the baseline's cost
+        # relative to ours, so it reads as an attribute of the curve it labels.
+        target = next((d for d in drawn if d[0] not in skip), None)
+        if target is not None:
+            _, tx, tms, tgb = target
+            t_ms = dict(zip(tx.tolist(), tms.tolist()))
+            t_gb = dict(zip(tx.tolist(), tgb.tolist()))
+            color = _STYLE[baseline]["color"]
+            for xi in sorted(base_ms):
+                if t_ms.get(xi, 0) > 0:
+                    ax_t.annotate(
+                        f"{base_ms[xi] / t_ms[xi]:.1f}×",
+                        xy=(xi, base_ms[xi]), xytext=(5, 0),
+                        textcoords="offset points", fontsize=6.5, color=color,
+                        ha="left", va="center", bbox=_bbox, zorder=5,
+                    )
+                if t_gb.get(xi, 0) > 0:
+                    ax_m.annotate(
+                        f"{base_gb[xi] / t_gb[xi]:.1f}×",
+                        xy=(xi, base_gb[xi]), xytext=(5, 0),
+                        textcoords="offset points", fontsize=6.5, color=color,
+                        ha="left", va="center", bbox=_bbox, zorder=5,
+                    )
+    else:
+        for label, x, ms, gb in drawn:
+            if label in skip:
+                continue
+            color = _STYLE[label]["color"]
+            x_list, ms_list, gb_list = x.tolist(), ms.tolist(), gb.tolist()
+            series_last_xi = x_list[-1]
 
-        for xi, msi, gbi in zip(x_list, ms_list, gb_list):
-            # Flip to left only when the series reaches the rightmost x of the plot
-            flip = (xi == series_last_xi) and (xi == global_last_x)
-            x_off = -5 if flip else 5
-            ha    = "right" if flip else "left"
+            for xi, msi, gbi in zip(x_list, ms_list, gb_list):
+                # Flip to left only when the series reaches the rightmost x
+                flip = (xi == series_last_xi) and (xi == global_last_x)
+                x_off = -5 if flip else 5
+                ha    = "right" if flip else "left"
 
-            if xi in flash_ms and flash_ms[xi] > 0:
-                ax_t.annotate(
-                    f"{msi / flash_ms[xi]:.1f}×",
-                    xy=(xi, msi), xytext=(x_off, 0), textcoords="offset points",
-                    fontsize=6.5, color=color, ha=ha, va="center",
-                    bbox=_bbox, zorder=5,
-                )
-            if xi in flash_gb and flash_gb[xi] > 0:
-                ax_m.annotate(
-                    f"{gbi / flash_gb[xi]:.1f}×",
-                    xy=(xi, gbi), xytext=(x_off, 0), textcoords="offset points",
-                    fontsize=6.5, color=color, ha=ha, va="center",
-                    bbox=_bbox, zorder=5,
-                )
+                if base_ms.get(xi, 0) > 0:
+                    ax_t.annotate(
+                        f"{msi / base_ms[xi]:.1f}×",
+                        xy=(xi, msi), xytext=(x_off, 0),
+                        textcoords="offset points", fontsize=6.5, color=color,
+                        ha=ha, va="center", bbox=_bbox, zorder=5,
+                    )
+                if base_gb.get(xi, 0) > 0:
+                    ax_m.annotate(
+                        f"{gbi / base_gb[xi]:.1f}×",
+                        xy=(xi, gbi), xytext=(x_off, 0),
+                        textcoords="offset points", fontsize=6.5, color=color,
+                        ha=ha, va="center", bbox=_bbox, zorder=5,
+                    )
+        return
+
+    # Mark where the baseline stops: beyond it there is no ratio to report,
+    # which is itself the capability claim.
+    all_x = sorted({xi for _, x, _, _ in drawn for xi in x.tolist()})
+    base_last = max(base_ms)
+    nxt = next((v for v in all_x if v > base_last), None)
+    if nxt is None:
+        return
+    xline = (base_last * nxt) ** 0.5          # geometric midpoint on a log axis
+    for ax in (ax_t, ax_m):
+        ax.axvline(xline, color=_STYLE[baseline]["color"], ls=":", lw=1.0,
+                   alpha=0.6, zorder=1)
+    ax_t.annotate(
+        f"{baseline} OOM", xy=(xline, 1.0), xycoords=("data", "axes fraction"),
+        xytext=(3, -9), textcoords="offset points", fontsize=6.5,
+        color=_STYLE[baseline]["color"], ha="left", va="top",
+    )
 
 
 def _make_figure(
     rows: list[dict],
     series_spec: list[tuple[str, str, int]],  # (display_label, method, k_hop)
     out_path: str,
-    annotate_vs_flash: bool = False,
+    annotate_vs: str | None = None,   # "flash" | "eager"; see _annotate_ratios
 ) -> None:
     fig, (ax_t, ax_m) = plt.subplots(1, 2, figsize=(7.0, 2.6))
 
@@ -272,8 +336,8 @@ def _make_figure(
         ax_t.plot(x, ms, label=label, **kw)
         ax_m.plot(x, gb, **kw)
 
-    if annotate_vs_flash:
-        _annotate_ratios(ax_t, ax_m, drawn)
+    if annotate_vs:
+        _annotate_ratios(ax_t, ax_m, drawn, baseline=annotate_vs)
 
     ax_t.set_xlabel("Prefix sequence length (tokens)")
     ax_t.set_ylabel("Fwd+bwd latency")
@@ -322,9 +386,11 @@ def main(argv=None):
         rows = _load(jsonl)
         _make_figure(rows, _FOUR,
                      os.path.join(args.out_dir, f"fig_{kind}_all_methods"))
+        # Annotated against eager: this is the paper figure, and eager is the
+        # only functionally equivalent baseline (see _annotate_ratios).
         _make_figure(rows, _THREE,
                      os.path.join(args.out_dir, f"fig_{kind}_flex_k0"),
-                     annotate_vs_flash=True)
+                     annotate_vs="eager")
 
 
 if __name__ == "__main__":
