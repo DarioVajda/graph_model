@@ -3,7 +3,7 @@
 Step 5 of §9.4's order of work, and the only filter left that is not a decision
 procedure. Everything a pattern can decide with certainty — the anchors are
 named, the statements survive, the format brief is met — lives in
-`intent_accept.py`. What remains is two entailment questions:
+`accept.py`. What remains is two entailment questions:
 
 * **responsive** — does the reply answer the message that was actually sent, as
   opposed to a neighbouring question;
@@ -17,17 +17,20 @@ named, the statements survive, the format brief is met — lives in
 A 31B instruct model does these better than any pattern, and it is a different
 task in kind from writing, so its blind spots are not the writer's. It is still
 a filter, and **an unmeasured filter is the mistake this section has made four
-times** — so its verdicts do not count until `intent_calibrate.py` has scored
+times** — so its verdicts do not count until `analysis/calibrate.py` has scored
 them against 100 hand-read rows, and its precision and recall ship with the set.
 
     VENV_BIN=.venv_writer/bin CONTAINER=/shared/workspace/povejmo/containers/nemo_26.04.sqsh \
     GPU=1 GPU_CONSTRAINT='GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100' \
-    src/generalist/tools/run_py.sh -m src.generalist.tools.intent_judge \
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.judge \
         --model .../gemma-4-31B-it --batches .../v5 \
         --asks .../v5/ask --voiced .../v5/voice --out .../v5/judged
 
 Greedy, not sampled: a filter that gives a different verdict on a second reading
 of the same row cannot be calibrated on the first.
+
+The system prompt is the domain's `judge_system` (`--domain`, molecules by
+default); the four-line verdict format it asks for is parsed here.
 """
 
 import argparse
@@ -37,28 +40,7 @@ import os
 import re
 import sys
 
-JUDGE_SYSTEM = (
-    "You check one reply from a chemistry assistant. You are given the user's "
-    "message, the assistant's reply, and the list of statements the reply was "
-    "supposed to make. Judge only what is in front of you; do not use your own "
-    "chemistry knowledge to decide whether a statement is true.\n\n"
-    "Answer exactly four lines, in this order and this format:\n"
-    "RESPONSIVE: yes|no   — does the reply answer the message that was sent?\n"
-    "PRESERVED: yes|no    — is every statement still asserted, with the same "
-    "polarity and the same numbers? A statement reworded is preserved; a "
-    "statement dropped, negated, or attached to a different atom is not. Where "
-    "a DECISION or an EXPLANATION is given, it counts here too: a reply that "
-    "never gives it has not preserved it, and one that gives the opposite has "
-    "changed it.\n"
-    "ADDED: yes|no        — does the reply assert anything about this molecule "
-    "that the statements do not license? Say yes only for a claim about this "
-    "molecule. A definition of a general term, a restatement of the question, "
-    "a refusal to answer something, and the DECISION or EXPLANATION where one "
-    "is given are not additions.\n"
-    "NOTE: one short line saying why, naming the statement at fault if there is "
-    "one.\n\n"
-    "Nothing else. No preamble, no markdown."
-)
+from ..domain import get_domain
 
 _VERDICT = re.compile(r"^\s*(RESPONSIVE|PRESERVED|ADDED)\s*:\s*(yes|no)\b",
                       re.IGNORECASE | re.MULTILINE)
@@ -152,12 +134,16 @@ def main(argv=None) -> int:
     parser.add_argument("--group", type=int, default=16)
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--shards", type=int, default=1)
+    parser.add_argument("--domain", default=None,
+                        help="the assistant domain the batches were built for "
+                             "(default: molecules)")
     args = parser.parse_args(argv)
+    system = get_domain(args.domain).judge_system
 
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from .check_chat_template import gate
+    from ...tools.check_chat_template import gate
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     gate(tokenizer)
@@ -189,7 +175,7 @@ def main(argv=None) -> int:
         for start in range(0, len(examples), args.group):
             group = examples[start:start + args.group]
             prompts = [tokenizer.apply_chat_template(
-                [{"role": "system", "content": JUDGE_SYSTEM},
+                [{"role": "system", "content": system},
                  {"role": "user", "content": judge_prompt(
                      e, turns[e["id"]], replies[e["id"]])}],
                 tokenize=False, add_generation_prompt=True) for e in group]
@@ -224,7 +210,7 @@ def main(argv=None) -> int:
     print(f"\n{counts['judged']} judged, {counts['unparsed']} unparsed")
     for key in ("responsive", "preserved", "added"):
         print(f"  {key:11} {counts[key]:6}  {counts[key] / total:.3f}")
-    print("\nThese rates mean nothing until intent_calibrate.py has scored the "
+    print("\nThese rates mean nothing until analysis/calibrate.py has scored the "
           "judge against hand labels.")
     return 0
 

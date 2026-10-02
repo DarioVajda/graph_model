@@ -15,11 +15,11 @@ the judge's own verdict is never in front of the reader while they label — it 
 in the sheet only under `--show-verdict`, which is for auditing a disagreement
 after the fact, not for labelling.
 
-    src/generalist/tools/run_py.sh -m src.generalist.tools.intent_calibrate \
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.calibrate \
         --mode sheet --batches .../v5 --asks .../v5/ask --voiced .../v5/voice \
         --judged .../v5/judged --out .../v5/calibration --n 100
 
-    src/generalist/tools/run_py.sh -m src.generalist.tools.intent_calibrate \
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.calibrate \
         --mode score --judged .../v5/judged \
         --labels .../v5/calibration/labels.jsonl
 

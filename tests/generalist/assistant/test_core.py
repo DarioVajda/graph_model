@@ -16,17 +16,23 @@ import random
 import pytest
 from rdkit import Chem
 
-from src.generalist.assistant import (
-    Fact, LEAKY_FORMS, SHOT_COUNTS, SHOT_FRACTION, _subject_of,
-    answer_invents_atom,
-    brief_key, claims_connectivity, demo_leaks_target, draw_brief,
+from src.generalist.assistant.facts import Fact, four_grams, jaccard
+from src.generalist.assistant.molecules.graphs import shot_molecules
+from src.generalist.assistant.molecules.sheet import (
+    endpoint_words, fact_sheet, mentions_held_out,
+)
+from src.generalist.assistant.molecules.verify import (
+    LEAKY_FORMS, _subject_of, answer_invents_atom,
+    brief_key, claims_connectivity, draw_brief,
     question_leaks, question_widens_scope,
-    draw_shot_count, fact_polarity, fact_sheet, facts_contained, format_met,
-    endpoint_words, four_grams, jaccard, json_key_misnames, mentions_held_out,
+    facts_contained, format_met, json_key_misnames,
     mentions_the_sheet, opener_contradicts, question_changes_subject,
-    question_mismatches_facts, question_text, select_facts,
-    shot_candidates, shot_molecules, shot_text, ungrounded_claims,
-    unsupported_claims, verify,
+    question_mismatches_facts, select_facts,
+    ungrounded_claims, unsupported_claims, verify,
+)
+from src.generalist.assistant.shots import (
+    SHOT_COUNTS, SHOT_FRACTION, demo_leaks_target, draw_shot_count,
+    fact_polarity, question_text, shot_candidates, shot_text,
 )
 
 ASPIRIN = "CC(=O)Oc1ccccc1C(=O)O"

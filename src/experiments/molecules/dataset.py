@@ -284,13 +284,14 @@ def build_assistant_example(mol, question, answer, named_atoms, shots, cfg,
       atom ("atom 20 (C) is in a ring") and an unlabelled graph leaves that
       reference pointing at nothing. Uniformly on rather than per row, so the
       set does not carry two atom-text conventions for the model to reconcile;
-    * ``named_atoms`` is whatever the caller passes — `assistant.named_atoms_for`
-      returns the drawn facts' atoms when *every* fact is atom-scoped, and
-      nothing when any of them is about the molecule.
+    * ``named_atoms`` is whatever the caller passes —
+      `assistant.molecules.graphs.named_atoms_for` returns the drawn facts'
+      atoms when *every* fact is atom-scoped, and nothing when any of them is
+      about the molecule.
     """
     import networkx as nx
 
-    from ...generalist.assistant import shot_text
+    from ...generalist.assistant.shots import shot_text
 
     graph = nx.DiGraph()
 

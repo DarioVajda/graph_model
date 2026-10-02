@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# intent_pipeline.sh — build the §9.4 assistant set, end to end.
+# assistant/pipeline/run.sh — build the §9.4 assistant set, end to end.
 # =============================================================================
 # Six stages in the order §9.4 fixes, because a change to an earlier one
 # invalidates everything written after it:
@@ -25,9 +25,12 @@
 # --out skips nothing: stages are cheap to redo and a half-written stage is the
 # one thing worth never trusting.
 #
-#   src/generalist/tools/intent_pipeline.sh --out src/generalist/results/assistant/v5 \
+#   src/generalist/assistant/pipeline/run.sh --out src/generalist/results/assistant/v5 \
 #       --n-train 11000 --n-test 900
-#   src/generalist/tools/intent_pipeline.sh --out .../v5 --from voice
+#   src/generalist/assistant/pipeline/run.sh --out .../v5 --from voice
+#
+# `--domain` names the assistant domain (`assistant/domain.py`) and goes to every
+# stage; it defaults to molecules, the only one registered so far.
 #
 # `--from` restarts at a named stage. The writer stages need a card that fits a
 # 31B model in bf16, which is why GPU_CONSTRAINT is set here and not left to the
@@ -36,7 +39,7 @@
 # =============================================================================
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$REPO"
 
 OUT=""
@@ -46,6 +49,7 @@ N_TRAIN=11000
 N_TEST=900
 FROM="build"
 SEED=0
+DOMAIN="molecules"
 MODEL="/shared/workspace/povejmo/huggingface_cache/hub/models--google--gemma-4-31B-it/snapshots/b9ea41a2887d8607f594846523f94c6cc75ac8a4"
 
 while [ $# -gt 0 ]; do
@@ -58,6 +62,7 @@ while [ $# -gt 0 ]; do
     --from) FROM="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
+    --domain) DOMAIN="$2"; shift 2 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -130,30 +135,31 @@ run_sharded() {
 # written — every pass writes one output per input batch, named after it, so a
 # round lands beside the earlier ones instead of on top of them.
 pass_ask() {
-  run_sharded "intent_ask$1" -m src.generalist.tools.intent_write \
+  run_sharded "intent_ask$1" -m src.generalist.assistant.pipeline.write \
       --model "$MODEL" --batches "$OUT" --out "$OUT/ask" --pass ask \
-      --writer gemma-4-31B-it --glob "$2"
+      --writer gemma-4-31B-it --glob "$2" --domain "$DOMAIN"
 }
 
 pass_voice() {
-  run_sharded "intent_voice$1" -m src.generalist.tools.intent_write \
+  run_sharded "intent_voice$1" -m src.generalist.assistant.pipeline.write \
       --model "$MODEL" --batches "$OUT" --out "$OUT/voice" --pass voice \
-      --asks "$OUT/ask" --writer gemma-4-31B-it --glob "$2"
+      --asks "$OUT/ask" --writer gemma-4-31B-it --glob "$2" --domain "$DOMAIN"
 }
 
 pass_judge() {
-  run_sharded "intent_judge$1" -m src.generalist.tools.intent_judge \
+  run_sharded "intent_judge$1" -m src.generalist.assistant.pipeline.judge \
       --model "$MODEL" --batches "$OUT" --asks "$OUT/ask" \
-      --voiced "$OUT/voice" --out "$OUT/judged" --glob "$2"
+      --voiced "$OUT/voice" --out "$OUT/judged" --glob "$2" --domain "$DOMAIN"
 }
 
 # Always over the whole directory: the dedup pool has to be the whole set, or each
 # round deduplicates against itself and the union carries the pairs between them.
 run_accept() {
   NAME=intent_accept CPUS=8 MEM=32G TIME=01:00:00 \
-    bash src/generalist/tools/run_py.sh -m src.generalist.tools.intent_accept \
+    bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.accept \
       --batches "$OUT" --asks "$OUT/ask" --voiced "$OUT/voice" \
-      --judged "$OUT/judged" --out "$OUT/accepted" --seed "$SEED"
+      --judged "$OUT/judged" --out "$OUT/accepted" --seed "$SEED" \
+      --domain "$DOMAIN"
 }
 
 accepted_field() { jq -r "$1" "$OUT/accepted/summary.json"; }
@@ -174,10 +180,11 @@ if should_run build; then
   echo "=== build ==="
   echo "targets: $N_TRAIN train, $N_TEST test accepted rows (yield $YIELD)"
   NAME=intent_build CPUS=8 MEM=96G TIME=03:00:00 \
-    bash src/generalist/tools/run_py.sh -m src.generalist.tools.intent_build \
+    bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.build \
       --config "$CONFIG" --cell "$CELL" --out "$OUT" \
       --n-train "$(build_n "$N_TRAIN" "$YIELD")" \
-      --n-test "$(build_n "$N_TEST" "$YIELD")" --seed "$SEED"
+      --n-test "$(build_n "$N_TEST" "$YIELD")" --seed "$SEED" \
+      --domain "$DOMAIN"
 fi
 
 if should_run ask; then
@@ -201,9 +208,9 @@ if should_run accept; then
   # cost yield and cannot cost correctness. On the final build that price was
   # measured by reading all 104 of its refusals: precision 0.231, so roughly 80
   # correct rows in 14,900. Two of the three misreadings behind that are fixed in
-  # intent_judge.JUDGE_SYSTEM and its prompt; the number is stale the moment they
+  # the judge's system prompt (molecules/prompts.py) and its per-row prompt; the number is stale the moment they
   # take effect, so read the refusals again rather than quoting 0.231 forward.
-  # --dedup-max takes intent_accept.DEDUP_MAX, which is the settled 0.85.
+  # --dedup-max takes accept.DEDUP_MAX, which is the settled 0.85.
   run_accept
 fi
 
@@ -251,10 +258,10 @@ if should_run topup; then
     echo "    building $n_train train, $n_test test at yield $yield"
 
     NAME="intent_build_$prefix" CPUS=8 MEM=96G TIME=03:00:00 \
-      bash src/generalist/tools/run_py.sh -m src.generalist.tools.intent_build \
+      bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.build \
         --config "$CONFIG" --cell "$CELL" --out "$OUT/topup-$prefix" \
         --n-train "$n_train" --n-test "$n_test" \
-        --seed "$((SEED + round))" --id-prefix "$prefix"
+        --seed "$((SEED + round))" --id-prefix "$prefix" --domain "$DOMAIN"
     cp "$OUT/topup-$prefix/$prefix"*batch-*.json "$OUT/"
 
     pass_ask   "_$prefix" "$prefix*batch-*.json"
@@ -283,13 +290,14 @@ fi
 if should_run compose; then
   echo "=== compose ==="
   NAME=intent_compose CPUS=8 MEM=32G TIME=01:00:00 \
-    bash src/generalist/tools/run_py.sh -m src.generalist.tools.assistant_compose \
-      --accepted "$OUT/accepted" --out "$OUT/composed" --seed "$SEED"
+    bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.compose \
+      --accepted "$OUT/accepted" --out "$OUT/composed" --seed "$SEED" \
+      --domain "$DOMAIN"
 fi
 
 echo
 echo "done. Next, by hand and in this order:"
-echo "  intent_calibrate --mode sheet  --batches $OUT --asks $OUT/ask --voiced $OUT/voice --judged $OUT/judged --out $OUT/calibration"
+echo "  assistant.analysis.calibrate --mode sheet  --batches $OUT --asks $OUT/ask --voiced $OUT/voice --judged $OUT/judged --out $OUT/calibration"
 echo "  (label $OUT/calibration/labels.jsonl, then --mode score)"
-echo "  intent_audit --mode sheet --composed $OUT/composed --out $OUT/audit"
+echo "  assistant.analysis.audit --mode sheet --composed $OUT/composed --out $OUT/audit"
 echo "  (read $OUT/audit/sheet.txt, label $OUT/audit/labels.jsonl, then --mode score)"

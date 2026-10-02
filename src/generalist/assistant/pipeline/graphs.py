@@ -1,16 +1,17 @@
 """Materialise a composed assistant set as graphs, and report what they cost.
 
 The end of §9.4's pipeline: build -> write -> accept -> compose -> **this**. It
-turns each composed row into the graph `mol/assistant` would train on and reports
-the shape of what comes out, because the few-shot axis buys its demonstrations
-with context and nothing else in this plan measures that.
+turns each composed row into the graph the domain's assistant task would train on
+(`Domain.example_builder`; `mol/assistant` for molecules) and reports the shape of
+what comes out, because the few-shot axis buys its demonstrations with context and
+nothing else in this plan measures that.
 
-    RUNMOD=src.generalist.tools.assistant_graphs src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.assistant.pipeline.graphs src/generalist/tools/run_cli.sh \
         --composed src/generalist/results/assistant/v2/composed \
         --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \
         --cell molecule_generalist_instruct_graph_s0
 
-**Why token counts and not node counts.** A demonstration adds a molecule's worth
+**Why token counts and not node counts.** A demonstration adds a subject's worth
 of nodes, and the node count is the cheap thing to report, but the packed
 sequence is what has to fit: `TextGraphDataset` concatenates every node's text,
 so four demonstrations is five molecules of atom text plus four question/answer
@@ -18,7 +19,7 @@ pairs at the front of the prompt. A row that does not fit is not a slow row, it
 is a truncated one — and truncation would take the answer off the end.
 
 The report is per shot count, so the cost of the axis is readable as a
-difference rather than as an average over a set that is 78 % single-molecule.
+difference rather than as an average over a set that is 78 % single-subject.
 """
 
 import argparse
@@ -44,33 +45,22 @@ def main(argv=None) -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--cell", default=None)
     parser.add_argument("--split", default="train")
+    parser.add_argument("--domain", default=None,
+                        help="assistant domain (default: molecules)")
     parser.add_argument("--limit", type=int, default=0,
                         help="stop after this many rows (0 = all)")
     parser.add_argument("--out", default="")
     args = parser.parse_args(argv)
 
-    from rdkit import Chem
     from transformers import AutoTokenizer
 
-    from ..adapters.molecules import resolved_prompt_style
-    from ..assistant import named_atoms_for, question_text, shot_molecules
-    from ..config import RunConfig, load_config_file
-    from ...experiments.molecules.config import RunConfig as MolConfig
-    from ...experiments.molecules.dataset import build_assistant_example
+    from ...config import RunConfig, load_config_file
+    from ..domain import Unbuildable, get_domain
 
     config = RunConfig(**load_config_file(args.config, args.cell)).validate()
-    adapter = config.adapter_config()
-    # `mol/assistant` is a corpus task with a free-text answer, so `task` here is
-    # only a stand-in that carries the encoding: the scope of an example comes
-    # from its own facts, through `named_atoms_for`, not from the task name.
-    cfg = MolConfig(task="ring_count", arm="graph",
-                    encoding=adapter.encoding,
-                    stereo_tags=adapter.stereo_tags,
-                    model_name=adapter.model_name,
-                    question_node=adapter.question_node,
-                    prompt_style=resolved_prompt_style(adapter)).validate()
+    build, tokenizer_name = get_domain(args.domain).example_builder(config)
 
-    tokenizer = AutoTokenizer.from_pretrained(adapter.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     rows = _load(os.path.join(args.composed, f"{args.split}.jsonl"))
     if args.limit:
         rows = rows[:args.limit]
@@ -78,24 +68,19 @@ def main(argv=None) -> int:
 
     by_shots, failures = {}, []
     for row in rows:
-        mol = Chem.MolFromSmiles(row["key"])
-        if mol is None:
-            failures.append({"id": row["id"], "why": "unparseable key"})
-            continue
-        shots = shot_molecules(row)
         try:
-            graph = build_assistant_example(mol, question_text(row),
-                                            row["answer"],
-                                            named_atoms_for(row["facts"]),
-                                            shots, cfg)
+            graph, n_shots = build(row)
+        except Unbuildable as exc:
+            failures.append({"id": row["id"], "why": str(exc)})
+            continue
         except Exception as exc:                     # noqa: BLE001 — reported
             failures.append({"id": row["id"], "why": f"{type(exc).__name__}: {exc}"})
             continue
         text = "".join(graph.nodes[i].get("text", "")
                        for i in range(graph.number_of_nodes()))
         tokens = len(tokenizer(text, add_special_tokens=False)["input_ids"])
-        entry = by_shots.setdefault(len(shots), {"rows": 0, "nodes": [],
-                                                 "tokens": []})
+        entry = by_shots.setdefault(n_shots, {"rows": 0, "nodes": [],
+                                              "tokens": []})
         entry["rows"] += 1
         entry["nodes"].append(graph.number_of_nodes())
         entry["tokens"].append(tokens)

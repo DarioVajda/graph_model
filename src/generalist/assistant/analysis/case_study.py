@@ -1,14 +1,14 @@
 """Thirty hand-written questions, put to one or more checkpoints, printed side by side.
 
 §9.4's step 12, and the only read in this stack that is not downstream of the
-composed set's own distribution. `assistant_score.py` measures the test split,
+composed set's own distribution. `score.py` measures the test split,
 which was drawn, rendered, voiced and filtered by the same pipeline that made the
 training rows; every automated check it runs was built against that surface and
 is blind in the same direction. These thirty are written by hand, over test-role
 molecules, and are **read, not scored** — `probe` says what each row is for and
 `expect` is a reading aid for the checklist. Nothing here computes a rate.
 
-    GPU=1 src/generalist/tools/run_py.sh -m src.generalist.tools.assistant_case_study \\
+    GPU=1 src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.case_study \\
         --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \\
         --cell molecule_generalist_instruct_graph_s0 \\
         --checkpoint control=.../replay_anneal15_graph_s0/anneal/checkpoint-12255 \\
@@ -44,8 +44,8 @@ from dataclasses import replace
 
 #: The hand-written set. One JSON object per line, the first of which is a
 #: `_comment` describing the file and is skipped.
-CASES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "assistant_case_study.jsonl")
+CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "case_study.jsonl")
 
 
 def load_cases(path: str) -> list:
@@ -95,8 +95,8 @@ def draws_for(cases: list) -> list:
 
 def build_source(config, adapter_config, out: str, cases: list):
     """A `MoleculeTaskSource` over the case rows, built by the adapter's own path."""
-    from ..adapters import molecules as adapter
-    from ...utils import TextGraphDataset
+    from ...adapters import molecules as adapter
+    from ....utils import TextGraphDataset
 
     cache = replace(adapter_config, cache_root=os.path.join(out, "cache"))
     cache.validate()
@@ -110,10 +110,10 @@ def build_source(config, adapter_config, out: str, cases: list):
 
 
 def run(args) -> int:
-    from ..config import RunConfig, load_config_file
-    from ..evaluate.scorers import generate_predictions
-    from ..fork import load_start_weights
-    from .. import wiring
+    from ...config import RunConfig, load_config_file
+    from ...evaluate.scorers import generate_predictions
+    from ...fork import load_start_weights
+    from ... import wiring
 
     checkpoints = []
     for item in args.checkpoint:

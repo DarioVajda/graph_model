@@ -13,8 +13,8 @@ uncalibrated filter.
 Three modes, and the middle one is deliberately not a new instrument:
 
     --mode generate  a checkpoint's replies over the composed test split,
-                     written in exactly the shapes `intent_judge.py` reads
-    (then run intent_judge over them, unmodified)
+                     written in exactly the shapes `pipeline/judge.py` reads
+    (then run the judge over them, unmodified)
     --mode score     the judged verdicts and the pattern checks, per twist and
                      per task
 
@@ -22,33 +22,33 @@ Three modes, and the middle one is deliberately not a new instrument:
 the same three axes wanted here, so `generate` writes `batches/`, `ask/` and
 `voice/` rather than teaching a second copy of it what a decline looks like. The
 upstream build's batch files were deleted; the render dict is rebuilt from the
-sidecar, which carries `intent_accept`'s renaming of it in full.
+sidecar, which carries the accept pass's renaming of it in full.
 
-    GPU=1 src/generalist/tools/run_py.sh -m src.generalist.tools.assistant_score \\
+    GPU=1 src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.score \\
         --mode generate --config .../008_molecule_generalist_instruct.jsonc \\
         --cell molecule_generalist_instruct_graph_s0 \\
         --checkpoint .../replay_anneal15_graph_s0/anneal/checkpoint-12255 \\
         --out .../results/assistant/score/control_s0
     GPU=1 VENV_BIN=.venv_writer/bin CONTAINER=.../nemo_26.04.sqsh \\
     GPU_CONSTRAINT='GPU_BRD:B200|GPU_BRD:B300' \\
-    src/generalist/tools/run_py.sh -m src.generalist.tools.intent_judge \\
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.judge \\
         --model .../gemma-4-31B-it --batches .../control_s0/batches \\
         --asks .../control_s0/ask --voiced .../control_s0/voice \\
         --out .../control_s0/judged
-    src/generalist/tools/run_py.sh -m src.generalist.tools.assistant_score \\
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.score \\
         --mode score --out .../control_s0
 
 **Compare, do not quote.** The judge's precision as a filter measured 0.231 and
 the three fixes that followed make that number stale. Its bias is a property of
 the judge, so two checkpoints read on the same rows share it and it cancels in
 the difference: a delta against the control is reportable where the level is not.
-Recalibrate with `intent_calibrate.py` before any absolute rate ships.
+Recalibrate with `calibrate.py` before any absolute rate ships.
 
 **The zero-shot control is owed, and it is a build rather than a flag.** The
 demonstrations are disconnected graph components, so a model can answer by
 copying the nearest one instead of reading the molecule, and scoring the same
 rows with the shots stripped is what separates the behaviour from the shortcut —
-the eval-time half of the 50/50 polarity rule `assistant_compose.py` enforces at
+the eval-time half of the 50/50 polarity rule `pipeline/compose.py` enforces at
 build time. It is not a switch here because the shots are baked into the graph at
 `_draw_assistant`, so the control needs its own artifact; it belongs beside the
 flat control in §9.4's plan. A flag here that quietly generated from the
@@ -63,7 +63,7 @@ import os
 import statistics
 import sys
 
-#: The composed row is `intent_accept`'s renaming of the render dict, so this
+#: The composed row is the accept pass's renaming of the render dict, so this
 #: inverts it exactly for the six fields that were renamed.
 #:
 #: `ask` is the one field no composed row carries, and the two keys read off it
@@ -73,7 +73,7 @@ import sys
 #: if either mapping stops holding, the judge quietly stops being told that a
 #: decline was wanted, which is the single largest error it made on the build.
 def render_of(meta: dict) -> dict:
-    """The render dict `intent_judge` and `intent_accept` expect, from a sidecar."""
+    """The render dict the judge and the accept pass expect, from a sidecar."""
     return {
         "statements": meta["statements"],
         "answers": meta.get("answers"),
@@ -107,11 +107,11 @@ def _load_jsonl(path: str) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def mode_generate(args) -> int:
-    from ..adapters import molecules as adapter
-    from ..config import RunConfig, load_config_file
-    from ..evaluate.scorers import generate_predictions
-    from ..fork import load_start_weights
-    from .. import wiring
+    from ...adapters import molecules as adapter
+    from ...config import RunConfig, load_config_file
+    from ...evaluate.scorers import generate_predictions
+    from ...fork import load_start_weights
+    from ... import wiring
 
     config = RunConfig(**load_config_file(args.config, args.cell)).validate()
     registry, adapter_config = wiring.build_registry(config)
@@ -167,7 +167,7 @@ def mode_generate(args) -> int:
     print(f"wrote {len(rows)} replies to {args.out}; "
           f"reply chars mean {statistics.mean(lengths):.0f} "
           f"max {max(lengths)}, {sum(1 for l in lengths if l == 0)} empty")
-    print("next: intent_judge --batches {0}/batches --asks {0}/ask "
+    print("next: assistant.pipeline.judge --batches {0}/batches --asks {0}/ask "
           "--voiced {0}/voice --out {0}/judged".format(args.out))
     return 0
 
@@ -176,13 +176,13 @@ def mode_generate(args) -> int:
 # score
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: The deterministic half. Every one of these is a check `intent_accept` already
+#: The deterministic half. Every one of these is a check the accept pass already
 #: runs on the *writer*, reused verbatim on the model — they cost nothing, they
 #: cannot disagree with themselves between two readings, and they were built
 #: against exactly this failure surface.
 def pattern_checks(render: dict, reply: str, fmt: str) -> dict:
-    from .intent_accept import (declines, dropped_statements, format_met,
-                                states_the_gloss, states_the_verdict)
+    from ..pipeline.accept import (declines, dropped_statements, format_met,
+                                   states_the_gloss, states_the_verdict)
 
     out = {"dropped": dropped_statements(render, reply, fmt),
            "format_met": format_met(reply, fmt, render.get("skeleton"))}

@@ -26,14 +26,21 @@ many rows may share one style brief. With `--judged`, a row the judge marked
 unresponsive, unpreserved or additive is refused too, and refused *last*, so the
 judge's marginal catch over the patterns is visible in the rejection table.
 
-    src/generalist/tools/run_py.sh -m src.generalist.tools.intent_accept \
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.accept \
         --batches .../v5 --asks .../v5/ask --voiced .../v5/voice \
         --judged .../v5/judged --out .../v5/accepted
 
 **Read the rejections, not just the count.** Five times now a filter here has
 been discarding correct rows, and every time the only symptom was a yield that
-looked plausible. `intent_reject_read.py` prints a stratified sample for exactly
+looked plausible. `analysis/reject_read.py` prints a stratified sample for exactly
 that reason.
+
+What is particular to a domain comes from its `Domain` (`--domain`, molecules by
+default): how a fact names a part, so an index is required as an anchor and not
+read as a value; the domain's own stop words; the families that may not pivot a
+claim; the held-out language; and `turn_checks`, the checks on the person's turn
+that only a domain can make. The examples in the comments here are molecule rows
+because that is where every one of these checks was learned.
 """
 
 import argparse
@@ -44,6 +51,8 @@ import os
 import random
 import re
 import sys
+
+from ..domain import get_domain
 
 #: In characters. The ceiling is what `mol/assistant` can reproduce at
 #: `max_new_tokens 160`; the floor does not apply to a terse format, where "4" is
@@ -62,12 +71,13 @@ DEDUP_MAX = 0.85
 BRIEF_CEILING = 0.05
 
 #: Words too common to carry a statement's identity. A statement is preserved if
-#: its content words survive; these are not content.
+#: its content words survive; these are not content. A domain adds its own
+#: (`Domain.stop_words` — "atom", "molecule" and the like for molecules).
 _STOP = frozenset((
-    "atom", "atoms", "the", "this", "that", "it", "its", "has", "have", "is",
+    "the", "this", "that", "it", "its", "has", "have", "is",
     "are", "was", "were", "of", "in", "on", "at", "to", "a", "an", "and", "or",
-    "with", "for", "from", "contains", "containing", "molecule", "compound",
-    "structure", "smallest", "part", "there", "any", "one", "which", "what",
+    "with", "for", "from", "contains", "containing",
+    "part", "there", "any", "one", "which", "what",
     # Negation is polarity, not content. Counting it as content let "not" carry
     # a statement's identity, so the clause a statement matched was chosen by
     # whether it said "not" rather than by what it was about.
@@ -82,7 +92,6 @@ _STOP = frozenset((
 
 _WORD = re.compile(r"[a-z0-9]+")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_ATOM_REF = re.compile(r"atom \d+(?:\s*\([a-z]{1,2}\))?", re.IGNORECASE)
 _NEGATION = re.compile(
     r"\b(?:not|no|nope|nah|none|never|neither|nor|without|lacks|lacking|absent|"
     r"false|isn|isn't|doesn|doesn't|aren|aren't|don|don't|inactive|zero|n/a|"
@@ -129,12 +138,24 @@ _PREDICATION = re.compile(
 _LIST_ITEM = re.compile(r"(?:^|\n)\s*(?:\d+[.)]|[-*•])\s+")
 
 
-def _content(text: str) -> set:
+_STOP_BY_DOMAIN: dict = {}
+
+
+def _stop_words(domain) -> frozenset:
+    domain = get_domain(domain)
+    words = _STOP_BY_DOMAIN.get(domain.name)
+    if words is None:
+        words = _STOP_BY_DOMAIN[domain.name] = _STOP | frozenset(domain.stop_words)
+    return words
+
+
+def _content(text: str, domain=None) -> set:
     """Content words, stemmed crudely — "rings" and "ring" are the same claim."""
+    stop = _stop_words(domain)
     words = _WORD.findall((text or "").lower())
     out = set()
     for word in words:
-        if len(word) < 3 or word in _STOP:
+        if len(word) < 3 or word in stop:
             continue
         out.add(word[:-1] if len(word) > 3 and word.endswith("s") else word)
     return out
@@ -159,7 +180,7 @@ def _negated(text: str) -> bool:
     return _NEGATION.search((text or "").lower()) is not None
 
 
-def carries_token(text: str, token: str) -> bool:
+def carries_token(text: str, token: str, domain=None) -> bool:
     """Does this span of reply carry the answer the renderer computed?
 
     `token` is what `render.answer_token` returned: a count's number, or "yes" /
@@ -175,7 +196,7 @@ def carries_token(text: str, token: str) -> bool:
             return negative
         # An affirmative word, or a plain restatement with no negation in it.
         return positive or not negative
-    stripped = _ATOM_REF.sub(" ", lowered)
+    stripped = get_domain(domain).strip_anchors(lowered)
     word = _NUMBER_WORDS.get(token)
     if (re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stripped) is not None
             or (word is not None
@@ -243,7 +264,8 @@ def _threshold(wanted: set, fraction: float = 0.7) -> int:
     return max(1, int(fraction * len(wanted))) if wanted else 0
 
 
-def _covers(statement: str, reply: str, fraction: float = 0.7) -> bool:
+def _covers(statement: str, reply: str, fraction: float = 0.7,
+            domain=None) -> bool:
     """Does the reply as a whole still say what this statement says?
 
     Used only where the statement has no answer token, which is to say where
@@ -252,29 +274,29 @@ def _covers(statement: str, reply: str, fraction: float = 0.7) -> bool:
     across several sentences: no single clause carries 70% of a paragraph, and
     reading it clause-wise threw away every correctly re-voiced description.
     """
-    wanted = _content(statement)
+    wanted = _content(statement, domain)
     if not wanted:
         return True
-    return len(wanted & _content(reply)) >= _threshold(wanted, fraction)
+    return len(wanted & _content(reply, domain)) >= _threshold(wanted, fraction)
 
 
-def candidate_clauses(statement: str, reply: str) -> list:
+def candidate_clauses(statement: str, reply: str, domain=None) -> list:
     """The parts of the reply that could be answering this statement.
 
-    A clause qualifies on content words or on the statement's **atom index**.
-    Both are needed and neither is enough alone: an elided answer carries only
-    the atom ("whereas atom 9 (C) is not"), and a reply that speaks of the atom
-    by pronoun carries only the words ("the smallest ring containing it has 5
-    atoms").
+    A clause qualifies on content words or on the statement's **part index**
+    (`Domain.anchor_index`). Both are needed and neither is enough alone: an
+    elided answer carries only the atom ("whereas atom 9 (C) is not"), and a
+    reply that speaks of the atom by pronoun carries only the words ("the
+    smallest ring containing it has 5 atoms").
     """
-    wanted = _content(statement)
-    index = re.search(r"atom\s+(\d+)", statement.lower())
+    wanted = _content(statement, domain)
+    index = get_domain(domain).anchor_index(statement.lower())
     need = _threshold(wanted)
     out = []
     for clause in _clauses(reply):
         anchored = bool(index and re.search(
-            rf"(?<!\d){index.group(1)}(?!\d)", clause))
-        if anchored or (wanted and len(wanted & _content(clause)) >= need):
+            rf"(?<!\d){index}(?!\d)", clause))
+        if anchored or (wanted and len(wanted & _content(clause, domain)) >= need):
             out.append(clause)
     if not out and not wanted and not index:
         return [reply]
@@ -282,7 +304,7 @@ def candidate_clauses(statement: str, reply: str) -> list:
 
 
 def statement_survives(statement: str, reply: str, terse: bool,
-                       token=None) -> bool:
+                       token=None, domain=None) -> bool:
     """Is this rendered statement still asserted in this span of reply?
 
     Under a terse format the span *is* the answer, so only the token has to
@@ -297,22 +319,23 @@ def statement_survives(statement: str, reply: str, terse: bool,
       pronoun.
     """
     if terse:
-        return token is None or carries_token(reply, token)
+        return token is None or carries_token(reply, token, domain)
     if token is None:
         # Nothing scalar to preserve and no polarity to mis-read, so the span is
         # the whole reply. See `_covers`.
-        return _covers(statement, reply)
-    candidates = candidate_clauses(statement, reply)
+        return _covers(statement, reply, domain=domain)
+    candidates = candidate_clauses(statement, reply, domain)
     if not candidates:
         # A reply short enough to be a bare answer has not dropped anything; it
         # has answered tersely under a prose brief, which is a style miss.
-        return len(reply or "") <= SHORT_REPLY and carries_token(reply, token)
+        return (len(reply or "") <= SHORT_REPLY
+                and carries_token(reply, token, domain))
     if token in ("yes", "no"):
-        return any(carries_token(clause, token) for clause in candidates)
-    return carries_token(reply, token)
+        return any(carries_token(clause, token, domain) for clause in candidates)
+    return carries_token(reply, token, domain)
 
 
-def dropped_statements(rendered, reply: str, fmt: str) -> list:
+def dropped_statements(rendered, reply: str, fmt: str, domain=None) -> list:
     """The rendered statements this reply no longer makes.
 
     Three readings, because the three families of format say the same thing in
@@ -341,13 +364,14 @@ def dropped_statements(rendered, reply: str, fmt: str) -> list:
             # Only a *count* is allowed to stand in for the verdict, though: a
             # yes/no fact behind a yes/no verdict is not a second reading of the
             # question, it is the verdict with its polarity flipped.
-            if carries_token(reply, verdict):
+            if carries_token(reply, verdict, domain):
                 return []
             tokens = [t for t in answers if t and t not in ("yes", "no")]
-            return [] if tokens and any(carries_token(reply, t)
+            return [] if tokens and any(carries_token(reply, t, domain)
                                         for t in tokens) else statements[:1]
         wanted = [(s, t) for s, t in zip(statements, answers) if t]
-        return [s for s, token in wanted if not carries_token(reply, token)]
+        return [s for s, token in wanted
+                if not carries_token(reply, token, domain)]
 
     if fmt in POSITIONAL_FORMATS:
         items = [i.strip() for i in _LIST_ITEM.split(reply or "") if i.strip()]
@@ -359,7 +383,7 @@ def dropped_statements(rendered, reply: str, fmt: str) -> list:
             # drop; every answer token still has to survive.
             return [s for i, s in enumerate(statements)
                     if not statement_survives(s, reply, terse=False,
-                                              token=answers[i])]
+                                              token=answers[i], domain=domain)]
         # Matched as an assignment rather than by index. The writer of the
         # question is asked to keep the order it was given, but it sometimes
         # reorders, and a reply that answers the question it was actually asked
@@ -370,7 +394,8 @@ def dropped_statements(rendered, reply: str, fmt: str) -> list:
             hit = next((j for j in free
                         if statement_survives(statement, items[j],
                                               terse=bool(answers[i]),
-                                              token=answers[i])), None)
+                                              token=answers[i],
+                                              domain=domain)), None)
             if hit is None:
                 out.append(statement)
             else:
@@ -378,7 +403,8 @@ def dropped_statements(rendered, reply: str, fmt: str) -> list:
         return out
 
     return [s for i, s in enumerate(statements)
-            if not statement_survives(s, reply, terse=False, token=answers[i])]
+            if not statement_survives(s, reply, terse=False, token=answers[i],
+                                      domain=domain)]
 
 
 #: A reply that declines. Written from the wordings the writer actually reaches
@@ -525,7 +551,7 @@ def _decides(span: str):
 GLOSS_COVERAGE = 0.5
 
 
-def states_the_gloss(rendered, reply: str) -> bool:
+def states_the_gloss(rendered, reply: str, domain=None) -> bool:
     """Does an `explain` reply still carry the general explanation it owes?
 
     Read with `_covers` rather than clause-wise, for the reason `_covers` exists:
@@ -539,7 +565,7 @@ def states_the_gloss(rendered, reply: str) -> bool:
     `ONE_WORD_TASKS` and renders no skeleton, so there is no exemption to write.
     """
     gloss = rendered.get("gloss")
-    return not gloss or _covers(gloss, reply, GLOSS_COVERAGE)
+    return not gloss or _covers(gloss, reply, GLOSS_COVERAGE, domain)
 
 
 def premise_is_not_false(rendered) -> bool:
@@ -564,92 +590,18 @@ def premise_is_not_false(rendered) -> bool:
                                for statement in rendered.get("statements", []))
 
 
-def pivot_is_unassertable(intent) -> bool:
-    """Is this row's claim or constraint the whole molecule written out?
+def pivot_is_unassertable(intent, domain=None) -> bool:
+    """Is this row's claim or constraint the whole subject written out?
 
     A `check_claim` or `decide` pivot goes into the person's turn verbatim, so it
     has to be something a person could assert and the reply could settle in a few
-    words. The canonical SMILES is neither, and a row built on one puts its own
-    answer in its question. `render.UNPIVOTABLE` is the list; this is the same
-    rule applied to rows built before that list existed.
+    words. A molecule's canonical SMILES is neither, and a row built on one puts
+    its own answer in its question. `Domain.unpivotable` is the list; this is the
+    same rule applied to rows built before that list existed.
     """
-    from ..render import UNPIVOTABLE
-
     facts = intent.get("facts") or []
     return (intent.get("task") in ("check_claim", "decide") and bool(facts)
-            and facts[0].get("family") in UNPIVOTABLE)
-
-
-#: One "smallest ring containing ..." clause naming two or more atoms. The comma
-#: is the tell: the ask phrase for a single `ring_size` fact ends at its atom, so
-#: a second atom inside the same clause can only have got there by the two being
-#: merged.
-_JOINT_RING_CLAUSE = re.compile(
-    r"smallest ring containing atom [^?.]*?,\s*(?:and\s+)?atom", re.IGNORECASE)
-
-
-def asks_for_a_joint_ring(turn: str, intent) -> bool:
-    """Has the turn collapsed several `ring_size` asks into one impossible one?
-
-    Two `ring_size` facts go into the ask as two phrases — "the size of the
-    smallest ring containing atom 23 (O) and the size of the smallest ring
-    containing atom 15 (C)" — and the writer, paraphrasing that into something a
-    person would type, compresses the repetition away: "the size of the smallest
-    ring containing atom 14 (C), atom 15 (N), and atom 10 (O)". The shorter
-    sentence is the natural one and it asks a different question, about a single
-    ring holding all three atoms. Nothing computed that ring, the statements are
-    per-atom, and no reply built from them can answer it.
-
-    This is a writer defect that only the question shows, so neither the
-    statement checks nor the judge is positioned to see it — the reply is
-    faithful to the statements, and it is the question that moved. Deciding it
-    here costs nothing: the turn is already stored.
-
-    The `ring_size` count is what separates the two spellings. A turn that names
-    several atoms in one clause but rests on one fact is a person asking loosely
-    about one atom, which the reply can still answer.
-    """
-    if not _JOINT_RING_CLAUSE.search(turn or ""):
-        return False
-    facts = intent.get("facts") or []
-    return sum(1 for fact in facts if fact.get("family") == "ring_size") > 1
-
-
-#: A token that could be a structure: long enough, in the SMILES character set,
-#: and carrying at least one ring closure, branch or bond symbol. The parse below
-#: is what decides; this only keeps RDKit off every word in the turn.
-_STRUCTURE_TOKEN = re.compile(r"[A-Za-z0-9@+\-\[\]\(\)=#%/\\]{6,}")
-
-
-def invents_a_structure(turn: str, known: str = "") -> bool:
-    """Does the person's turn quote a structure nobody gave it?
-
-    The person and the assistant are looking at the same molecule and the writer
-    is never shown its SMILES, so any structure in the turn was invented — and an
-    invented structure is a question about a different molecule than the one the
-    answer is about. Observed shapes: a plausible-looking SMILES presented as
-    "the molecule represented by …", and pseudo-labels like `anchor[0, C]`.
-
-    Narrow on purpose (§9.4 rule 3): a token only counts if RDKit parses it to
-    four or more heavy atoms, which no ordinary English word does.
-
-    `known` is the text the render itself licenses — its claim and its
-    statements. A `check_claim` on a `smiles` fact puts the structure in the
-    person's mouth *by design*, so the four such rows in the third smoke build
-    were the renderer's own SMILES being refused as an invention.
-    """
-    from rdkit import Chem, RDLogger
-
-    RDLogger.DisableLog("rdApp.*")
-    for token in _STRUCTURE_TOKEN.findall(turn or ""):
-        if not re.search(r"[\d\(\)\[\]=#]", token):
-            continue
-        if token in (known or ""):
-            continue
-        mol = Chem.MolFromSmiles(token)
-        if mol is not None and mol.GetNumHeavyAtoms() >= 4:
-            return True
-    return False
+            and facts[0].get("family") in get_domain(domain).unpivotable)
 
 
 #: Tasks whose person states the answer *by design*: `check_claim` puts the claim
@@ -660,7 +612,8 @@ _STATES_BY_DESIGN = frozenset(("check_claim", "decide"))
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
-def _leaked_statements(rendered, turn: str, task: str, fmt: str = "") -> list:
+def _leaked_statements(rendered, turn: str, task: str, fmt: str = "",
+                       domain=None) -> list:
     """Statements the person's turn gives away, which should be none.
 
     Narrow to the point of being almost trivial, and deliberately so. The writer
@@ -692,18 +645,20 @@ def _leaked_statements(rendered, turn: str, task: str, fmt: str = "") -> list:
         if phrase:
             stripped = re.sub(re.escape(phrase), " ", stripped,
                               flags=re.IGNORECASE)
-    # Atom indices and list markers are not answers; leaving them in made
+    # Part indices and list markers are not answers; leaving them in made
     # "1. atom 5 (C)" leak the count 1 and the atom 5.
+    domain = get_domain(domain)
     stripped = _LIST_ITEM.sub(" ", stripped)
-    stripped = _ATOM_REF.sub(" ", stripped)
-    stripped = re.sub(r"atom[_ ]\d+", " ", stripped, flags=re.IGNORECASE)
+    stripped = domain.strip_anchors(stripped)
+    if domain.anchor_key_re is not None:
+        stripped = domain.anchor_key_re.sub(" ", stripped)
     out = []
     for statement, token in zip(rendered["statements"],
                                 rendered.get("answers")
                                 or [None] * len(rendered["statements"])):
         if token is None or token in ("yes", "no"):
             continue
-        if carries_token(stripped, token):
+        if carries_token(stripped, token, domain):
             out.append(statement)
     return out
 
@@ -774,9 +729,13 @@ def main(argv=None) -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--dedup-max", type=float, default=DEDUP_MAX)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--domain", default=None,
+                        help="the assistant domain the batches were built for "
+                             "(default: molecules)")
     args = parser.parse_args(argv)
+    domain = get_domain(args.domain)
 
-    from ..assistant import four_grams, jaccard, mentions_held_out
+    from ..facts import four_grams, jaccard
     from ..intents import TERSE_FORMATS
 
     turns = _load_jsonl(args.asks, "turn")
@@ -815,27 +774,30 @@ def main(argv=None) -> int:
 
             # 1 — the turn names what was asked for and gives nothing away
             missing = [a for a in rendered["ask"].get("anchors", [])
-                       if not _anchor_named(a, turn)]
+                       if not _anchor_named(a, turn, domain)]
             if missing and not rendered["ask"].get("underspecified"):
                 reject(example, "anchor_missing", "; ".join(missing))
                 continue
             if rendered["ask"].get("underspecified") and rendered["ask"].get("anchor") \
-                    and _anchor_named(rendered["ask"]["anchor"], turn):
+                    and _anchor_named(rendered["ask"]["anchor"], turn, domain):
                 reject(example, "clarification_not_ambiguous",
                        rendered["ask"]["anchor"])
                 continue
             leaked = _leaked_statements(rendered, turn,
-                                        example["intent"]["task"], fmt)
+                                        example["intent"]["task"], fmt, domain)
             if leaked:
                 reject(example, "turn_states_the_answer", leaked[0])
                 continue
             licensed = " ".join([rendered["ask"].get("claim") or ""]
                                 + rendered["statements"] + [rendered["reply"]])
-            if invents_a_structure(turn, licensed):
-                reject(example, "turn_invents_a_structure")
-                continue
-            if asks_for_a_joint_ring(turn, example["intent"]):
-                reject(example, "turn_asks_for_a_joint_ring", turn[:60])
+            failed = None
+            for reason, check in domain.turn_checks:
+                detail = check(turn, example["intent"], licensed)
+                if detail is not None:
+                    failed = (reason, detail)
+                    break
+            if failed:
+                reject(example, *failed)
                 continue
             # The sheet writes a count as "1 stereocenter(s)", and both the
             # `false_premise` claim and the draft reply are the sheet's own
@@ -850,7 +812,7 @@ def main(argv=None) -> int:
                 continue
 
             # 2 — the re-voicing preserved the statement set
-            dropped = dropped_statements(rendered, reply, fmt)
+            dropped = dropped_statements(rendered, reply, fmt, domain)
             if dropped:
                 reject(example, "statement_dropped", dropped[0])
                 continue
@@ -873,7 +835,7 @@ def main(argv=None) -> int:
             # And neither is the gloss. It is the only thing separating `explain`
             # from `report`, and without this check 92% of explain rows shipped
             # without one.
-            if not states_the_gloss(rendered, reply):
+            if not states_the_gloss(rendered, reply, domain):
                 reject(example, "gloss_dropped", rendered.get("gloss", "")[:40])
                 continue
             # A `decide` ask asks two questions with two different answers — what
@@ -897,11 +859,11 @@ def main(argv=None) -> int:
                 reject(example, "premise_is_not_false",
                        (rendered["ask"].get("claim") or "")[:40])
                 continue
-            # A claim or a constraint that is the whole molecule written out.
+            # A claim or a constraint that is the whole subject written out.
             # "I believe its canonical SMILES is COc1ccccc1N1C(=O)..." puts the
             # answer in the question and the reply copies it back, so the row
-            # needs no graph. `render.UNPIVOTABLE` stops the draw.
-            if pivot_is_unassertable(example["intent"]):
+            # needs no graph. `Domain.unpivotable` stops the draw.
+            if pivot_is_unassertable(example["intent"], domain):
                 reject(example, "pivot_is_the_structure",
                        example["intent"]["facts"][0]["family"])
                 continue
@@ -911,7 +873,7 @@ def main(argv=None) -> int:
                 reject(example, "format", fmt)
                 continue
 
-            if mentions_held_out(turn) or mentions_held_out(reply):
+            if domain.mentions_held_out(turn) or domain.mentions_held_out(reply):
                 reject(example, "held_out_language")
                 continue
 
@@ -954,7 +916,7 @@ def main(argv=None) -> int:
                 "smiles": example["intent"]["smiles"],
                 "task": example["intent"]["task"],
                 "twist": example["intent"]["twist"],
-                # `brief` and not `style`: `assistant_compose` ranks candidate
+                # `brief` and not `style`: `compose.py` ranks candidate
                 # demonstrations on `brief["format"]`, and a JSON demonstration
                 # in front of a one-word question shows the wrong shape.
                 "brief": example["intent"]["style"],
@@ -1010,22 +972,21 @@ def main(argv=None) -> int:
     return 0
 
 
-def _anchor_named(anchor: str, turn: str) -> bool:
-    """Is this anchor named in the turn — by index for an atom, by word else?
+def _anchor_named(anchor: str, turn: str, domain=None) -> bool:
+    """Is this anchor named in the turn — by index for a part, by word else?
 
     "atom 14 (C)" may reasonably be typed "atom 14", "C14" or "the carbon at
-    position 14", so what is required is the index, not the rendering. A group
-    anchor is required by its name.
+    position 14", so what is required is the index, not the rendering. A
+    qualifier anchor (a functional group) is required by its name.
     """
     lowered = (turn or "").lower()
-    number = re.search(r"\batom\s+(\d+)", anchor.lower())
+    number = get_domain(domain).anchor_index(anchor.lower())
     if number:
         # `\b14\b` does not match "C14": 'c' and '1' are both word characters, so
         # there is no boundary between them, and the commonest way a chemist
         # writes an atom would have been refused as a missing anchor.
-        return re.search(rf"(?<!\d){number.group(1)}(?!\d)",
-                         lowered) is not None
-    return all(word in lowered for word in _content(anchor))
+        return re.search(rf"(?<!\d){number}(?!\d)", lowered) is not None
+    return all(word in lowered for word in _content(anchor, domain))
 
 
 def _apply_brief_ceiling(accepted, seed, rejects):

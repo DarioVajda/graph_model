@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import random
 
-from src.generalist.assistant import Fact, fact_polarity
-from src.generalist.tools.assistant_compose import _agreement, _take
+from src.generalist.assistant.facts import Fact
+from src.generalist.assistant.shots import fact_polarity
+from src.generalist.assistant.pipeline.compose import _agreement, _take
 
 
 def _row(id_, key, value, kind="yesno", family="ring_membership"):

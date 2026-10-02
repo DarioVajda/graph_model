@@ -6,7 +6,7 @@ filter in this section has been discarding correct rows, and the only symptom
 each time was a yield that looked plausible. A rejection reason that is a large
 share of the log gets read before it is believed.
 
-    src/generalist/tools/run_py.sh -m src.generalist.tools.intent_reject_read \
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.reject_read \
         --accepted .../v5/accepted --reason statement_dropped --n 12
 """
 

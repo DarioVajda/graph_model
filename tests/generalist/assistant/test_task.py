@@ -19,10 +19,10 @@ import os
 import pytest
 
 from src.generalist.adapters import molecules as M
-from src.generalist.tools.assistant_score import render_of
+from src.generalist.assistant.analysis.score import render_of
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A composed set, in the shape `assistant_compose.py` writes
+# A composed set, in the shape `assistant/pipeline/compose.py` writes
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: Benzene and toluene: two molecules whose canonical SMILES parse, which is all
@@ -173,7 +173,7 @@ def test_a_missing_composed_set_names_the_pipeline(tmp_path):
     config = M.MoleculeAdapterConfig(assistant_dir=str(tmp_path / "nothing"))
     with pytest.raises(M.AdapterBuildError) as caught:
         M._draw_assistant(config, "train")
-    assert "intent_pipeline" in str(caught.value)
+    assert "pipeline/run.sh" in str(caught.value)
 
 
 def test_the_digest_is_recorded_because_it_reaches_no_hash(config):
@@ -187,7 +187,7 @@ def test_the_digest_is_recorded_because_it_reaches_no_hash(config):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_the_task_has_no_val_split():
-    """`assistant_compose.py` writes two files, and naming a third would fail at
+    """`pipeline/compose.py` writes two files, and naming a third would fail at
     load rather than at resolve."""
     assert M.splits_for(M.ASSISTANT_TASK) == ("train", "test")
     spec = M.task_specs(M.MoleculeAdapterConfig())[f"mol/{M.ASSISTANT_TASK}"]

@@ -1,11 +1,11 @@
 """Attach few-shot demonstrations to an accepted assistant set (§9.4).
 
-Step 6 of §9.4's order of work, second half, after `intent_accept.py`. It reads
+Step 6 of §9.4's order of work, second half, after `accept.py`. It reads
 an accepted set and gives a share of its rows worked examples drawn **from the
 set itself**, so that every demonstration has an RDKit fact sheet behind it and
 has already passed every filter in the accept pass.
 
-    RUNMOD=src.generalist.tools.assistant_compose src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.assistant.pipeline.compose src/generalist/tools/run_cli.sh \
         --accepted src/generalist/results/assistant/final/accepted \
         --out src/generalist/results/assistant/final/composed
 
@@ -46,6 +46,10 @@ The output is the accepted JSONL with two fields added — ``shots``, the drawn
 demonstrations, and ``pointer``, the sentence that refers to them. The ``question``
 and ``answer`` fields are untouched, so a composed set verifies exactly as the
 accepted set it came from does.
+
+The pointer sentences, the copy rule's test for a stated fact, and the verifier
+for rows built before rendered statements come from the domain (`--domain`,
+molecules by default); the draw is the same for every domain.
 """
 
 import argparse
@@ -53,6 +57,8 @@ import json
 import os
 import random
 import sys
+
+from ..domain import get_domain
 
 #: How many candidates are scored per target. The pool is thousands of rows and
 #: the preference only needs a good match rather than the best one, so this is
@@ -68,7 +74,7 @@ def _take(ranked, shots, used, want: str):
     polarity constraint narrows the field without giving up the format and
     family preference inside it.
     """
-    from ..assistant import SHOT_REUSE_CEILING, fact_polarity
+    from ..shots import SHOT_REUSE_CEILING, fact_polarity
 
     for candidate in ranked:
         if any(s["id"] == candidate["id"] for s in shots):
@@ -105,17 +111,16 @@ def _agreement(splits, fact_polarity) -> dict:
             "rate": round(agree / total, 4) if total else None}
 
 
-def _reverify(row) -> bool:
+def _reverify(row, domain=None) -> bool:
     """Does this row still pass the check that admitted it?"""
-    from ..assistant import verify
-
+    domain = get_domain(domain)
     if "statements" in row:
         from ..intents import TERSE_FORMATS
-        from .intent_accept import (dropped_statements, format_met,
-                                    states_the_gloss, states_the_verdict)
+        from .accept import (dropped_statements, format_met,
+                             states_the_gloss, states_the_verdict)
 
         fmt = (row.get("brief") or {}).get("format", "prose")
-        if dropped_statements(row, row["answer"], fmt):
+        if dropped_statements(row, row["answer"], fmt, domain):
             return False
         if not format_met(row["answer"], fmt, row.get("skeleton")):
             return False
@@ -123,12 +128,13 @@ def _reverify(row) -> bool:
         # owes an answer to the constraint and an `explain` reply owes its
         # general sentence, and neither is one of the statements, so counting
         # statements cannot see either go missing.
-        if not states_the_gloss(row, row["answer"]):
+        if not states_the_gloss(row, row["answer"], domain):
             return False
         if row.get("task") == "decide" and fmt not in TERSE_FORMATS:
             return states_the_verdict(row, row["answer"], fmt)
         return True
-    return verify(row["answer"], row["facts"], row["brief"])["passed"]
+    return domain.legacy_verify(row["answer"], row["facts"],
+                                row["brief"])["passed"]
 
 
 def _load(path: str) -> list:
@@ -148,11 +154,15 @@ def main(argv=None) -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--shot-fraction", type=float, default=None,
-                        help="overrides assistant.SHOT_FRACTION")
+                        help="overrides shots.SHOT_FRACTION")
+    parser.add_argument("--domain", default=None,
+                        help="the assistant domain the set was built for "
+                             "(default: molecules)")
     args = parser.parse_args(argv)
+    domain = get_domain(args.domain)
 
-    from ..assistant import (SHOT_FRACTION, draw_shot_count, fact_polarity,
-                             question_text, shot_candidates, shot_pointer)
+    from ..shots import (SHOT_FRACTION, draw_shot_count, fact_polarity,
+                         question_text, shot_candidates, shot_pointer)
 
     fraction = args.shot_fraction if args.shot_fraction is not None else SHOT_FRACTION
     rng = random.Random(args.seed)
@@ -179,7 +189,7 @@ def main(argv=None) -> int:
             shots = []
             if wanted:
                 candidates = rng.sample(pool, min(CANDIDATE_SAMPLE, len(pool)))
-                ranked = shot_candidates(row, candidates)
+                ranked = shot_candidates(row, candidates, domain)
                 # The polarity each slot is *asked* for, drawn 50/50 and
                 # independently of the target's own. See `_wanted_polarity`.
                 target_polarity = fact_polarity(row["facts"])
@@ -202,7 +212,7 @@ def main(argv=None) -> int:
                     polarity_drawn[want or "n/a"] = \
                         polarity_drawn.get(want or "n/a", 0) + 1
             row["shots"] = shots
-            row["pointer"] = shot_pointer(rng) if shots else ""
+            row["pointer"] = shot_pointer(rng, domain) if shots else ""
             counts[len(shots)] = counts.get(len(shots), 0) + 1
         stats[name] = counts
         with open(os.path.join(args.out, f"{name}.jsonl"), "w") as f:
@@ -218,7 +228,7 @@ def main(argv=None) -> int:
     # says: a rendered row carries the `statements` its reply was built from, and
     # re-reading it with the composition verifier would be checking it against a
     # standard it was never held to.
-    reverified = {name: sum(1 for row in rows if _reverify(row))
+    reverified = {name: sum(1 for row in rows if _reverify(row, domain))
                   for name, rows in splits.items()}
     summary = {"reverified": reverified,
                "shots_by_count": stats,

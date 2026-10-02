@@ -1,33 +1,27 @@
-"""The assistant set: fact sheets, style briefs, and the verifier (§9.4).
+"""The molecule verifier, and the style briefs of the first-generation set (§9.4).
 
-`MOLECULE_GENERALIST.md` §9.4 asks for a few thousand graph-conditioned questions
-in free-form language with natural-language answers, and it puts one rule above
-the rest: **every example is written from a fact sheet computed by RDKit.** A
-language model asked to count rings is wrong often enough to teach confident
-hallucination; asked to *phrase* a fact it already holds, it is reliable. So the
-pipeline here is Python end to end and the writers only write:
+The first generation of the assistant set was written free-hand: a writer got a
+fact sheet and a style brief and produced a question and an answer, and this
+module checked the answer against the sheet afterwards —
 
-    fact sheet  ->  style brief  ->  batch file  ->  (an agent writes)  ->  verify
+    fact sheet  ->  style brief  ->  batch file  ->  (a writer writes)  ->  verify
 
-This module is the Python half. It is deliberately import-light — RDKit and the
-molecules package, nothing from the trainer — because two very different things
-use it: `tools/intent_build.py`, which prepares batches on a login-node budget,
-and `mol/assistant`'s ``verify``, which runs inside evaluation.
+The intent pipeline replaced that. Its replies are rendered, not written, so
+they are true by construction, and its accept pass checks the person's turn
+rather than the reply (`pipeline/accept.py`). What is left here is still live:
 
-What the fact sheet may hold is fixed by §9.4 and enforced in `fact_sheet`:
+* `verify`, the ``verify`` of `mol/assistant` and the correctness metric. Rows
+  built before rendered statements existed are re-verified with it in
+  `pipeline/compose.py`, through `MoleculeDomain.legacy_verify`;
+* `facts_contained`, the containment test behind the few-shot copy rule
+  (`MoleculeDomain.states_any`);
+* the claim and drift checks — `unsupported_claims`, `ungrounded_claims`,
+  `question_leaks` and the rest — which the first generation's accept used and
+  which the tests pin.
 
-* the nine Tier-A families' answers for this molecule — ring counts and sizes,
-  aromaticity, functional groups with counts, atom-level memberships, stereo
-  potential and assignment;
-* its canonical stereo-free SMILES (§5);
-* the in-mixture Tier-B labels it carries, with the endpoint named in words;
-* its ChEBI-20 caption, when it has one.
-
-And what it may never hold: the traversal families (`bond_path`, `longest_chain`)
-and anything from ClinTox. Those are §4's held-out set, and a fact sheet that
-quoted them would spend the held-out measurement through the back door.
-`HELD_OUT_PATTERNS` is the second line of that defence — it refuses an *accepted*
-example that talks about them however the wording arrived.
+It is deliberately import-light — RDKit and the molecules package, nothing from
+the trainer — because it runs inside evaluation as well as on a login node. The
+fact sheet itself is `sheet.py`.
 """
 
 from __future__ import annotations
@@ -36,13 +30,8 @@ import json
 import random
 import re
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Facts
-# ─────────────────────────────────────────────────────────────────────────────
-
-#: Counts above this are not single-token answers in the Tier-A families, so the
-#: trunk was never trained to produce one. Mirrors `molecules.tasks.MAX_COUNT`.
-MAX_COUNT = 20
+from ..facts import Fact, fact_field as _fact_field
+from .sheet import canonical_smiles
 
 #: Numbers spelled out. A fact's canonical form is the digit, and a writer that
 #: says "three rings" has still stated the fact — the verifier accepts either,
@@ -58,254 +47,6 @@ NUMBER_WORDS = (
 #: one, and a `yes` fact has to not be.
 NEGATIONS = ("no ", "not ", "n't", "lacks", "lacking", "without", "absent",
              "none", "free of", "neither", "nor ", "isn", "doesn")
-
-#: §4, as text. An accepted example that matches any of these is rejected
-#: whatever its facts said: the held-out families are held out in *language* too,
-#: or the set teaches the answer to the question §9.3 is measuring.
-HELD_OUT_PATTERNS = (
-    r"\blongest\b", r"\bshortest\b", r"\bpath\b", r"\bchain\b", r"\bdistance\b",
-    r"\bhops?\b", r"\bbonds? (?:apart|away|between)\b",
-    r"\bclinical trial", r"\bfda\b", r"\bapproved\b", r"\btoxic",
-)
-
-_HELD_OUT_RE = re.compile("|".join(HELD_OUT_PATTERNS), re.IGNORECASE)
-
-#: The endpoints of the five in-mixture Tier-B corpora, in words. ClinTox is
-#: absent by construction, and so is anything else the trunk did not train on.
-#: Each endpoint as a pair: the clause for a positive label and the clause for a
-#: negative one. Two clauses rather than one and a rule, because English does not
-#: negate a verb phrase by prefix — "does not inhibits", "does not active in the
-#: assay" — and a fact sheet is the one place in this pipeline where the wording
-#: is guaranteed correct.
-ENDPOINT_WORDS = {
-    ("bace", "Class"): ("inhibits human beta-secretase 1 (BACE-1)",
-                        "does not inhibit human beta-secretase 1 (BACE-1)"),
-    ("bbbp", "p_np"): ("crosses the blood-brain barrier",
-                       "does not cross the blood-brain barrier"),
-    ("hiv", "HIV_active"): ("shows activity against HIV replication",
-                            "shows no activity against HIV replication"),
-}
-
-
-def endpoint_words(corpus: str, endpoint: str, negative: bool = False) -> str:
-    """The endpoint as a clause a sentence can be built around.
-
-    Tox21 and SIDER carry dozens of columns apiece and are gradient rather than
-    headline numbers (§1), so their endpoints are named as the column they are
-    instead of being paraphrased one by one into claims about biology that the
-    label does not quite support. Tox21's columns *are* assays; SIDER's are
-    MedDRA system-organ classes, and calling one an assay — "it is active in the
-    Investigations assay" — states something that was never measured.
-    """
-    named = ENDPOINT_WORDS.get((corpus, endpoint))
-    if named:
-        return named[1] if negative else named[0]
-    pretty = endpoint.replace("_", " ").replace("-", " ").strip()
-    if corpus == "sider":
-        return (f"has no reported side effects in the {pretty} class"
-                if negative else
-                f"has reported side effects in the {pretty} class")
-    return (f"is not active in the {pretty} assay" if negative
-            else f"is active in the {pretty} assay")
-
-
-class Fact:
-    """One statement about a molecule, and the string that proves it was used.
-
-    ``value`` is the canonical form the verifier looks for in an answer; ``text``
-    is the same fact in a sentence, which is what a writer is handed. ``family``
-    is the Tier-A family, the corpus, or one of ``smiles`` / ``caption``, and it
-    is what the correctness breakdown in §9.4's table is grouped by.
-    """
-
-    __slots__ = ("family", "text", "value", "kind", "atoms")
-
-    def __init__(self, family: str, text: str, value: str, kind: str,
-                 atoms=()):
-        self.family = family
-        self.text = text
-        self.value = str(value)
-        self.kind = kind                  # count | yesno | smiles | text
-        self.atoms = tuple(atoms)
-
-    def to_json(self) -> dict:
-        out = {"family": self.family, "text": self.text, "value": self.value,
-               "kind": self.kind}
-        if self.atoms:
-            out["atoms"] = list(self.atoms)
-        return out
-
-    @classmethod
-    def from_json(cls, payload: dict) -> "Fact":
-        return cls(payload["family"], payload["text"], payload["value"],
-                   payload["kind"], payload.get("atoms", ()))
-
-    def __repr__(self) -> str:
-        return f"Fact({self.family}={self.value!r})"
-
-
-def _article(word: str) -> str:
-    """"a amide" and "a ether" are what a writer copies verbatim into the set,
-    and both appear in v1. The group names are a closed list, so the vowel test
-    is enough — none of them is a "european"."""
-    return "an" if word[:1].lower() in "aeiou" else "a"
-
-
-def canonical_smiles(mol) -> str:
-    """§5's target form: canonical, and stereo-free.
-
-    The same function the g2s task's target goes through, so an assistant answer
-    that quotes a SMILES is quoting the string the trunk was trained to write.
-    """
-    from .adapters.molecules import g2s_target
-
-    return g2s_target(mol)
-
-
-def fact_sheet(mol, *, rng: random.Random, tier_b=(), caption: str = "",
-               max_atom_facts: int = 3) -> list:
-    """Every fact §9.4 allows about one molecule, as `Fact` objects.
-
-    The atom-level families name specific atoms, and which atoms they name is the
-    one thing here that is sampled rather than enumerated: a molecule has as many
-    ring-membership facts as it has atoms, and a fact sheet that listed all of
-    them would be a table, not something to write three sentences from.
-    Everything else — ring count, the stereo pair, the groups it contains and
-    their counts — is exhaustive, because those are one fact each.
-
-    Atom indices are **1-based** in the text, which is the convention the Tier-A
-    questions use ("atom 14"), so a fact sheet and a trained question address the
-    same atom by the same number.
-    """
-    from rdkit import Chem
-
-    from ..experiments.molecules.tasks import (
-        _SMARTS, _chiral_centers, FUNCTIONAL_GROUPS)
-
-    facts = []
-    info = mol.GetRingInfo()
-
-    n_rings = info.NumRings()
-    if n_rings <= MAX_COUNT:
-        facts.append(Fact("ring_count", f"It has {n_rings} ring(s).",
-                          n_rings, "count"))
-
-    aromatic_rings = sum(1 for ring in info.AtomRings()
-                         if all(mol.GetAtomWithIdx(i).GetIsAromatic()
-                                for i in ring))
-    if aromatic_rings <= MAX_COUNT:
-        facts.append(Fact("aromatic_ring",
-                          f"{aromatic_rings} of its rings "
-                          f"{'is' if aromatic_rings == 1 else 'are'} aromatic.",
-                          aromatic_rings, "count"))
-
-    potential = len(_chiral_centers(mol, unassigned=True))
-    assigned = len([c for c in _chiral_centers(mol, unassigned=True)
-                    if c[1] != "?"])
-    if potential <= MAX_COUNT:
-        facts.append(Fact("stereo_potential",
-                          f"{potential} atom(s) could be stereocenters.",
-                          potential, "count"))
-    if assigned <= MAX_COUNT:
-        facts.append(Fact("stereo_assigned",
-                          f"{assigned} stereocenter(s) have a defined "
-                          "configuration.", assigned, "count"))
-
-    # Functional groups: every group it contains, with its count, and then
-    # `fg_presence` drawn from both sides.
-    #
-    # **Both sides is the whole point, and taking only the absent ones is how
-    # this went wrong the first time.** The guard against "the answer to 'does
-    # it contain X' is always yes" was written by emitting `fg_presence` for
-    # absent groups only — which inverted the bias rather than removing it and
-    # made the family's value a constant. Measured on the set that built:
-    # 1,180 `fg_presence` facts, yes-rate **0.000**, and a model that answers
-    # "no" to every functional-group question it is asked while scoring 0.994
-    # on the same question in its own validator. A family whose value never
-    # varies teaches its prior and nothing else, so draw up to two from each
-    # side and let the molecule decide how many there are to draw.
-    present, absent = [], []
-    members_by_group = {}
-    for name in FUNCTIONAL_GROUPS:
-        matches = mol.GetSubstructMatches(_SMARTS[name])
-        members_by_group[name] = {i for match in matches for i in match}
-        (present if matches else absent).append((name, len(matches)))
-    for name, count in present:
-        if count <= MAX_COUNT:
-            facts.append(Fact("fg_count", f"It contains {count} {name}(s).",
-                              count, "count"))
-    for name, _ in rng.sample(present, min(2, len(present))):
-        facts.append(Fact("fg_presence",
-                          f"It contains {_article(name)} {name}.", "yes",
-                          "yesno"))
-    for name, _ in rng.sample(absent, min(2, len(absent))):
-        facts.append(Fact("fg_presence", f"It contains no {name}.", "no",
-                          "yesno"))
-
-    # Atom-level facts, on a sample of atoms. Each atom carries the three
-    # atom-level families at once, so a writer can say something about an atom
-    # rather than one disconnected fact per atom.
-    indices = [a.GetIdx() for a in mol.GetAtoms()]
-    for idx in rng.sample(indices, min(max_atom_facts, len(indices))):
-        atom = mol.GetAtomWithIdx(idx)
-        label = f"atom {idx + 1} ({atom.GetSymbol()})"
-        in_ring = atom.IsInRing()
-        facts.append(Fact("ring_membership",
-                          f"{label} is {'in' if in_ring else 'not in'} a ring.",
-                          "yes" if in_ring else "no", "yesno", atoms=[idx + 1]))
-        aromatic = atom.GetIsAromatic()
-        facts.append(Fact("aromatic_ring",
-                          f"{label} is {'in' if aromatic else 'not in'} an "
-                          "aromatic ring.",
-                          "yes" if aromatic else "no", "yesno", atoms=[idx + 1]))
-        sizes = [len(r) for r in info.AtomRings() if idx in r]
-        smallest = min(sizes) if sizes else 0
-        if smallest <= MAX_COUNT:
-            # The "0 means no ring" gloss belongs only on the fact it explains.
-            # Carried on a nonzero size it invites the answer to repeat both
-            # halves — "has 6 atoms. Since it is in no ring, the ring size is 0"
-            # is a real one — and a self-contradiction still passes containment.
-            text = (f"{label} is in no ring." if smallest == 0 else
-                    f"The smallest ring containing {label} has "
-                    f"{smallest} atoms.")
-            facts.append(Fact("ring_size", text, smallest, "count",
-                              atoms=[idx + 1]))
-        # One group per atom is enough, but *which* group has to be drawn rather
-        # than taken. Taking `present[0]` made the choice a function of
-        # `FUNCTIONAL_GROUPS`' dict order: measured on the set that built, 53 %
-        # of 3,889 atom-level group facts asked about hydroxyl or ether, and
-        # nitrile and sulfonamide together came to 2.8 %. Drawing also fixes the
-        # family's polarity, which the same line held at a yes-rate of 0.149 —
-        # a random atom is rarely inside one particular group, so half the draws
-        # come from the groups that do contain this atom when any do.
-        if present:
-            covering = [name for name, _ in present if idx in members_by_group[name]]
-            pool = ([name for name in covering] if covering and rng.random() < 0.5
-                    else [name for name, _ in present])
-            name = rng.choice(pool)
-            member = idx in members_by_group[name]
-            facts.append(Fact("fg_atom_membership",
-                              f"{label} is {'part' if member else 'not part'} "
-                              f"of {_article(name)} {name}.",
-                              "yes" if member else "no", "yesno",
-                              atoms=[idx + 1]))
-
-    smiles = canonical_smiles(mol)
-    if smiles:
-        facts.append(Fact("smiles", f"Its canonical SMILES is {smiles}.",
-                          smiles, "smiles"))
-
-    for corpus, endpoint, label in tier_b:
-        clause = endpoint_words(corpus, endpoint, negative=not label)
-        facts.append(Fact(f"tier_b/{corpus}", f"It {clause}.",
-                          "yes" if label else "no", "yesno"))
-
-    if caption:
-        facts.append(Fact("caption", caption.strip(), caption.strip(), "text"))
-
-    assert not any(f.family in ("bond_path", "longest_chain") for f in facts)
-    return facts
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Style briefs
@@ -379,23 +120,6 @@ FACT_COUNTS = (1, 1, 1, 2, 2, 3)
 
 #: Formats whose answer is the fact's value and nothing else.
 TERSE_FORMATS = ("answer in one word", "start the answer with the number")
-
-#: How often an intent's pivot is a fact about the whole molecule rather than
-#: about a named atom. It is a statement about what the set teaches rather than
-#: a correction to it: "how many rings does this have" and "is atom 12
-#: aromatic" are different questions, and a set that is three-quarters the
-#: second teaches the second — which is what the first leg's case study found,
-#: every atom-level question answered and most molecule-level ones missed.
-#:
-#: **Not the same number as the split it produces.** `compare` and `triage` are
-#: defined over atoms and draw before this applies, so they hold the atom-level
-#: share up from underneath. Measured over the 9,491-molecule pool: 0.00 gives
-#: 97.4 % atom-level, 0.42 gives 65.6 / 30.7, and **0.55 gives 56.1 / 39.8**
-#: with 4.1 % carrying both, which is the 55 / 40 this is set for. The build
-#: itself came out at 55.9 / 40.3 / 3.8 over 11,900 intents, so the simulation
-#: is worth trusting. Re-measure rather than re-derive if the task weights move.
-MOLECULE_LEVEL_PIVOT = 0.55
-
 
 def draw_brief(rng: random.Random) -> dict:
     """One point of `BRIEF_AXES`, plus how many facts the example uses.
@@ -476,221 +200,6 @@ def select_facts(facts, brief: dict, rng: random.Random) -> list:
            if f is not pivot and (f.family == pivot.family
                                   or (f.atoms and set(f.atoms) & set(pivot.atoms)))]
     return [pivot] + rng.sample(kin, min(n - 1, len(kin)))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Few-shot demonstrations
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# The axis §9.4 withdrew, reinstated on the one condition that withdrawal named.
-# It was dropped because "a worked example is about a *different* molecule,
-# nothing computes a fact sheet for that molecule, and so no part of the
-# demonstration can be verified" — and what came back proved the point, a 4-atom
-# smallest ring in a molecule with no rings.
-#
-# That objection is about where the demonstration comes from, not about
-# few-shot. A demonstration drawn from an **already-accepted row** has a fact
-# sheet, computed by RDKit for a real molecule from the same pool, and it has
-# already been through every filter in `intent_accept.py`. So the shots are
-# composed after acceptance, out of the set itself, and every word of every
-# demonstration is verified to the same standard as the answer it precedes.
-#
-# The demonstration molecules go into the graph as their own **disconnected
-# components** — which is also the only honest encoding, since they are
-# different molecules and a bond between them would be a chemical claim. The
-# prompt node carries a directed edge to each demonstration node, so the
-# pointer the question makes in words ("worked examples are attached") is a
-# real edge the structural bias can read. That puts the target's atoms at
-# distance 1 from the prompt and a demonstration's atoms at distance 2, behind
-# their own node, so "which molecule is the question about" is answerable from
-# the SPD row rather than only from the text.
-
-#: The share of accepted examples that get demonstrations.
-SHOT_FRACTION = 0.22
-
-#: How many demonstrations one example carries, when it carries any. Weighted
-#: low: the point is to teach the shape of an answer, and a fourth demonstration
-#: costs four more molecules' worth of context for very little of that.
-SHOT_COUNTS = (1, 1, 1, 2, 2, 3, 4)
-
-#: How many times one accepted row may serve as somebody else's demonstration.
-#: Without a ceiling the selector's preference for a matching family and format
-#: concentrates on whichever rows are easiest to match, and a handful of answers
-#: would be shown to the model hundreds of times.
-SHOT_REUSE_CEILING = 6
-
-#: The sentence that points at the attached demonstrations. Several of them for
-#: the reason every other axis here has several: §9.4 asks for no template
-#: recognisable across the set, and a fixed preamble on a fifth of the examples
-#: is the most recognisable template there could be.
-SHOT_POINTERS = (
-    "Worked examples on other molecules are attached — see those examples.",
-    "Some solved examples for other molecules come with this one; see them.",
-    "Attached are worked examples on different molecules. Use them as a guide.",
-    "See the attached examples, which solve the same kind of question for other "
-    "molecules.",
-    "The attached examples answer questions like this one for other molecules.",
-    "A few worked examples on unrelated molecules are attached for reference.",
-)
-
-
-def draw_shot_count(rng: random.Random, fraction: float = None) -> int:
-    """How many demonstrations this example gets. 0 for most of them."""
-    share = SHOT_FRACTION if fraction is None else fraction
-    if rng.random() >= share:
-        return 0
-    return rng.choice(SHOT_COUNTS)
-
-
-def shot_pointer(rng: random.Random) -> str:
-    """The line prefixed to a question whose example carries demonstrations."""
-    return rng.choice(SHOT_POINTERS)
-
-
-def shot_text(question: str, answer: str, index: int) -> str:
-    """One demonstration, as the text of its node in the graph.
-
-    Numbered, because the demonstrations are a *set* of components and the
-    numbering is the only thing that lets an answer refer to one of them. The
-    Q/A shape is deliberately not the prompt format the example itself uses:
-    a demonstration is quoted material, and formatting it as a second turn
-    would give the graph two assistant turns and no way to tell which one is
-    being asked for.
-    """
-    return (f"Example {index + 1} (a different molecule)\n"
-            f"Q: {question}\nA: {answer}")
-
-
-def demo_leaks_target(demo_answer: str, target_facts) -> bool:
-    """Does a demonstration's answer already state one of the target's facts?
-
-    The copy shortcut, and the one way a demonstration can make an example
-    easier than the example it demonstrates: a demonstration answering "3" to a
-    ring-count question, in front of a target whose ring count is also 3,
-    teaches that the answer is whatever the last example answered. The molecules
-    differ and the demonstration is true of its own, so nothing here is *wrong*
-    — it is just a row the model can get right without reading the graph, which
-    is the same defect as a question that states its own answer.
-    """
-    facts = [f if isinstance(f, Fact) else Fact.from_json(f) for f in target_facts]
-    if not facts:
-        return False
-    return any(facts_contained(demo_answer, facts).values())
-
-
-def shot_candidates(target, pool) -> list:
-    """`pool` rows that may demonstrate for `target`, best match first.
-
-    Three hard rules and one preference. A demonstration may not be the target,
-    may not be the same molecule under a different id (the partition key is the
-    identity that matters — two rows about one molecule would put the target's
-    own structure in its context twice), and may not state one of the target's
-    facts. The preference is for a row that shares the target's *format* first
-    and a fact *family* second, because a demonstration exists to show the shape
-    of the wanted answer, and a JSON demonstration in front of a one-word
-    question shows the wrong shape.
-    """
-    target_families = {f["family"] for f in target["facts"]}
-    target_format = (target.get("brief") or {}).get("format", "")
-    out = []
-    for row in pool:
-        if row["id"] == target["id"] or row["key"] == target["key"]:
-            continue
-        if demo_leaks_target(row["answer"], target["facts"]):
-            continue
-        families = {f["family"] for f in row["facts"]}
-        row_format = (row.get("brief") or {}).get("format", "")
-        score = (2 if row_format == target_format else 0) + \
-                (1 if families & target_families else 0)
-        out.append((score, row))
-    out.sort(key=lambda pair: -pair[0])
-    return [row for _score, row in out]
-
-
-def fact_polarity(facts) -> str:
-    """``"yes"``, ``"no"``, or ``""`` when a row's yes/no facts do not agree.
-
-    The handle the polarity balance in `assistant_compose.py` is drawn on. It
-    reads the *facts*, not the answer: the facts carry the canonical value
-    already, and asking the text would mean re-deriving through the negation
-    machinery something that was computed by RDKit two stages earlier.
-    """
-    values = {_fact_field(f, "value") for f in facts
-              if _fact_field(f, "kind") == "yesno"}
-    return values.pop() if len(values) == 1 else ""
-
-
-def question_text(row) -> str:
-    """The text of a composed row's question node: the pointer, then the exchange.
-
-    The pointer is stored beside the question rather than folded into it so that
-    ``question`` stays exactly the string the accept pass verified. A composed
-    set therefore re-verifies as the accepted set it came from, and the sentence
-    that refers to the attached components is recoverable as its own field. The
-    same holds for the turns below: they are assembled here, at the consumer, and
-    nothing on the row is rewritten.
-
-    **A `needs_clarification` row is an exchange, and the exchange is the
-    question.** Its `question` field holds only the person's opening turn, which
-    is underspecified on purpose — "Is that atom part of a ring?" — and the
-    clarifying turns that resolve it live in `turns`. Reading `question` alone
-    asks the model something that has no answer while showing it one that names
-    an atom the question never did, which teaches exactly the guess the twist
-    exists to teach against. The middle turns are everything between the opening
-    and the reply, so a single-turn row is unchanged and needs no transcript
-    framing around it.
-    """
-    pointer = (row.get("pointer") or "").strip()
-    question = row["question"]
-    middle = (row.get("turns") or [])[1:-1]
-    if middle:
-        lines = [f"You: {question}"]
-        lines += [f"{'Assistant' if t['role'] == 'assistant' else 'You'}: "
-                  f"{t['text']}" for t in middle]
-        question = "\n".join(lines)
-    return f"{pointer}\n{question}" if pointer else question
-
-
-def named_atoms_for(facts) -> list:
-    """The atoms an assistant example is about, as **0-based RDKit indices**.
-
-    Empty unless *every* drawn fact is atom-scoped. This mirrors
-    `dataset.build_graph_example`: an atom-level question wires the prompt to
-    the atoms it names, and a molecule-level one wires it to the whole
-    molecule, because a prompt whose edges reach only one atom of a question
-    about the whole molecule is pointing at the wrong thing. An assistant
-    example can draw both kinds at once, and then the molecule is what it is
-    about.
-
-    **The indices are converted.** A fact sheet writes atoms 1-based, because
-    that is the convention the Tier-A questions use ("atom 14"); the graph's
-    node keys are RDKit's own 0-based indices. Wiring the prompt without
-    subtracting one would point it at the neighbouring atom — silently, and
-    only on the families that name an atom.
-    """
-    facts = [f if isinstance(f, Fact) else Fact.from_json(f) for f in facts]
-    if not facts or not all(f.atoms for f in facts):
-        return []
-    return sorted({a - 1 for f in facts for a in f.atoms})
-
-
-def shot_molecules(row) -> list:
-    """A composed row's demonstrations as ``(mol, question, answer)``.
-
-    The molecule is rebuilt from the demonstration's partition key, which is the
-    stereo-free canonical SMILES (`adapters.molecules.partition_key`) — the same
-    string the §3 partition treats as the molecule's identity, so a demonstration
-    cannot smuggle in a stereoisomer the partition holds at a different role.
-    """
-    from rdkit import Chem
-
-    out = []
-    for shot in row.get("shots") or []:
-        mol = Chem.MolFromSmiles(shot["key"])
-        if mol is None:                  # unparseable key: drop the shot, keep the row
-            continue
-        out.append((mol, shot["question"], shot["answer"]))
-    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1072,11 +581,6 @@ def _json_span(answer: str) -> str:
     return answer[start:end + 1] if start >= 0 and end > start else answer
 
 
-def mentions_held_out(text: str) -> bool:
-    """§4's language filter. True means the example is rejected."""
-    return _HELD_OUT_RE.search(text or "") is not None
-
-
 #: Chemistry a fact sheet never states, and therefore a writer never has grounds
 #: for. Named ring systems and compound classes are the first list; group names
 #: outside `FUNCTIONAL_GROUPS` are the second. Both are invention by
@@ -1112,7 +616,7 @@ def unsupported_claims(answer: str, sheet) -> list:
     and any named ring system or compound class, neither of which a sheet can
     ever license. Returns the offending words, so the rejection log says which.
     """
-    from ..experiments.molecules.tasks import FUNCTIONAL_GROUPS
+    from ....experiments.molecules.tasks import FUNCTIONAL_GROUPS
 
     text = (answer or "").lower()
     sheet_text = " ".join(
@@ -1144,14 +648,6 @@ _UNIVERSAL_RE = re.compile(
 #: that molecule was a chlorine — and always unfounded.
 _ATOM_PROPERTY_RE = re.compile(r"\batomic (?:number|weight|mass)\b",
                                re.IGNORECASE)
-
-
-def _fact_field(fact, name: str, default=""):
-    """Facts reach the verifier as dataclasses when written and as dicts when
-    read back from JSONL. Both are read the same way here."""
-    if isinstance(fact, Fact):
-        return getattr(fact, name, default)
-    return fact.get(name, default)
 
 
 def ungrounded_claims(answer: str, facts) -> list:
@@ -1487,7 +983,7 @@ _SUBJECT_RE = {}
 def _subject_res() -> dict:
     """The compiled subject patterns, with the functional groups filled in."""
     if not _SUBJECT_RE:
-        from ..experiments.molecules.tasks import FUNCTIONAL_GROUPS
+        from ....experiments.molecules.tasks import FUNCTIONAL_GROUPS
         groups = "|".join(re.escape(name) for name in sorted(FUNCTIONAL_GROUPS))
         subjects = dict(_SUBJECTS)
         subjects["functional group"] = (
@@ -1755,17 +1251,6 @@ def question_drifts(question: str, seed: str, facts) -> str:
         if name and name in (seed or "").lower() and name not in lowered:
             return f"drops the group {name}"
     return ""
-
-
-def four_grams(text: str) -> set:
-    words = re.findall(r"[a-z0-9]+", (text or "").lower())
-    return {tuple(words[i:i + 4]) for i in range(max(0, len(words) - 3))}
-
-
-def jaccard(a: set, b: set) -> float:
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 def verify(answer: str, facts, brief=None) -> dict:

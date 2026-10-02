@@ -126,7 +126,7 @@ The annealed graph checkpoints are a **trunk**; what remains measures them as a 
 **Assistant set:** 10,640 examples (9,873 train / 767 test). Every answer composed by Python from an
 RDKit fact sheet and only re-voiced by a writer, so invented chemistry is unreachable rather than
 filtered. 100 rows read by hand found three defect classes, all counted exactly and removed. Pipeline
-is `tools/intent_pipeline.sh`; operating hazards are in the module docstrings.
+is `assistant/pipeline/run.sh`; operating hazards are in the module docstrings.
 
 **Blocking the fork:** `mol/assistant` is not in the registry. `build_assistant_example` and the
 add-a-task fork mechanism exist and are tested; missing is the TaskSpec naming where the JSONL lives

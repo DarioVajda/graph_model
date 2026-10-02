@@ -162,7 +162,7 @@ CHEBI_TASK = "chebi20"
 G2S_TASK = "g2s"
 ASSISTANT_TASK = "assistant"
 
-#: Where `tools/intent_pipeline.sh` leaves the composed assistant set. Under
+#: Where `assistant/pipeline/run.sh` leaves the composed assistant set. Under
 #: ``results/``, so it is not committed and a checkout cannot rebuild it — the
 #: pipeline is the only thing that produces it (§9.4).
 ASSISTANT_DIR = os.path.join(_REPO_ROOT, "src", "generalist", "results",
@@ -255,7 +255,7 @@ class MoleculeAdapterConfig:
 
     # ── the assistant set (§9.4) ─────────────────────────────────────────────
     #: The directory holding `train.jsonl` / `test.jsonl` from
-    #: `tools/assistant_compose.py`. A **location**, and popped from
+    #: `assistant/pipeline/compose.py`. A **location**, and popped from
     #: `build_version` for the same reason `chebi_dir` is — see the note there
     #: for what that costs.
     assistant_dir: str = ASSISTANT_DIR
@@ -1172,7 +1172,7 @@ def _graphs_for(config, task, arm, draws, pass_id, answer_kind: str = ""):
             # `atom_labels` on and `named` honoured as passed, both unlike
             # `build_graph_example` — see that function's docstring for why the
             # decision cannot come from the task name here.
-            from ..assistant import shot_molecules
+            from ..assistant.molecules.graphs import shot_molecules
 
             graphs.append(build_assistant_example(
                 mol, question, answer, named, shot_molecules(_meta), cfg))
@@ -1567,7 +1567,7 @@ def splits_for(task: str) -> tuple:
         return ("held_out",)
     if task in HELD_OUT_TIER_A_TASKS:
         return ("train", "val", "test", "held_out")
-    # The assistant set is composed, not drawn, and `assistant_compose.py` writes
+    # The assistant set is composed, not drawn, and `assistant/pipeline/compose.py` writes
     # two files. Holding a val slice back would mean re-composing, and the split
     # it would be carved from is the one the fork trains on.
     if task == ASSISTANT_TASK:
@@ -1580,7 +1580,7 @@ def all_tasks(config: MoleculeAdapterConfig) -> tuple:
 
     **`assistant` is registered but deliberately not here.** Every other task
     builds from raw corpora that a checkout already has; the assistant set comes
-    out of `tools/intent_pipeline.sh`, which is six stages and four GPU-hours,
+    out of `assistant/pipeline/run.sh`, which is six stages and four GPU-hours,
     and lands under an uncommitted ``results/``. Putting it in the default list
     would make a full data_prep on a fresh machine fail on the one task most runs
     do not want. Build it explicitly::
@@ -1729,17 +1729,17 @@ def _draw_assistant(config, split: str):
 
     Every other family here samples molecules and renders a question against
     them. This one is handed rows that were already built, voiced and filtered by
-    `tools/intent_pipeline.sh`, so the whole job is to parse them back into the
+    `assistant/pipeline/run.sh`, so the whole job is to parse them back into the
     adapter's six-tuple and carry the demonstrations through.
 
     **The demonstrations ride in ``meta``, as data rather than as molecules.**
     `_materialise` writes ``meta`` into the sidecar as JSON, so a live RDKit mol
     here would not survive the round trip; `_graphs_for` rebuilds them from the
     keys with `assistant.shot_molecules`, which is the same function
-    `assistant_graphs.py` measured the set with.
+    `assistant/pipeline/graphs.py` measured the set with.
 
     The role check in `_check_roles` is live on this task and worth keeping:
-    ``key`` is the §3 partition key, because `intent_build` drew its molecules by
+    ``key`` is the §3 partition key, because the build stage drew its molecules by
     role from the same partition, so a composed set built under a different
     partition fails here rather than leaking into a train split.
     """
@@ -1747,13 +1747,14 @@ def _draw_assistant(config, split: str):
     if not os.path.exists(path):
         raise AdapterBuildError(
             f"{path} is missing. The assistant set is composed, not generated: "
-            "run `src/generalist/tools/intent_pipeline.sh --out <dir>` and point "
+            "run `src/generalist/assistant/pipeline/run.sh --out <dir>` and point "
             "`assistant_dir` at its `composed/`. Unlike every other task here, a "
             "checkout cannot rebuild it — `results/` is not committed.")
 
     from rdkit import Chem
 
-    from ..assistant import named_atoms_for, question_text
+    from ..assistant.molecules.graphs import named_atoms_for
+    from ..assistant.shots import question_text
 
     draws, dropped = [], 0
     with open(path) as handle:
@@ -1775,9 +1776,9 @@ def _draw_assistant(config, split: str):
                     # are the reason a free-text reply can be scored at all.
                     #
                     # Carried in full — `statements`, `answers`, `verdict`,
-                    # `gloss`, `skeleton`, `turns` — so `tools/assistant_score.py`
+                    # `gloss`, `skeleton`, `turns` — so `assistant/analysis/score.py`
                     # can rebuild the render dict from the artifact alone.
-                    # `intent_accept` wrote the composed row as a renaming of
+                    # The accept pass wrote the composed row as a renaming of
                     # that dict, and keeping the whole renaming here is what made
                     # `accepted/` and `composed/` survive the deletion of every
                     # upstream stage: a row that describes itself needs nothing

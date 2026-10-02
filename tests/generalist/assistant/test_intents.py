@@ -12,13 +12,14 @@ import re
 
 import pytest
 
-from src.generalist.assistant import Fact
-from src.generalist.intents import (
+from src.generalist.assistant.facts import Fact
+from src.generalist.assistant.intents import (
     FORMATS, ONE_WORD_TASKS, STRUCTURED_FORMATS, TASK_WEIGHTS, Intent,
     load_situations, sample_intent, _draw_facts, _pivot_neighbours,
 )
-from src.generalist.render import (FAMILY_WORDS, GLOSS, OFF_SHEET_FAMILIES,
-                                   TASKS, ask_phrase, render)
+from src.generalist.assistant.molecules.vocabulary import (
+    FAMILY_WORDS, GLOSS, OFF_SHEET_FAMILIES)
+from src.generalist.assistant.render import TASKS, ask_phrase, render
 
 
 def ring(atom=14, yes=True):
@@ -257,7 +258,7 @@ class TestTwists:
         assert out.turns[2][1] == "Atom 7 (C)."
 
     def test_clarification_needs_one_atom_across_its_facts(self):
-        from src.generalist.render import can_clarify
+        from src.generalist.assistant.render import can_clarify
         assert can_clarify([ring(14), size(14)])
         assert not can_clarify([ring(14), ring(3)])
         assert not can_clarify([count(2)])

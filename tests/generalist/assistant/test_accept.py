@@ -8,9 +8,12 @@ it must not reject. Most of these cases are transcribed from the first smoke
 build's rejection log, where ten of twelve rows read by hand were correct.
 """
 
-from src.generalist.tools.intent_accept import (
-    _anchor_named, _leaked_statements, asks_for_a_joint_ring, carries_token,
-    dropped_statements, declines, format_met, invents_a_structure,
+from src.generalist.assistant.molecules.checks import (
+    asks_for_a_joint_ring, invents_a_structure,
+)
+from src.generalist.assistant.pipeline.accept import (
+    _anchor_named, _leaked_statements, carries_token,
+    dropped_statements, declines, format_met,
     pivot_is_unassertable, premise_is_not_false, read_order,
     statement_survives, states_the_gloss, states_the_verdict,
 )

@@ -8,7 +8,8 @@ for.
 
 An intent names six things:
 
-    molecule   which structure, and its RDKit fact sheet
+    subject    which structure, and its fact sheet (a molecule and its RDKit
+               facts, for the molecule domain)
     task       what the person wants *done* — the axis earlier builds lacked
     twist      none, or a false premise, an unanswerable ask, an underspecified one
     facts      which sheet facts the reply rests on
@@ -18,7 +19,7 @@ An intent names six things:
 Two rules are enforced here rather than checked later, because a filter that
 catches them is a filter discovering a build bug:
 
-* **The pivot rule.** A multi-fact draw shares a family or an atom with its
+* **The pivot rule.** A multi-fact draw shares a family or a part with its
   pivot. Asked for several unrelated facts in one answer a writer welds them with
   a false connective ("... Therefore, there are 2 ethers."), and neither that nor
   a bare list is a sentence worth learning.
@@ -26,18 +27,20 @@ catches them is a filter discovering a build bug:
   satisfy it — "a numbered list" needs two or more statements, "one word" needs
   exactly one and a terse kind. Earlier builds drew the two independently, and an
   impossible brief was the largest remaining defect class in the last hand sample.
+
+Everything a domain decides — how often the pivot is about the whole subject,
+which families an unanswerable ask may name, which facts restate each other, who
+the people are — comes from the `Domain` passed as ``domain`` (molecules when
+nothing is passed). The serialised keys `molecule_id` and `smiles` are the
+subject's id and its canonical string, kept under their first names because
+every batch built so far carries them.
 """
 
 import json
-import os
 
-from .assistant import Fact, MOLECULE_LEVEL_PIVOT
-from .render import (OFF_SHEET_FAMILIES, TASKS, UNANSWERABLE_FAMILIES,
-                     can_clarify, render)
-
-
-_HERE = os.path.dirname(os.path.abspath(__file__))
-SITUATIONS_PATH = os.path.join(_HERE, "situations.json")
+from .domain import get_domain
+from .facts import Fact
+from .render import TASKS, can_clarify, render
 
 #: How often each task is drawn. `report` stays the plurality because it is the
 #: shape the trunk was trained on and the set is a re-skin, not a new capability;
@@ -124,8 +127,9 @@ STRUCTURED_FORMATS = frozenset(("one word", "JSON matching the given schema",
                                 "a numbered list", "a bulleted list"))
 
 
-def load_situations(path: str = SITUATIONS_PATH) -> list:
-    with open(path) as handle:
+def load_situations(path: str = None, domain=None) -> list:
+    """The people who ask: `path`, or the domain's `situations_path`."""
+    with open(path or get_domain(domain).situations_path) as handle:
         return json.load(handle)["situations"]
 
 
@@ -178,35 +182,16 @@ def _weighted(rng, weights: dict):
     return next(iter(weights))
 
 
-def _restates(one, other) -> bool:
-    """Do these two facts make the same claim in two wordings?
-
-    One case, and it is worth the function because it reads as a defect: a
-    `ring_size` of 0 and a `ring_membership` of "no" about one atom are the same
-    sentence twice — "Atom 1 (Sn) is in no ring. Atom 1 (Sn) is not in a ring."
-    A nonzero `ring_size` beside a `ring_membership` of "yes" is not redundant,
-    because the size is more than the membership.
-    """
-    pair = {one.family, other.family}
-    if pair != {"ring_size", "ring_membership"}:
-        return False
-    if set(one.atoms) != set(other.atoms):
-        return False
-    size = one if one.family == "ring_size" else other
-    try:
-        return int(size.value) == 0
-    except (TypeError, ValueError):
-        return False
-
-
-def _pivot_neighbours(sheet, pivot) -> list:
-    """Sheet facts that may share an answer with `pivot`: same family, or an
-    atom in common. The rule earlier builds learned the hard way."""
+def _pivot_neighbours(sheet, pivot, domain=None) -> list:
+    """Sheet facts that may share an answer with `pivot`: same family, or a
+    part in common. The rule earlier builds learned the hard way. A fact the
+    domain says restates the pivot (`Domain.restates`) is not a neighbour."""
+    domain = get_domain(domain)
     out = []
     for fact in sheet:
         if fact is pivot:
             continue
-        if _restates(fact, pivot):
+        if domain.restates(fact, pivot):
             continue
         if fact.family == pivot.family:
             out.append(fact)
@@ -215,8 +200,9 @@ def _pivot_neighbours(sheet, pivot) -> list:
     return out
 
 
-def _draw_facts(sheet, task, rng):
+def _draw_facts(sheet, task, rng, domain=None):
     """A pivot and, where the task wants more, neighbours that share with it."""
+    domain = get_domain(domain)
     low, high = TASKS[task][1]
     if not sheet:
         return []
@@ -253,13 +239,13 @@ def _draw_facts(sheet, task, rng):
     # atom-level only against 20.1 % molecule-level. The first leg's case study
     # then answered every atom-level question correctly and most molecule-level
     # ones wrongly, which is the same split read twice. `compare` and `triage`
-    # are exempt because they are defined over atoms and return above.
-    molecule_level = [f for f in pool if not f.atoms]
-    atom_level = [f for f in pool if f.atoms]
+    # are exempt because they are defined over parts and return above. The
+    # share is the domain's `whole_subject_pivot`.
+    whole = [f for f in pool if not f.atoms]
+    parts = [f for f in pool if f.atoms]
     scoped = pool
-    if molecule_level and atom_level:
-        scoped = (molecule_level if rng.random() < MOLECULE_LEVEL_PIVOT
-                  else atom_level)
+    if whole and parts:
+        scoped = whole if rng.random() < domain.whole_subject_pivot else parts
 
     pivot = scoped[0]
     if task == "decide":
@@ -280,7 +266,7 @@ def _draw_facts(sheet, task, rng):
     want = rng.randint(low, high)
     if want == 1:
         return [pivot]
-    neighbours = _pivot_neighbours(sheet, pivot)
+    neighbours = _pivot_neighbours(sheet, pivot, domain)
     rng.shuffle(neighbours)
     # Filtering against the pivot is not enough: two neighbours can restate each
     # other without either restating the pivot.
@@ -288,19 +274,20 @@ def _draw_facts(sheet, task, rng):
     for fact in neighbours:
         if len(drawn) >= want:
             break
-        if any(_restates(fact, chosen) for chosen in drawn):
+        if any(domain.restates(fact, chosen) for chosen in drawn):
             continue
         drawn.append(fact)
     return drawn
 
 
-def _draw_twist(task, sheet, facts, rng):
+def _draw_twist(task, sheet, facts, rng, domain=None):
     """A twist the render can actually carry, or `none`.
 
     Feasibility is settled here rather than by catching the renderer's
     complaint, because falling back on the exception drops the whole task for
-    that molecule instead of just the twist.
+    that subject instead of just the twist.
     """
+    domain = get_domain(domain)
     allowed = [t for t in TASKS[task][2] if t != "none"]
     if not allowed or rng.random() >= TWIST_RATE:
         return "none", None
@@ -308,15 +295,15 @@ def _draw_twist(task, sheet, facts, rng):
     carried = {f.family for f in sheet}
     for twist in allowed:
         if twist == "needs_clarification":
-            if can_clarify(facts):
+            if can_clarify(facts, domain):
                 return twist, None
         elif twist == "unanswerable":
-            # Both pools: the sheet families this molecule happens to lack, and
+            # Both pools: the sheet families this subject happens to lack, and
             # the properties no sheet ever carries. Drawing from the first alone
             # gave `caption` 31 times in 32, because a sheet that lacks anything
             # else is rare — so every unanswerable turn was the same sentence.
-            spare = [f for f in UNANSWERABLE_FAMILIES if f not in carried]
-            spare += list(OFF_SHEET_FAMILIES)
+            spare = [f for f in domain.unanswerable_families if f not in carried]
+            spare += list(domain.off_sheet_families)
             if spare:
                 return twist, spare[rng.randrange(len(spare))]
         else:
@@ -341,25 +328,27 @@ def _draw_style(rendered, rng) -> dict:
             "length": length, "format": fmt}
 
 
-def sample_intent(molecule_id, smiles, sheet, situations, rng, role="train"):
-    """One intent over one molecule, or None if the sheet cannot support any.
+def sample_intent(molecule_id, smiles, sheet, situations, rng, role="train",
+                  domain=None):
+    """One intent over one subject, or None if the sheet cannot support any.
 
     Returns `(intent, render)` so the caller never re-renders: the render is what
     decides which formats are drawable, so the two are produced together.
     """
+    domain = get_domain(domain)
     tasks = dict(TASK_WEIGHTS)
     for _ in range(len(tasks)):
         if not tasks:
             return None
         task = _weighted(rng, tasks)
-        facts = _draw_facts(sheet, task, rng)
+        facts = _draw_facts(sheet, task, rng, domain)
         low, high = TASKS[task][1]
         if not low <= len(facts) <= high:
             tasks.pop(task, None)         # this sheet cannot support the task
             continue
-        twist, spare = _draw_twist(task, sheet, facts, rng)
+        twist, spare = _draw_twist(task, sheet, facts, rng, domain)
         try:
-            rendered = render(facts, task, twist, rng, spare)
+            rendered = render(facts, task, twist, rng, spare, domain)
         except (ValueError, KeyError):
             tasks.pop(task, None)
             continue

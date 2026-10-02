@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from src.generalist.tools import assistant_case_study as CS
+from src.generalist.assistant.analysis import case_study as CS
 
 rdkit = pytest.importorskip("rdkit")
 

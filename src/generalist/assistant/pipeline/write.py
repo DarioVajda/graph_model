@@ -16,9 +16,12 @@ is performing a string transformation on supplied content, which is what an
 instruct model at this size does near-perfectly, rather than composing a sentence
 about a molecule, which is where it errs.
 
+The system prompts belong to the domain (`Domain.ask_system`, `voice_system`;
+`--domain`, molecules by default); the per-row bodies built here do not.
+
     VENV_BIN=.venv_writer/bin CONTAINER=/shared/workspace/povejmo/containers/nemo_26.04.sqsh \
     GPU=1 GPU_CONSTRAINT='GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100' \
-    src/generalist/tools/run_py.sh -m src.generalist.tools.intent_write \
+    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.write \
         --model /shared/workspace/povejmo/huggingface_cache/hub/models--google--gemma-4-31B-it/snapshots/b9ea41a2887d8607f594846523f94c6cc75ac8a4 \
         --batches .../v5 --out .../v5/ask --pass ask
 
@@ -33,49 +36,11 @@ import os
 import re
 import sys
 
-ASK_SYSTEM = (
-    "You write the user's side of a conversation with a chemistry assistant. "
-    "You are given who the person is, what they are doing, and what they want to "
-    "know. Write only their message.\n\n"
-    "Rules:\n"
-    "- Write what the person would actually type. Their situation shapes the "
-    "wording; do not state the situation.\n"
-    "- Ask for exactly what is listed under WANTS, nothing more, and in the "
-    "order it is listed. Do not ask about any other property, and do not invent "
-    "one.\n"
-    "- Name every anchor under ANCHORS exactly as written, including the atom "
-    "index and its element in brackets, and use no other identifier for an atom "
-    "or a group than the ones given there.\n"
-    "- The person and the assistant are already looking at the same structure. "
-    "Refer to it as 'this molecule', 'this compound' or 'it'. Never invent a "
-    "name, a code, a label or a SMILES string for it, and never invent an atom "
-    "reference that is not under ANCHORS.\n"
-    "- You do not know the answer and must not guess one, imply one, or ask a "
-    "question whose wording assumes one.\n"
-    "- One to three sentences. No preamble, no sign-off, no quotation marks."
-)
-
-VOICE_SYSTEM = (
-    "You rewrite a chemistry assistant's reply in a given voice. You are given "
-    "the user's message, a plain draft of the reply, and a style. Rewrite the "
-    "draft.\n\n"
-    "Rules:\n"
-    "- Say everything the draft says. Every statement under STATEMENTS must "
-    "still be stated, and where there is a DECISION or an EXPLANATION line the "
-    "reply must carry that as well — it is what the user asked for and it is "
-    "not one of the statements.\n"
-    "- Add nothing. No extra facts, no reasons, no chemistry the draft does not "
-    "contain, no offers of further help.\n"
-    "- Do not mention the draft, the statements, or that you were given "
-    "anything.\n"
-    "- Follow the style exactly. Where the style asks for one word or for JSON, "
-    "the value alone is the whole reply and the statements are what it comes "
-    "from — do not restate them in a sentence.\n"
-    "- Output only the rewritten reply."
-)
+from ..domain import get_domain
 
 
-def _ask_prompt(example) -> str:
+def _ask_prompt(example, domain=None) -> str:
+    domain = get_domain(domain)
     intent, rendered = example["intent"], example["render"]
     ask = rendered["ask"]
     wants = ask.get("asks") or []
@@ -90,10 +55,10 @@ def _ask_prompt(example) -> str:
         f"DOING: {intent['situation']['context']}",
         "WANTS: " + "; ".join(wants),
     ]
-    # Atom references only. A group name is already inside its ask phrase
+    # Part references only. A qualifier is already inside its ask phrase
     # ("whether it contains a nitrile"), and listing it again as an anchor reads
     # as the subject of the question: "Does the nitrile contain a nitrile?"
-    anchors = [a for a in ask.get("anchors", []) if a.lower().startswith("atom ")]
+    anchors = [a for a in ask.get("anchors", []) if domain.is_anchor_ref(a)]
     if anchors and not ask.get("underspecified"):
         lines.append("ANCHORS: " + "; ".join(anchors))
     if ask.get("claim"):
@@ -111,10 +76,11 @@ def _ask_prompt(example) -> str:
         lines.append("NOTE: they do not know whether this can be answered; ask "
                      "plainly.")
     if ask.get("underspecified"):
+        noun = domain.anchor_noun
         lines.append(
-            "IMPORTANT: their message must be ambiguous about which atom they "
-            "mean — do NOT name the atom, and do not include ANCHORS. Ask the "
-            "question in a way that leaves the atom unsaid.")
+            f"IMPORTANT: their message must be ambiguous about which {noun} they "
+            f"mean — do NOT name the {noun}, and do not include ANCHORS. Ask the "
+            f"question in a way that leaves the {noun} unsaid.")
     fmt = intent["style"]["format"]
     if fmt != "prose":
         lines.append(f"THEY ALSO ASK FOR THE ANSWER AS: {fmt}")
@@ -205,12 +171,16 @@ def main(argv=None) -> int:
     parser.add_argument("--writer", default=None)
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--shards", type=int, default=1)
+    parser.add_argument("--domain", default=None,
+                        help="the assistant domain the batches were built for "
+                             "(default: molecules)")
     args = parser.parse_args(argv)
+    domain = get_domain(args.domain)
 
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from .check_chat_template import gate
+    from ...tools.check_chat_template import gate
 
     writer = args.writer or os.path.basename(args.model.rstrip("/"))
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -222,7 +192,7 @@ def main(argv=None) -> int:
         args.model, torch_dtype=torch.bfloat16, device_map="cuda")
     model.eval()
 
-    system = ASK_SYSTEM if args.which == "ask" else VOICE_SYSTEM
+    system = domain.ask_system if args.which == "ask" else domain.voice_system
     asks = {}
     if args.which == "voice":
         if not args.asks:
@@ -252,7 +222,7 @@ def main(argv=None) -> int:
         rows = []
         for start in range(0, len(examples), args.group):
             group = examples[start:start + args.group]
-            bodies = [_ask_prompt(e) if args.which == "ask"
+            bodies = [_ask_prompt(e, domain) if args.which == "ask"
                       else _voice_prompt(e, asks[e["id"]]) for e in group]
             prompts = [tokenizer.apply_chat_template(
                 [{"role": "system", "content": system},
