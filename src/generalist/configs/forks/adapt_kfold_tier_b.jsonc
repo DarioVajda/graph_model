@@ -2,7 +2,7 @@
   // ───────────────────────────────────────────────────────────────────────────
   // `KFOLD_TRANSFER.md` — one adaptation leg on one Tier-B property corpus.
   //
-  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //   GPU=1 src/generalist/tools/launch/run_cli.sh fork \
   //     --from src/generalist/results/runs/kfold_fold_c_graph/checkpoint-11140 \
   //     --mode adapt --fork-config src/generalist/configs/forks/adapt_kfold_tier_b.jsonc \
   //     --config src/generalist/configs/probes/012_kfold_fold_c.jsonc \

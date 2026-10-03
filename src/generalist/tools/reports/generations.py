@@ -11,7 +11,7 @@ The smoke checkpoint scored `bleu2`, `bleu4`, `rouge_l` and `meteor` all exactly
 not what a bad model usually looks like — a bad model still emits "the" and
 "molecule" — so it is worth a look rather than a shrug.
 
-    GPU=1 src/generalist/tools/show_generations.py --task mol/chebi20 \\
+    GPU=1 src/generalist/tools/reports/generations.py --task mol/chebi20 \\
         --checkpoint <ckpt> --config src/generalist/configs/probes/004_smoke_probe.jsonc
 """
 

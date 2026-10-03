@@ -23,8 +23,8 @@ three things that have to line up, and it is a minute of CPU:
 
 Usage (CPU, through Slurm — the safetensors read is small but not login-node work):
 
-    RUNMOD=src.generalist.tools.stop_token_check src/generalist/tools/run_cli.sh
-    RUNMOD=src.generalist.tools.stop_token_check src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.tools.checks.stop_token_check src/generalist/tools/launch/run_cli.sh
+    RUNMOD=src.generalist.tools.checks.stop_token_check src/generalist/tools/launch/run_cli.sh \
         --model-name meta-llama/Llama-3.1-8B
 """
 

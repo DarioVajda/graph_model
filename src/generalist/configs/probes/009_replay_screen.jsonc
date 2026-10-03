@@ -3,8 +3,8 @@
   // THE REPLAY SCREEN (`MOLECULE_GENERALIST.md` §9.1) — `008`'S GRAPH CELL, SEED 0, WITH 15 % OF EVERY STEP SPENT ON THE BACKBONE'S OWN ANSWERS.
   //
   //   python3 -m src.generalist validate --config <this file>
-  //   src/generalist/tools/run_cli.sh data_prep --config <this file>
-  //   src/generalist/tools/chain.sh <this file> replay_screen_graph
+  //   src/generalist/tools/launch/run_cli.sh data_prep --config <this file>
+  //   src/generalist/tools/launch/chain.sh <this file> replay_screen_graph
   //
   // ── THE HYPOTHESIS ─────────────────────────────────────────────────────────
   //
@@ -25,7 +25,7 @@
   //      value that asks each corpus for what `008` asked of it. At 2.0 BACE is
   //      thinned under its 0.01 floor and the config is refused.
   //   3. `tokens_per_step` 16384 -> **17013**, so examples/step stays at `008`'s
-  //      55.89 (`tools/tokens_per_step.py`). A replay example averages 364.1
+  //      55.89 (`tools/checks/tokens_per_step.py`). A replay example averages 364.1
   //      tokens against the molecule mixture's 293, which moves the weighted
   //      mean to 304.39; at 16384 the run would take 53.83 examples a step and
   //      the molecule gradient would lose 18 % rather than the pre-registered

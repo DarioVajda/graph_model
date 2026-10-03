@@ -8,13 +8,13 @@ arm regressed, and only the per-task rows separate them.
 
 Two instruments, and they are not interchangeable:
 
-* **Property sets** come from `tools/notation_probe.py --checkpoint`, which
+* **Property sets** come from `tools/notation/probe.py --checkpoint`, which
   excludes the union of truncated rows from every arm so the arms score the
   identical molecules. This is the one to quote.
 * **Everything else** — the exact-match probes, ChEBI-20, g2s — comes from the
   anneal's own `result.json`, which is the only place they are measured.
 
-    src/generalist/tools/horizon_compare.py
+    src/generalist/tools/reports/horizon.py
 
 Reads whatever is on disk and says what is missing rather than failing, so it is
 useful while the scoring is still running.

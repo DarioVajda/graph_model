@@ -5,7 +5,7 @@
   // submission per cell and is not part of the chain.
   //
   //   GPU=1 INDUCTOR_CACHE=.inductor_cache/chebi_specialist \
-  //   src/generalist/tools/run_cli.sh fork \
+  //   src/generalist/tools/launch/run_cli.sh fork \
   //     --from src/generalist/results/runs/chebi_specialist_graph_s0/checkpoint-5000 \
   //     --mode anneal \
   //     --fork-config src/generalist/configs/forks/anneal_chebi_specialist.jsonc \
@@ -26,7 +26,7 @@
   // insurance against the examples/step coming in lower than estimated and the
   // trunk therefore ending nearer its cap; it costs nothing if unused, because a
   // corpus's passes are re-walks rather than files on disk (`mol/chebi20` is a
-  // corpus, not a generator, so `tools/build_g2s_tail.py`'s problem does not
+  // corpus, not a generator, so `tools/campaign/build_g2s_tail.py`'s problem does not
   // arise here).
   //
   // `eval_steps` 250 gives the decay a midpoint and an endpoint. The number that

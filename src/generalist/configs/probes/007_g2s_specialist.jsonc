@@ -6,7 +6,7 @@
   // same 11,140 steps the 2x horizon probe ran.
   //
   //   python3 -m src.generalist validate --config <this file> --cells
-  //   src/generalist/tools/chain.sh <this file> <cell>
+  //   src/generalist/tools/launch/chain.sh <this file> <cell>
   //
   // ── THE QUESTION ───────────────────────────────────────────────────────────
   //
@@ -16,7 +16,7 @@
   // cannot serialize a graph.
   //
   // **It says no such thing.** Dumping the predictions themselves
-  // (`tools/g2s_report.py`, 2x anneal, graph arm, whole 1,000-molecule test
+  // (`tools/reports/g2s.py`, 2x anneal, graph arm, whole 1,000-molecule test
   // split) shows the arm writing the exactly-correct canonical SMILES and then
   // failing to stop:
   //

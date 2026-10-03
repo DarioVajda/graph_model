@@ -8,7 +8,7 @@
   // cadence rather than the 1,000 training steps, which take about 20 min at
   // 1.2 s a step.
   //
-  //   GPU=1 src/generalist/tools/run_cli.sh fork --lr 3e-5 \
+  //   GPU=1 src/generalist/tools/launch/run_cli.sh fork --lr 3e-5 \
   //     --from <the annealed trunk>/anneal/checkpoint-12255 \
   //     --mode adapt --fork-config src/generalist/configs/forks/adapt_lr_screen_bace.jsonc \
   //     --config <the trunk's config> --cell <the trunk's cell> \

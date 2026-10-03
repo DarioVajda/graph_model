@@ -3,9 +3,9 @@
   // The smoke run's checkpoint, scored on two tasks it never trained on. No
   // training happens from this file; it is an `eval`-mode config.
   //
-  //   src/generalist/tools/run_cli.sh data_prep --only mol/ring_count,mol/chebi20 \
+  //   src/generalist/tools/launch/run_cli.sh data_prep --only mol/ring_count,mol/chebi20 \
   //     --config src/generalist/configs/004_smoke_probe.jsonc
-  //   GPU=1 src/generalist/tools/run_cli.sh eval --only-validators in_mixture \
+  //   GPU=1 src/generalist/tools/launch/run_cli.sh eval --only-validators in_mixture \
   //     --checkpoint src/generalist/results/runs/smoke_graph/checkpoint-200 \
   //     --config src/generalist/configs/004_smoke_probe.jsonc
   //

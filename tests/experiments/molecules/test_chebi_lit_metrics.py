@@ -1,5 +1,5 @@
 """
-The ChEBI-20 literature-protocol rescorer (`tools/chebi_lit_metrics.py`).
+The ChEBI-20 literature-protocol rescorer (`src/experiments/molecules/chebi_lit_metrics.py`).
 
 `molecules/PLAN.md` §9's standing rule is that a quantity which is only ever
 *read* has no error-detecting surface, and that every instrument gets a test

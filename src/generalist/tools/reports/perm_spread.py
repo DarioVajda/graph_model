@@ -21,7 +21,7 @@ neighbours in the reduction. Anything the control measures is float noise by
 construction, because the model was handed identical inputs. A permuted spread
 that does not exceed the control's is not evidence against Property 1.
 
-    GPU=1 src/generalist/tools/run_py.sh src/generalist/tools/perm_spread_detail.py \\
+    GPU=1 src/generalist/tools/launch/run_py.sh src/generalist/tools/reports/perm_spread.py \\
         --config src/generalist/configs/probes/002_cross_check_bace_graph.jsonc \\
         --checkpoint <ckpt> --task mol/bace [--control]
 """

@@ -2,7 +2,7 @@
   // ───────────────────────────────────────────────────────────────────────────
   // An `admit` fork, on the smoke run's parent. D6's second fork mode.
   //
-  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //   GPU=1 src/generalist/tools/launch/run_cli.sh fork \
   //     --from src/generalist/results/runs/smoke_graph/checkpoint-200 \
   //     --mode admit --fork-config src/generalist/configs/forks/admit_ring_count.jsonc \
   //     --config src/generalist/configs/probes/000_smoke.jsonc

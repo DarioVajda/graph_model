@@ -23,14 +23,14 @@ anything larger is a superset of it.
 
 Usage (GPU, through Slurm — never on the login node):
 
-    RUNMOD=src.generalist.tools.g2s_report GPU=1 src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.tools.reports.g2s GPU=1 src/generalist/tools/launch/run_cli.sh \
         --run-config src/generalist/configs/probes/006_molecule_generalist_2x.jsonc \
         --cell molecule_generalist_graph_2x_s0 \
         --checkpoint src/generalist/results/runs/<run>-anneal-11140/anneal/checkpoint-12255
 
 It builds nothing: a trained checkpoint implies its sources exist, and `build`
 rewrites a shared `manifest.json`, so a scoring job that also builds races any
-other one that is running (`tools/notation_probe.py` says the same).
+other one that is running (`tools/notation/probe.py` says the same).
 """
 
 from __future__ import annotations
@@ -45,7 +45,8 @@ import time
 BUCKETS = ((0, 10), (11, 15), (16, 20), (21, 30), (31, 10**6))
 
 DEFAULT_OUT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results", "g2s")
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "results", "g2s")
 
 
 def _args(argv=None):
@@ -171,7 +172,7 @@ def main(argv=None) -> int:
 
     from ..adapters import molecules
     from ..evaluate.scorers import eval_indices, generate_predictions
-    from .notation_probe import build_trained_model
+    from ..notation.probe import build_trained_model
 
     args = _args(argv)
     os.makedirs(args.out, exist_ok=True)

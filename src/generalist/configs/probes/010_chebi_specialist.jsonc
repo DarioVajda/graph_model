@@ -6,7 +6,7 @@
   // `mol/chebi20` and nothing else.
   //
   //   python3 -m src.generalist validate --config <this file> --cells
-  //   src/generalist/tools/chain.sh <this file> <cell>
+  //   src/generalist/tools/launch/chain.sh <this file> <cell>
   //
   // ── WHY IT EXISTS ──────────────────────────────────────────────────────────
   //

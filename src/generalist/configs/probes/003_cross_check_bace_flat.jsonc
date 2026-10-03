@@ -74,7 +74,7 @@
   "data_seed": 0,
 
   // 32 examples/step at the built flat arm's measured 60.9 tokens an example
-  // (`tools/tokens_per_step.py`). The graph twin needs 11648 for the same 32,
+  // (`tools/checks/tokens_per_step.py`). The graph twin needs 11648 for the same 32,
   // because a Levi graph with a prefix per node renders to 6x the tokens a
   // SMILES string does — which is exactly why the budget is matched in examples
   // here and not in tokens.

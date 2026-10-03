@@ -6,7 +6,7 @@ turns each composed row into the graph the domain's assistant task would train o
 what comes out, because the few-shot axis buys its demonstrations with context and
 nothing else in this plan measures that.
 
-    RUNMOD=src.generalist.assistant.pipeline.graphs src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.assistant.pipeline.graphs src/generalist/tools/launch/run_cli.sh \
         --composed src/generalist/results/assistant/v2/composed \
         --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \
         --cell molecule_generalist_instruct_graph_s0

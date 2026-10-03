@@ -2,7 +2,7 @@
   // ───────────────────────────────────────────────────────────────────────────
   // The `anneal` fork that closes fold D's trunk (`probes/013_kfold_fold_d.jsonc`).
   //
-  //   src/generalist/tools/anneal_all.py \
+  //   src/generalist/tools/campaign/anneal_all.py \
   //     --config src/generalist/configs/probes/013_kfold_fold_d.jsonc \
   //     --fork-config src/generalist/configs/forks/anneal_kfold_fold_d.jsonc
   //

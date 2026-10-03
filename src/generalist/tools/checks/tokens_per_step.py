@@ -13,7 +13,7 @@ the share-weighted mean `resolve` actually divides by, and the
 `tokens_per_step` that lands on a stated examples/step. Run it once per arm
 after `data_prep` and write the answer into the config:
 
-    src/generalist/tools/tokens_per_step.py --config <cfg> --examples-per-step 32
+    src/generalist/tools/checks/tokens_per_step.py --config <cfg> --examples-per-step 32
 
 `mean_tokens` is a property of the built data — the adapter measures it during
 `data_prep` — so this is only answerable after a build, and it is why the flat

@@ -1,13 +1,13 @@
 """Generate `text/replay`'s targets: the backbone's own answers to the selected prompts.
 
-    GPU=1 src/generalist/tools/run_py.sh src/generalist/tools/replay_generate.py \
+    GPU=1 src/generalist/tools/launch/run_py.sh src/generalist/tools/replay/generate.py \
         --version v1 --limit 600 --out-name pilot          # the pilot
-    GPU=4 src/generalist/tools/run_py.sh src/generalist/tools/replay_generate.py \
+    GPU=4 src/generalist/tools/launch/run_py.sh src/generalist/tools/replay/generate.py \
         --version v1 --gpus 4                               # the whole set
-    src/generalist/tools/run_py.sh src/generalist/tools/replay_generate.py \
+    src/generalist/tools/launch/run_py.sh src/generalist/tools/replay/generate.py \
         --version v1 --summarise                            # CPU: rates and lengths
 
-Reads ``results/replay/<version>/prompts.jsonl`` (`tools/replay_prompts.py`) and
+Reads ``results/replay/<version>/prompts.jsonl`` (`tools/replay/prompts.py`) and
 writes one JSONL per shard under ``answers/``, one row per sampled answer.
 
 **The teacher is the backbone, exactly.** On a single-node graph every structural
@@ -46,7 +46,7 @@ import subprocess
 import sys
 import time
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 sys.path.insert(0, REPO)
 
 OUT_ROOT = os.path.join(REPO, "src", "generalist", "results", "replay")

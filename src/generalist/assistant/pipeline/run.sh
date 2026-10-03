@@ -122,7 +122,7 @@ run_sharded() {
   local pids=() rc=0 s
   for ((s = 0; s < SHARDS; s++)); do
     env NAME="${name}_s${s}" "${WRITER_ENV[@]}" \
-      bash src/generalist/tools/run_py.sh "$@" --shard "$s" --shards "$SHARDS" &
+      bash src/generalist/tools/launch/run_py.sh "$@" --shard "$s" --shards "$SHARDS" &
     pids+=("$!")
   done
   for pid in "${pids[@]}"; do wait "$pid" || rc=1; done
@@ -156,7 +156,7 @@ pass_judge() {
 # round deduplicates against itself and the union carries the pairs between them.
 run_accept() {
   NAME=intent_accept CPUS=8 MEM=32G TIME=01:00:00 \
-    bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.accept \
+    bash src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.accept \
       --batches "$OUT" --asks "$OUT/ask" --voiced "$OUT/voice" \
       --judged "$OUT/judged" --out "$OUT/accepted" --seed "$SEED" \
       --domain "$DOMAIN"
@@ -180,7 +180,7 @@ if should_run build; then
   echo "=== build ==="
   echo "targets: $N_TRAIN train, $N_TEST test accepted rows (yield $YIELD)"
   NAME=intent_build CPUS=8 MEM=96G TIME=03:00:00 \
-    bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.build \
+    bash src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.build \
       --config "$CONFIG" --cell "$CELL" --out "$OUT" \
       --n-train "$(build_n "$N_TRAIN" "$YIELD")" \
       --n-test "$(build_n "$N_TEST" "$YIELD")" --seed "$SEED" \
@@ -258,7 +258,7 @@ if should_run topup; then
     echo "    building $n_train train, $n_test test at yield $yield"
 
     NAME="intent_build_$prefix" CPUS=8 MEM=96G TIME=03:00:00 \
-      bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.build \
+      bash src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.build \
         --config "$CONFIG" --cell "$CELL" --out "$OUT/topup-$prefix" \
         --n-train "$n_train" --n-test "$n_test" \
         --seed "$((SEED + round))" --id-prefix "$prefix" --domain "$DOMAIN"
@@ -290,7 +290,7 @@ fi
 if should_run compose; then
   echo "=== compose ==="
   NAME=intent_compose CPUS=8 MEM=32G TIME=01:00:00 \
-    bash src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.compose \
+    bash src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.compose \
       --accepted "$OUT/accepted" --out "$OUT/composed" --seed "$SEED" \
       --domain "$DOMAIN"
 fi

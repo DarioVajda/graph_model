@@ -11,8 +11,8 @@ cell whose trunk has not finished is skipped and reported, a cell whose fork has
 already run is skipped and reported, and only the ready ones are submitted. Run
 it as often as you like while the trunks are still going.
 
-    src/generalist/tools/anneal_all.py --config <cfg>
-    src/generalist/tools/anneal_all.py --config <cfg> --dry-run
+    src/generalist/tools/campaign/anneal_all.py --config <cfg>
+    src/generalist/tools/campaign/anneal_all.py --config <cfg> --dry-run
 
 Waiting is deliberately not built in. A watcher process that has to outlive a
 14-hour trunk is a thing to babysit; re-running a command that does nothing until
@@ -26,8 +26,8 @@ import os
 import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))))
 FORK_CONFIG = "src/generalist/configs/forks/anneal_molecule_generalist.jsonc"
 
 
@@ -144,7 +144,7 @@ def main(argv=None) -> int:
         if ckpt is None:
             waiting.append((cell, why))
             continue
-        cmd = [os.path.join(REPO, "src/generalist/tools/run_cli.sh"), "fork",
+        cmd = [os.path.join(REPO, "src/generalist/tools/launch/run_cli.sh"), "fork",
                "--from", ckpt, "--mode", "anneal",
                "--fork-config", args.fork_config,
                "--config", args.config, "--cell", cell]

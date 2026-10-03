@@ -24,18 +24,18 @@ the same three axes wanted here, so `generate` writes `batches/`, `ask/` and
 upstream build's batch files were deleted; the render dict is rebuilt from the
 sidecar, which carries the accept pass's renaming of it in full.
 
-    GPU=1 src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.score \\
+    GPU=1 src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.analysis.score \\
         --mode generate --config .../008_molecule_generalist_instruct.jsonc \\
         --cell molecule_generalist_instruct_graph_s0 \\
         --checkpoint .../replay_anneal15_graph_s0/anneal/checkpoint-12255 \\
         --out .../results/assistant/score/control_s0
     GPU=1 VENV_BIN=.venv_writer/bin CONTAINER=.../nemo_26.04.sqsh \\
     GPU_CONSTRAINT='GPU_BRD:B200|GPU_BRD:B300' \\
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.judge \\
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.judge \\
         --model .../gemma-4-31B-it --batches .../control_s0/batches \\
         --asks .../control_s0/ask --voiced .../control_s0/voice \\
         --out .../control_s0/judged
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.score \\
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.analysis.score \\
         --mode score --out .../control_s0
 
 **Compare, do not quote.** The judge's precision as a filter measured 0.231 and

@@ -8,16 +8,16 @@
 # exit code is the test result. The full pytest output lands in
 # src/generalist/results/test_logs/<stamp>.out; the tail is echoed here.
 #
-#   src/generalist/tools/run_tests.sh tests/generalist/test_schema.py -q
-#   src/generalist/tools/run_tests.sh tests/generalist -x -q
-#   GPU=1 src/generalist/tools/run_tests.sh tests/generalist/test_smoke_gpu.py -q -s
+#   src/generalist/tools/launch/run_tests.sh tests/generalist/test_schema.py -q
+#   src/generalist/tools/launch/run_tests.sh tests/generalist -x -q
+#   GPU=1 src/generalist/tools/launch/run_tests.sh tests/generalist/test_smoke_gpu.py -q -s
 #
 # Env overrides: PARTITION (frida), CPUS (8), MEM (32G), TIME (01:00:00),
 # GPU (0 -> CPU-only; 1 -> one GPU of any Blackwell/H100/A100 class).
 # =============================================================================
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$REPO"
 
 CONTAINER="/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"

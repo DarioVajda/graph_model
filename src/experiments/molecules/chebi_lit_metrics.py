@@ -41,7 +41,7 @@ assumed.
 
 Usage (CPU, no GPU, no Slurm needed):
 
-    python3 -m src.generalist.tools.chebi_lit_metrics \\
+    python3 -m src.experiments.molecules.chebi_lit_metrics \\
         src/generalist/results/chebi/*-test.json --out <dir>
 """
 

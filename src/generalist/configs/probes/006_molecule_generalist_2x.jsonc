@@ -8,7 +8,7 @@
   // a budget artifact and the backbone ladder is worth paying for.
   //
   //   python3 -m src.generalist validate --config <this file> --cells
-  //   src/generalist/tools/chain.sh <this file> <cell>
+  //   src/generalist/tools/launch/chain.sh <this file> <cell>
   //
   // A PROBE, NOT A CAMPAIGN. It reads `configs/runs/molecule_generalist.jsonc`'s
   // recipe and changes exactly the horizon, so every field below that is not

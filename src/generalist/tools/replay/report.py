@@ -5,7 +5,7 @@ same two files every other report reads — a fork's `result.json` for the molec
 validators and `text_behaviour/<run>/eval_step*.json` for the text ones — so the
 table cannot drift from the runs it describes.
 
-    RUNMOD=src.generalist.tools.replay_report src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.tools.replay.report src/generalist/tools/launch/run_cli.sh \
         --baseline molecule_generalist_instruct_graph_s0 \
         --seeds molecule_generalist_instruct_graph_s1 \
                 molecule_generalist_instruct_graph_s2 \

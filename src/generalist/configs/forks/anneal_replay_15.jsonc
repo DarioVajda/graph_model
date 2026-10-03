@@ -3,7 +3,7 @@
   // The `anneal` that closes a molecule-generalist trunk, with 15 % of the decay
   // spent on `text/replay`. Everything else is `anneal_molecule_generalist.jsonc`.
   //
-  //   GPU=2 src/generalist/tools/run_cli.sh fork \
+  //   GPU=2 src/generalist/tools/launch/run_cli.sh fork \
   //     --from .../runs/molecule_generalist_instruct_graph_s0/checkpoint-11140 \
   //     --mode anneal --fork-config src/generalist/configs/forks/anneal_replay_15.jsonc \
   //     --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \

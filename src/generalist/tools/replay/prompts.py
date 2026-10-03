@@ -1,7 +1,7 @@
 """Select the prompt set `text/replay` generates its targets for (`MOLECULE_GENERALIST.md` §9.1).
 
-    src/generalist/tools/run_py.sh src/generalist/tools/replay_prompts.py --review
-    src/generalist/tools/run_py.sh src/generalist/tools/replay_prompts.py --version v1
+    src/generalist/tools/launch/run_py.sh src/generalist/tools/replay/prompts.py --review
+    src/generalist/tools/launch/run_py.sh src/generalist/tools/replay/prompts.py --version v1
 
 Reads the raw downloads under ``results/raw/replay/`` and writes
 ``results/replay/<version>/prompts.jsonl`` plus ``selection.json``, which records
@@ -69,7 +69,7 @@ import re
 import sys
 from multiprocessing import Pool
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 sys.path.insert(0, REPO)
 
 RAW_DIR = os.path.join(REPO, "src", "generalist", "results", "raw", "replay")

@@ -22,7 +22,7 @@ them against 100 hand-read rows, and its precision and recall ship with the set.
 
     VENV_BIN=.venv_writer/bin CONTAINER=/shared/workspace/povejmo/containers/nemo_26.04.sqsh \
     GPU=1 GPU_CONSTRAINT='GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100' \
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.judge \
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.judge \
         --model .../gemma-4-31B-it --batches .../v5 \
         --asks .../v5/ask --voiced .../v5/voice --out .../v5/judged
 
@@ -143,7 +143,7 @@ def main(argv=None) -> int:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from ...tools.check_chat_template import gate
+    from ...tools.checks.chat_template import gate
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     gate(tokenizer)

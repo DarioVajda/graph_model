@@ -2,7 +2,7 @@
   // ───────────────────────────────────────────────────────────────────────────
   // The `anneal` fork that closes fold C's trunk (`probes/012_kfold_fold_c.jsonc`).
   //
-  //   src/generalist/tools/anneal_all.py \
+  //   src/generalist/tools/campaign/anneal_all.py \
   //     --config src/generalist/configs/probes/012_kfold_fold_c.jsonc \
   //     --fork-config src/generalist/configs/forks/anneal_kfold_fold_c.jsonc
   //
@@ -34,7 +34,7 @@
   //
   // `mol/g2s` is in this fold's mixture and is deliberately not named: it is a
   // generator whose passes are files on disk, built to 48 by
-  // `tools/build_g2s_tail.py` against this fold's demand of 41, and folds A and B
+  // `tools/campaign/build_g2s_tail.py` against this fold's demand of 41, and folds A and B
   // annealed through it untouched.
   // ───────────────────────────────────────────────────────────────────────────
 

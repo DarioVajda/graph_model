@@ -3,7 +3,7 @@
   // The `anneal` fork that closes a cross-check trunk. D6's first fork mode.
   //
   //   GPU=1 INDUCTOR_CACHE=.inductor_cache/generalist_crosscheck \
-  //   src/generalist/tools/run_cli.sh fork \
+  //   src/generalist/tools/launch/run_cli.sh fork \
   //     --from src/generalist/results/runs/cross_check_bace_flat/checkpoint-1510 \
   //     --mode anneal \
   //     --fork-config src/generalist/configs/forks/anneal_cross_check.jsonc \

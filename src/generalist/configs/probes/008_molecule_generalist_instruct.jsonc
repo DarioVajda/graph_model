@@ -7,7 +7,7 @@
   // cannot be changed apart.
   //
   //   python3 -m src.generalist validate --config <this file> --cells
-  //   src/generalist/tools/chain.sh <this file> <cell>
+  //   src/generalist/tools/launch/chain.sh <this file> <cell>
   //
   // ── WHY IT MOVES NOW ───────────────────────────────────────────────────────
   //
@@ -69,7 +69,7 @@
   // the flat one. 16384 puts the graph arm at 55.8927 examples/step and 4941
   // puts the flat arm at 55.8937 — matched to a thousandth of an example, which
   // is what §7's "matched in EXAMPLES, not tokens" requires and what
-  // `tools/tokens_per_step.py` is for.
+  // `tools/checks/tokens_per_step.py` is for.
   //
   // ── COST AND SHAPE ─────────────────────────────────────────────────────────
   //

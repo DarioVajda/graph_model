@@ -839,7 +839,7 @@ def test_mixture_entries_carry_the_documented_block_shares():
 # The chain script (D8.3)
 # ─────────────────────────────────────────────────────────────────────────────
 
-CHAIN = os.path.join(REPO, "src", "generalist", "tools", "chain.sh")
+CHAIN = os.path.join(REPO, "src", "generalist", "tools", "launch", "chain.sh")
 
 
 def test_chain_writes_one_script_per_chunk_under_shared(tmp_path):

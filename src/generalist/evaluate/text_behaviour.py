@@ -275,7 +275,7 @@ def write_predictions(path, texts, rows, tokenizer) -> None:
     """One JSON line per prompt: what the model actually wrote.
 
     Every other generative measurement in this repo keeps its predictions —
-    `tools/g2s_report.py` is the reason the stop-token defect was diagnosable at
+    `tools/reports/g2s.py` is the reason the stop-token defect was diagnosable at
     all rather than merely visible. The same applies here and more sharply,
     because these metrics are *means over 48 prompts*: without the rows there is
     no way to tell a small gap that is every prompt shifting from one that is a

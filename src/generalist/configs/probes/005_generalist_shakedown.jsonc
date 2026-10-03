@@ -30,7 +30,7 @@
   // If DDP works the campaign can take the idle cards; if it does not, that is
   // far better learned in a 300-step probe than in chunk 3 of a chained run.
   //
-  //   src/generalist/tools/chain.sh src/generalist/configs/probes/005_generalist_shakedown.jsonc
+  //   src/generalist/tools/launch/chain.sh src/generalist/configs/probes/005_generalist_shakedown.jsonc
   //
   // Everything else is the `molecule_generalist_graph_s0` cell of
   // `configs/runs/molecule_generalist.jsonc` unchanged, so the numbers transfer. `max_steps: 300` overrides the §2 budget

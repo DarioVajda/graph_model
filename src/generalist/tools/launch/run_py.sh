@@ -7,8 +7,8 @@
 # measurement that wants RDKit or torch. Same container, same blocking sbatch,
 # same log directory.
 #
-#   src/generalist/tools/run_py.sh src/generalist/tools/compare_bace_split.py
-#   GPU=1 src/generalist/tools/run_py.sh path/to/script.py --flag value
+#   src/generalist/tools/launch/run_py.sh src/generalist/tools/checks/compare_bace_split.py
+#   GPU=1 src/generalist/tools/launch/run_py.sh path/to/script.py --flag value
 #
 # Env overrides: PARTITION (frida), CPUS (16), MEM (64G), TIME (02:00:00),
 # GPU (0 -> CPU-only), NAME, INDUCTOR_CACHE, CONTAINER, VENV_BIN — all as in
@@ -22,7 +22,7 @@
 # =============================================================================
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$REPO"
 
 CONTAINER="${CONTAINER:-/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh}"

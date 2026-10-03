@@ -8,7 +8,7 @@ is blind in the same direction. These thirty are written by hand, over test-role
 molecules, and are **read, not scored** — `probe` says what each row is for and
 `expect` is a reading aid for the checklist. Nothing here computes a rate.
 
-    GPU=1 src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.case_study \\
+    GPU=1 src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.analysis.case_study \\
         --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \\
         --cell molecule_generalist_instruct_graph_s0 \\
         --checkpoint control=.../replay_anneal15_graph_s0/anneal/checkpoint-12255 \\

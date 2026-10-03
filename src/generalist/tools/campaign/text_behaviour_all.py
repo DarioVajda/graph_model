@@ -1,12 +1,12 @@
 """Run the `text_behaviour` validator over every annealed cell of a config.
 
-`tools/probe_all.py`'s shape for the text-behaviour measurement, and idempotent
-for the same reason: a cell whose anneal has not finished is skipped and
-reported, a cell already measured is skipped and reported, and only the ready
-ones are submitted.
+`tools/campaign/probe_all.py`'s shape for the text-behaviour measurement, and
+idempotent for the same reason: a cell whose anneal has not finished is skipped
+and reported, a cell already measured is skipped and reported, and only the
+ready ones are submitted.
 
-    src/generalist/tools/text_behaviour_all.py --config <cfg>
-    src/generalist/tools/text_behaviour_all.py --config <cfg> --dry-run
+    src/generalist/tools/campaign/text_behaviour_all.py --config <cfg>
+    src/generalist/tools/campaign/text_behaviour_all.py --config <cfg> --dry-run
 
 **The validator set is overridden, on purpose.** These checkpoints were trained
 before `text_behaviour` existed, and adding it to `DEFAULT_VALIDATORS` would
@@ -24,15 +24,15 @@ import os
 import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))))
 OUT_DIR = "src/generalist/results/text_behaviour"
 
 
 def anneal_checkpoint(config):
     """``(checkpoint, why)`` — the annealed model to measure, or why there is none.
 
-    `tools/probe_all.py`'s rule, and for the same reason: an anneal's reportable
+    `probe_all.py`'s rule, and for the same reason: an anneal's reportable
     model is its last step, which is ``parent_step + decay_steps + 1`` and not a
     round number, so take the highest ``checkpoint-N`` rather than recompute the
     schedule here.
@@ -86,7 +86,7 @@ def main(argv=None) -> int:
         if ckpt is None:
             waiting.append((cell, why))
             continue
-        cmd = [os.path.join(REPO, "src/generalist/tools/run_cli.sh"), "eval",
+        cmd = [os.path.join(REPO, "src/generalist/tools/launch/run_cli.sh"), "eval",
                "--config", args.config, "--cell", cell,
                "--checkpoint", ckpt,
                "--validators", "text",

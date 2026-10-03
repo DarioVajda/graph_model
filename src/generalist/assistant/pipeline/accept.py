@@ -26,7 +26,7 @@ many rows may share one style brief. With `--judged`, a row the judge marked
 unresponsive, unpreserved or additive is refused too, and refused *last*, so the
 judge's marginal catch over the patterns is visible in the rejection table.
 
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.accept \
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.accept \
         --batches .../v5 --asks .../v5/ask --voiced .../v5/voice \
         --judged .../v5/judged --out .../v5/accepted
 

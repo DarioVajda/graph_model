@@ -7,7 +7,7 @@ file adds is what happens after the sheet: instead of drawing a style brief and
 handing a model a subset of facts to write about, it declares an **intent** and
 **renders the reply**, and the writer is left with nothing to be wrong about.
 
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.build \
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.build \
         --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \
         --out src/generalist/results/assistant/v5 --n-train 11000 --n-test 900
 

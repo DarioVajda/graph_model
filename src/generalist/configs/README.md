@@ -45,7 +45,7 @@ A cell is addressed by name, and one chain is one cell:
 
 ```bash
 python3 -m src.generalist validate --config <file> --cells        # the names
-src/generalist/tools/chain.sh <file> <cell>                       # submit one
+src/generalist/tools/launch/chain.sh <file> <cell>                # submit one
 ```
 
 A config holding a single run takes no `--cell`; one holding several refuses to

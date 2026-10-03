@@ -21,7 +21,7 @@ actually invalidate the comparison.
 
 Run it on a compute node — it imports RDKit and reads the built artifacts:
 
-    src/generalist/tools/run_py.sh src/generalist/tools/compare_bace_split.py
+    src/generalist/tools/launch/run_py.sh src/generalist/tools/checks/compare_bace_split.py
 """
 
 import sys

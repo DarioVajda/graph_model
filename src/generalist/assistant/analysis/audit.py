@@ -25,9 +25,9 @@ trained on it, and `class` names why in one of the closed set below. Anything
 that does not fit gets `class: other` and a note — a class list that never grows
 is a class list nobody is really using.
 
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.audit \
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.analysis.audit \
         --mode sheet --composed .../v5/composed --out .../v5/audit --n 100
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.analysis.audit \
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.analysis.audit \
         --mode score --labels .../v5/audit/labels.jsonl --out .../v5/audit
 
 The interval is Wilson at 95 %, which is the right one at n=100 near the

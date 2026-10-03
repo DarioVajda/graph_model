@@ -3,8 +3,8 @@
   // THE SECOND REPLAY SCREEN — `009` AT 8 % INSTEAD OF 15 %.
   //
   //   python3 -m src.generalist validate --config <this file>
-  //   src/generalist/tools/run_cli.sh data_prep --config <this file>
-  //   src/generalist/tools/chain.sh <this file> replay08_screen_graph
+  //   src/generalist/tools/launch/run_cli.sh data_prep --config <this file>
+  //   src/generalist/tools/launch/chain.sh <this file> replay08_screen_graph
   //
   // ── WHY A SECOND SCREEN ────────────────────────────────────────────────────
   //

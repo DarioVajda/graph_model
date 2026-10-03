@@ -7,15 +7,15 @@ the row trains the model to answer at a position where the molecule has not
 finished. The graph arm is immune: the cap is per node, and an atom text is a
 handful of tokens.
 
-Evaluation can exclude those rows and does (`tools/notation_probe.py`). Training
+Evaluation can exclude those rows and does (`tools/notation/probe.py`). Training
 cannot. This measures what training actually swallowed, which decides whether the
 defect is worth a rebuild or is a disclosure and nothing more.
 
 The census needs no tokenizer: a built source stores its already-truncated
 `input_ids`, so a node is truncated exactly when it sits at the cap.
 
-    src/generalist/tools/run_py.sh src/generalist/tools/truncation_census.py
-    src/generalist/tools/run_py.sh src/generalist/tools/truncation_census.py --split test
+    src/generalist/tools/launch/run_py.sh src/generalist/tools/checks/truncation_census.py
+    src/generalist/tools/launch/run_py.sh src/generalist/tools/checks/truncation_census.py --split test
 
 Weighting matters as much as the rate. A 3 % rate on a source holding 2 % of the
 mixture is not the same defect as a 3 % rate on one holding 20 %, so the per-arm

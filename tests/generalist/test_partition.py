@@ -21,7 +21,7 @@ molecules, a canonicalization and a Murcko scaffold each, minutes the first time
 and seconds afterwards because `molecules.partition` caches it under the cache
 root keyed by the source checksums. Run it with a longer wall clock:
 
-    TIME=02:00:00 src/generalist/tools/run_tests.sh \\
+    TIME=02:00:00 src/generalist/tools/launch/run_tests.sh \\
         tests/generalist/test_partition.py -q
 """
 

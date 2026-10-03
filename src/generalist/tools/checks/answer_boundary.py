@@ -22,8 +22,8 @@ target *as stored*, so if the stored answers are not already canonical then no
 prediction can score, however good the model is. Both numbers should be 1.0, and
 if either is not, the generative metrics for that task are bounded by it.
 
-    src/generalist/tools/answer_boundary.py --task mol/g2s --split test
-    src/generalist/tools/answer_boundary.py --task mol/chebi20 --split test \\
+    src/generalist/tools/checks/answer_boundary.py --task mol/g2s --split test
+    src/generalist/tools/checks/answer_boundary.py --task mol/chebi20 --split test \\
         --config src/generalist/configs/probes/004_smoke_probe.jsonc
 """
 

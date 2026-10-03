@@ -1365,7 +1365,7 @@ TEMPLATE = """\
   //   python3 -m src.generalist validate  --config <this file>
   //   python3 -m src.generalist data_prep --config <this file>
   //   python3 -m src.generalist train     --config <this file>
-  //   src/generalist/tools/chain.sh <this file>        # chunked, on Slurm
+  //   src/generalist/tools/launch/chain.sh <this file> # chunked, on Slurm
   //
   // Every key is a RunConfig field (src/generalist/config.py) and every value
   // is a scalar, so the same file is a sweep config:

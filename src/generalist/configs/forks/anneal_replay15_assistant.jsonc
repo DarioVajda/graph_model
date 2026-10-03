@@ -4,7 +4,7 @@
   // the decay buys the assistant behaviour beside the text behaviour and the
   // trunk is still never touched.
   //
-  //   GPU=2 src/generalist/tools/run_cli.sh fork \
+  //   GPU=2 src/generalist/tools/launch/run_cli.sh fork \
   //     --from .../runs/molecule_generalist_instruct_graph_s0/checkpoint-11140 \
   //     --mode anneal --fork-config src/generalist/configs/forks/anneal_replay15_assistant.jsonc \
   //     --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \

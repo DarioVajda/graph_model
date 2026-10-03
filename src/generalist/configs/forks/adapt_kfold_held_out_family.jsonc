@@ -2,7 +2,7 @@
   // ───────────────────────────────────────────────────────────────────────────
   // `KFOLD_TRANSFER.md` — an adaptation leg on bond_path or longest_chain.
   //
-  //   GPU=1 src/generalist/tools/run_cli.sh fork \
+  //   GPU=1 src/generalist/tools/launch/run_cli.sh fork \
   //     --from src/generalist/results/runs/kfold_fold_a_graph_s0/checkpoint-11140 \
   //     --mode adapt \
   //     --fork-config src/generalist/configs/forks/adapt_kfold_held_out_family.jsonc \

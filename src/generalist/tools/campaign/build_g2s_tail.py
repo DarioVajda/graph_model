@@ -19,7 +19,7 @@ failed at before. Going through `wiring.build_registry` resolves the same
 adapter config the run resolves, and the printed `build_version` must match the
 directory in the run's error.
 
-    src/generalist/tools/run_py.sh src/generalist/tools/build_g2s_tail.py \\
+    src/generalist/tools/launch/run_py.sh src/generalist/tools/campaign/build_g2s_tail.py \\
         --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \\
         --cell molecule_generalist_instruct_graph_s0 \\
         --arms graph --passes 32

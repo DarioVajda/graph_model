@@ -1,10 +1,10 @@
 """What `text_behaviour` measured, per arm, adapter-on against adapter-off.
 
-Reads whatever `tools/text_behaviour_all.py` has produced and says what is
-missing rather than failing, so it is useful while the jobs are still running.
+Reads whatever `tools/campaign/text_behaviour_all.py` has produced and says what
+is missing rather than failing, so it is useful while the jobs are still running.
 
-    src/generalist/tools/text_report.py
-    src/generalist/tools/text_report.py --config <cfg>
+    src/generalist/tools/reports/text.py
+    src/generalist/tools/reports/text.py --config <cfg>
 
 **Read the `off` column first.** It is the same base model in every cell — the
 backbone is frozen and `base_exact` says so to 0.0 — so any spread across cells
@@ -22,8 +22,8 @@ import os
 import statistics
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))))
 OUT_DIR = "src/generalist/results/text_behaviour"
 DEFAULT_CONFIG = "src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc"
 

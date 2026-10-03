@@ -5,7 +5,7 @@ an accepted set and gives a share of its rows worked examples drawn **from the
 set itself**, so that every demonstration has an RDKit fact sheet behind it and
 has already passed every filter in the accept pass.
 
-    RUNMOD=src.generalist.assistant.pipeline.compose src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.assistant.pipeline.compose src/generalist/tools/launch/run_cli.sh \
         --accepted src/generalist/results/assistant/final/accepted \
         --out src/generalist/results/assistant/final/composed
 

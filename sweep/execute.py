@@ -279,7 +279,7 @@ def _launch_env():
 #: whole B300 node's worth of scheduling for a one-line environment fix
 #: (CLAUDE.md). Single-node jobs need no InfiniBand, which is every job this
 #: runner submits; a multi-node job would have to drop this and arrange its
-#: fabric another way. The `src/generalist/tools/` launchers already pass it, and
+#: fabric another way. The `src/generalist/tools/launch/` launchers already pass it, and
 #: a sweep landing on ixb7 is how we found that this one did not.
 _CONTAINER_SRUN_FLAGS = ("--export=ALL,MELLANOX_VISIBLE_DEVICES=none",)
 

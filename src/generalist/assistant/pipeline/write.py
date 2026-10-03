@@ -21,7 +21,7 @@ The system prompts belong to the domain (`Domain.ask_system`, `voice_system`;
 
     VENV_BIN=.venv_writer/bin CONTAINER=/shared/workspace/povejmo/containers/nemo_26.04.sqsh \
     GPU=1 GPU_CONSTRAINT='GPU_BRD:B200|GPU_BRD:B300|GPU_BRD:H100' \
-    src/generalist/tools/run_py.sh -m src.generalist.assistant.pipeline.write \
+    src/generalist/tools/launch/run_py.sh -m src.generalist.assistant.pipeline.write \
         --model /shared/workspace/povejmo/huggingface_cache/hub/models--google--gemma-4-31B-it/snapshots/b9ea41a2887d8607f594846523f94c6cc75ac8a4 \
         --batches .../v5 --out .../v5/ask --pass ask
 
@@ -180,7 +180,7 @@ def main(argv=None) -> int:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from ...tools.check_chat_template import gate
+    from ...tools.checks.chat_template import gate
 
     writer = args.writer or os.path.basename(args.model.rstrip("/"))
     tokenizer = AutoTokenizer.from_pretrained(args.model)

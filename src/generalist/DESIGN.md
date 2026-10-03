@@ -606,7 +606,7 @@ molecules a number is over. `MOLECULE_GENERALIST.md` §8 records the exposure of
 
 **Detect it with `pos_rate`.** It is `y_true.mean()` over the scored rows, so for arms scoring the same
 molecules it is a property of the task and cannot differ. When it does, rows are being scored at the
-wrong position. `tools/notation_probe.py::check_arms_agree_on_labels` asserts it and refuses to print
+wrong position. `tools/notation/probe.py::check_arms_agree_on_labels` asserts it and refuses to print
 a table that fails; anything else scoring one dataset through several arms should do the same.
 
 **Training batches should bucket `B`, and do not yet.** Splitting a step across ranks changes which

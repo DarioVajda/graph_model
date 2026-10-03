@@ -30,7 +30,7 @@ subsample — so a zero-shot row and a trained row are over the same molecules.
 
 Usage (GPU, through Slurm — never on the login node):
 
-    python3 -m src.generalist.tools.notation_probe --out results/notation_probe
+    python3 -m src.generalist.tools.notation.probe --out results/notation_probe
 """
 
 from __future__ import annotations
@@ -397,8 +397,8 @@ def main(argv=None) -> int:
     config = molecules.MoleculeAdapterConfig(
         model_name=args.model_name, max_length=args.max_length).validate()
     out_dir = os.path.abspath(
-        args.out or os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "results", "notation_probe"))
+        args.out or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "results", "notation_probe"))
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"build_version {config.build_version()}  "

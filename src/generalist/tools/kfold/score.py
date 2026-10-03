@@ -1,7 +1,7 @@
 """Score `KFOLD_TRANSFER.md`: fix the owed thresholds, then read the crossings.
 
-    src/generalist/tools/kfold_score.py
-    src/generalist/tools/kfold_score.py --json out.json
+    src/generalist/tools/kfold/score.py
+    src/generalist/tools/kfold/score.py --json out.json
 
 Run it whenever; it reports what is missing rather than failing, so it is
 useful while the study is still running.
@@ -54,8 +54,8 @@ import json
 import os
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))))
 sys.path.insert(0, REPO)
 
 FRACTION = 0.95
@@ -176,7 +176,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     from src.generalist.config import RunConfig, TRANSFER_FOLDS, config_cells
-    from src.generalist.tools.kfold_adapt_all import (
+    from src.generalist.tools.kfold.adapt_all import (
         EVERY_FOLD, FOLD_CONFIG, fork_dir, legs)
 
     # Every fold's cells, and the annealed metrics of each.

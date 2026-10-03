@@ -1,6 +1,6 @@
 """The notation ladder's read-out — the notation gradient, assembled from per-run scorings.
 
-`MOLECULE_GENERALIST.md` §8.3. `notation_probe.py --checkpoint` scores one
+`MOLECULE_GENERALIST.md` §8.3. `probe.py --checkpoint` scores one
 trained run and writes `trained_<run>.json`; this merges those, adds the SMILES
 leg from arm 2 and the graph arm from §8.2, and prints the table the section asks
 for — property ROC-AUC per notation, and the flat-minus-graph gap that is the
@@ -14,7 +14,7 @@ legs are printed and none is selected.
 
 Usage:
 
-    python3 -m src.generalist.tools.notation_ladder \\
+    python3 -m src.generalist.tools.notation.ladder \\
         --dir src/generalist/results/notation_probe
 """
 
@@ -119,7 +119,7 @@ def table(agg: dict) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dir", default=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "results", "notation_probe"))
     args = parser.parse_args(argv)
 
@@ -127,7 +127,7 @@ def main(argv=None) -> int:
     if not rows:
         raise SystemExit(f"no trained_*.json under {args.dir}")
 
-    from .notation_probe import check_arms_agree_on_labels
+    from .probe import check_arms_agree_on_labels
 
     # The same assertion the probe makes, across runs this time: every arm scores
     # the same molecules, so the label base rate is a property of the task. It is

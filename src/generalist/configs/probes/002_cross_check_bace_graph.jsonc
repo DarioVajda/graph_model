@@ -4,7 +4,7 @@
   //
   //   python3 -m src.generalist validate  --config src/generalist/configs/002_cross_check_bace_graph.jsonc
   //   python3 -m src.generalist data_prep --config src/generalist/configs/002_cross_check_bace_graph.jsonc
-  //   src/generalist/tools/chain.sh       src/generalist/configs/002_cross_check_bace_graph.jsonc
+  //   src/generalist/tools/launch/chain.sh src/generalist/configs/002_cross_check_bace_graph.jsonc
   //   python3 -m src.generalist fork --from <ckpt> --mode anneal --config <this>
   //
   // ONE SPECIALIST CELL, THROUGH THIS HARNESS. BACE seed 0 as a single-task
@@ -26,7 +26,7 @@
   //
   // WHAT IS MATCHED, and it is nearly everything that matters:
   //   * the split, checked key by key rather than argued from the code
-  //     (`tools/compare_bace_split.py`). Val and test are the *same* 151 and 152
+  //     (`tools/checks/compare_bace_split.py`). Val and test are the *same* 151 and 152
   //     molecules on both sides, with nothing in either that the other lacks and
   //     no molecule crossing between splits. Train is 1178 keys against the
   //     specialist's 1180: §3's cross-source partition gives two BACE molecules

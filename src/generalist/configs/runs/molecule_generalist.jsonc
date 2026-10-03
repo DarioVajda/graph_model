@@ -12,7 +12,7 @@
   //
   //   python3 -m src.generalist validate --config <this file> --cells
   //   python3 -m src.generalist data_prep --config <this file> --cell <cell>
-  //   src/generalist/tools/chain.sh <this file> <cell>
+  //   src/generalist/tools/launch/chain.sh <this file> <cell>
   //
   // A cell's name is its `run_name` plus `_s<seed>` (`config.py::config_cells`),
   // and the campaign is a loop over `--cells`. An anneal fork is a separate

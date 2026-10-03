@@ -409,7 +409,7 @@ def test_the_label_check_reproduces_the_truncation_defect():
     `max_length`, taking the answer token with them, and every such row was then
     scored as label "no" at a meaningless position.
     """
-    from src.generalist.tools.notation_probe import check_arms_agree_on_labels
+    from src.generalist.tools.notation.probe import check_arms_agree_on_labels
 
     broken = [
         {"task": "sider", "arm": "flat", "pos_rate": 0.5180, "n": 500},
@@ -424,7 +424,7 @@ def test_the_label_check_reproduces_the_truncation_defect():
 
 
 def test_the_label_check_catches_a_row_count_mismatch():
-    from src.generalist.tools.notation_probe import check_arms_agree_on_labels
+    from src.generalist.tools.notation.probe import check_arms_agree_on_labels
 
     rows = [
         {"task": "hiv", "arm": "flat", "pos_rate": 0.038, "n": 500},
@@ -490,7 +490,7 @@ def test_the_notation_validator_set_drops_only_perm_spread():
 
 def test_probe_table_renders_without_a_gpu():
     """`table` is pure formatting over rows, so it is testable on CPU."""
-    from src.generalist.tools.notation_probe import table
+    from src.generalist.tools.notation.probe import table
 
     rows = [{"task": "bace", "arm": arm, "roc_auc": 0.5, "pos_rate": 0.46,
              "tied_pair_fraction": 0.9, "mean_tokens": 42.0}

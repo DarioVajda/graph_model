@@ -1,18 +1,18 @@
 """Score every annealed cell of a config on the clean property instrument.
 
-`tools/notation_probe.py --checkpoint` is the instrument §8 and §9 quote for
+`tools/notation/probe.py --checkpoint` is the instrument §8 and §9 quote for
 property prediction: it drops the union of truncated rows across the arms that
 exist, so every arm scores the *identical* molecules. It takes one cell at a
 time, and a campaign has six — which is six commands to remember, six chances to
 point one at the wrong checkpoint, and no record of which ones are still missing.
 
-This is `tools/anneal_all.py`'s shape for the scoring step, and it is idempotent
-for the same reason: a cell whose anneal has not finished is skipped and
-reported, a cell already scored is skipped and reported, and only the ready ones
-are submitted. Run it as often as you like while the anneals are still going.
+This is `anneal_all.py`'s shape for the scoring step, and it is idempotent for
+the same reason: a cell whose anneal has not finished is skipped and reported, a
+cell already scored is skipped and reported, and only the ready ones are
+submitted. Run it as often as you like while the anneals are still going.
 
-    src/generalist/tools/probe_all.py --config <cfg>
-    src/generalist/tools/probe_all.py --config <cfg> --dry-run
+    src/generalist/tools/campaign/probe_all.py --config <cfg>
+    src/generalist/tools/campaign/probe_all.py --config <cfg> --dry-run
 
 **The backbone has to be passed through.** `notation_probe` builds its adapter
 config from ``--model-name``, and that is what decides which *build* it reads —
@@ -30,8 +30,8 @@ import os
 import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))))
 PROBE_DIR = "src/generalist/results/notation_probe"
 
 
@@ -83,7 +83,7 @@ def main(argv=None) -> int:
         if ckpt is None:
             waiting.append((cell, why))
             continue
-        cmd = [os.path.join(REPO, "src/generalist/tools/run_cli.sh"),
+        cmd = [os.path.join(REPO, "src/generalist/tools/launch/run_cli.sh"),
                "--run-config", args.config, "--cell", cell,
                "--checkpoint", ckpt, "--out", PROBE_DIR,
                "--max-samples", args.max_samples,
@@ -95,7 +95,7 @@ def main(argv=None) -> int:
             submitted.append(cell)
             continue
         env = dict(os.environ, GPU=args.gpus, WAIT="0",
-                   RUNMOD="src.generalist.tools.notation_probe",
+                   RUNMOD="src.generalist.tools.notation.probe",
                    GPUS="B300|B200", NAME=f"probe_{cell}")
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         (submitted if rc == 0 else waiting).append(

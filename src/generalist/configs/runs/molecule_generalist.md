@@ -55,7 +55,7 @@ cell.
 
 Before training anything, the same five property sets scored on
 **Llama-3.2-1B with no adapters at all** — a yes/no logit margin read off the
-frozen backbone (`tools/notation_probe.py`, no `--checkpoint`). The graph arm here
+frozen backbone (`tools/notation/probe.py`, no `--checkpoint`). The graph arm here
 is the architecture with untrained biases and untrained LoRA, which is the honest
 floor for it: whatever the graph arm knows, it did not bring.
 
@@ -101,7 +101,7 @@ graph arm's trained performance is *acquired*, not inherited.
 
 ## Property classification — the trained models
 
-Scored on one clean instrument (`tools/notation_probe.py --checkpoint`), with the
+Scored on one clean instrument (`tools/notation/probe.py --checkpoint`), with the
 **union** of truncated rows excluded from all four arms so that every arm scores
 the identical row set. ROC-AUC, mean ± sd over three seeds:
 
@@ -252,7 +252,7 @@ nothing here says what happens at 3B or at 20,000.
    and the graph arm did not — and the longer notations got more of it, which is
    the same direction as the reversal reported above.
 
-   `tools/truncation_census.py` counts every training row against the cap,
+   `tools/checks/truncation_census.py` counts every training row against the cap,
    weighted by mixture share:
 
    | | graph | SMILES | SELFIES | InChI |
@@ -316,7 +316,7 @@ examples, not tokens**, because a gradient is made of examples. The built mixtur
 measures 288.28 tokens an example on the graph arm against the SMILES arm's
 82.51, with SELFIES and InChI between them; sharing one token budget would hand
 the graph arm 3.5× the batch and the comparison would stop being a comparison.
-Each value is `tools/tokens_per_step.py` run against that arm's own measured
+Each value is `tools/checks/tokens_per_step.py` run against that arm's own measured
 `mean_tokens` at the same 56.83 examples/step.
 
 The SMILES arm's 4689 rather than 4690 is worth stating: at `CORPUS_PASSES` 6 no
@@ -421,14 +421,14 @@ python3 -m src.generalist validate --config src/generalist/configs/runs/molecule
 CFG=src/generalist/configs/runs/molecule_generalist.jsonc
 CELL=molecule_generalist_graph_s0
 python3 -m src.generalist data_prep --config $CFG --cell $CELL
-src/generalist/tools/chain.sh $CFG $CELL
-GPU=1 INDUCTOR_CACHE=.inductor_cache/generalist src/generalist/tools/run_cli.sh fork \
+src/generalist/tools/launch/chain.sh $CFG $CELL
+GPU=1 INDUCTOR_CACHE=.inductor_cache/generalist src/generalist/tools/launch/run_cli.sh fork \
   --from src/generalist/results/runs/$CELL/checkpoint-5599 --mode anneal \
   --fork-config src/generalist/configs/forks/anneal_molecule_generalist.jsonc \
   --config $CFG --cell $CELL
 
 # the property tables, on one instrument across all four arms
-python3 -m src.generalist.tools.notation_probe --checkpoint <anneal checkpoint>
+python3 -m src.generalist.tools.notation.probe --checkpoint <anneal checkpoint>
 ```
 
 All twelve cells read one build, `42f7a14bed21f876`, so a difference between two

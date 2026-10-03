@@ -7,10 +7,10 @@ Twenty-two hand-typed commands is how the wrong threshold reaches a queue, which
 is the one failure §6a exists to prevent. This builds them from the fold table
 instead.
 
-    src/generalist/tools/kfold_adapt_all.py --dry-run
-    src/generalist/tools/kfold_adapt_all.py --queue-behind-trunk
+    src/generalist/tools/kfold/adapt_all.py --dry-run
+    src/generalist/tools/kfold/adapt_all.py --queue-behind-trunk
 
-Like `anneal_all.py` it is **idempotent** and does not wait: a fork that already
+Like `campaign/anneal_all.py` it is **idempotent** and does not wait: a fork that already
 has a `result.json` is skipped, a fold whose trunk has not landed is reported
 and skipped, and `--queue-behind-trunk` submits against the trunk's Slurm job id
 with an `afterok` dependency so the legs start themselves overnight.
@@ -40,8 +40,8 @@ import os
 import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))))
 FORKS = "src/generalist/configs/forks/"
 PROBES = "src/generalist/configs/probes/"
 
@@ -251,7 +251,7 @@ def main(argv=None) -> int:
             waiting.append((label, why))
             continue
 
-        cmd = [os.path.join(REPO, "src/generalist/tools/run_cli.sh"), "fork",
+        cmd = [os.path.join(REPO, "src/generalist/tools/launch/run_cli.sh"), "fork",
                "--from", checkpoint, "--mode", "adapt",
                "--fork-config", fork_config,
                "--config", config_path, "--cell", cell,

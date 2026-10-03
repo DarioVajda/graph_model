@@ -5,7 +5,7 @@
   // the chain, so this is run once per cell of `runs/molecule_generalist.jsonc`.
   //
   //   GPU=1 INDUCTOR_CACHE=.inductor_cache/generalist \
-  //   src/generalist/tools/run_cli.sh fork \
+  //   src/generalist/tools/launch/run_cli.sh fork \
   //     --from src/generalist/results/runs/molecule_generalist_graph_s0/checkpoint-5599 \
   //     --mode anneal \
   //     --fork-config src/generalist/configs/forks/anneal_molecule_generalist.jsonc \
@@ -46,7 +46,7 @@
   // anneal that runs off the end of the built passes fails at the moment it is
   // wanted. The campaign needed 14 against its trunk's 12; the 2x rerun needs
   // ~27 against its trunk's 25, and both arms are built to 28
-  // (`tools/build_g2s_tail.py`), so neither fork is blocked on a data build.
+  // (`tools/campaign/build_g2s_tail.py`), so neither fork is blocked on a data build.
   // ───────────────────────────────────────────────────────────────────────────
 
   "passes": {

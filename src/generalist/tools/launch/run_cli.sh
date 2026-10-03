@@ -7,9 +7,9 @@
 # code is the command's. Output lands in
 # src/generalist/results/job_logs/<stamp>.out and the tail is echoed here.
 #
-#   src/generalist/tools/run_cli.sh data_prep --config src/generalist/configs/probes/000_smoke.jsonc
-#   GPU=1 src/generalist/tools/run_cli.sh eval --checkpoint <ckpt> --config <cfg>
-#   GPU=4 GPUS="B300|B200" src/generalist/tools/run_cli.sh fork --from <ckpt> ...
+#   src/generalist/tools/launch/run_cli.sh data_prep --config src/generalist/configs/probes/000_smoke.jsonc
+#   GPU=1 src/generalist/tools/launch/run_cli.sh eval --checkpoint <ckpt> --config <cfg>
+#   GPU=4 GPUS="B300|B200" src/generalist/tools/launch/run_cli.sh fork --from <ckpt> ...
 #
 # Env overrides: PARTITION (frida), CPUS (16), MEM (64G), TIME (02:00:00),
 # GPU (0 -> CPU-only; 1 -> one GPU; >1 -> that many ranks under torchrun), NAME,
@@ -59,7 +59,7 @@
 # =============================================================================
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$REPO"
 
 CONTAINER="${CONTAINER:-/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh}"
@@ -91,7 +91,7 @@ LOG="$LOG_DIR/$STAMP.out"
 # RUNMOD names the module to run, so a one-off tool under `tools/` gets the
 # container, the constraint list and the log discipline the harness modes get
 # rather than a second launcher that drifts from this one.
-#   RUNMOD=src.generalist.tools.notation_probe GPU=1 src/generalist/tools/run_cli.sh --out ...
+#   RUNMOD=src.generalist.tools.notation.probe GPU=1 src/generalist/tools/launch/run_cli.sh --out ...
 RUNMOD="${RUNMOD:-src.generalist}"
 
 if [ "$GPU" -gt 1 ] 2>/dev/null; then

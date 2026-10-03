@@ -11,8 +11,8 @@ the base LLM's plus the adapter and nothing else — no model change, on either 
 
 **What this file owns, and what it does not.** The prompts and the answers are
 built upstream and versioned on disk, because both are expensive and neither may
-change under a run: `tools/replay_prompts.py` selects and filters the prompts,
-`tools/replay_generate.py` samples the answers on a GPU. This adapter reads that
+change under a run: `tools/replay/prompts.py` selects and filters the prompts,
+`tools/replay/generate.py` samples the answers on a GPU. This adapter reads that
 directory and does the part every adapter does — split, featurize, validate,
 save — and `load` never regenerates.
 
@@ -131,7 +131,7 @@ class TextAdapterConfig:
             raise TextBuildError(
                 f"{path} is missing: the replay answers for "
                 f"{self.replay_version!r} have not been generated "
-                "(tools/replay_generate.py).")
+                "(tools/replay/generate.py).")
         with open(path) as fh:
             return json.load(fh)
 
@@ -207,8 +207,8 @@ _DIGESTS: dict = {}
 
 def _file_digest(path: str) -> str:
     if not os.path.exists(path):
-        raise TextBuildError(f"{path} is missing; run tools/replay_prompts.py and "
-                             "tools/replay_generate.py for this version first.")
+        raise TextBuildError(f"{path} is missing; run tools/replay/prompts.py and "
+                             "tools/replay/generate.py for this version first.")
     stat = os.stat(path)
     key = (path, stat.st_size, stat.st_mtime_ns)
     if key not in _DIGESTS:
@@ -267,7 +267,7 @@ def read_answers(config: TextAdapterConfig) -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def partition(config: TextAdapterConfig) -> Partition:
-    """One prompt, one role, as `tools/replay_prompts.py` assigned it."""
+    """One prompt, one role, as `tools/replay/prompts.py` assigned it."""
     claims = {}
     for prompt in read_prompts(config):
         claims.setdefault(prompt["role"], []).append(prompt["id"])

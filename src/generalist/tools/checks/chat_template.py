@@ -11,7 +11,7 @@ So before trusting any measurement of how well a writer follows a brief, render
 one chat and check that every special marker in the rendered string is a single
 token id.
 
-    RUNMOD=src.generalist.tools.check_chat_template src/generalist/tools/run_cli.sh \
+    RUNMOD=src.generalist.tools.checks.chat_template src/generalist/tools/launch/run_cli.sh \
         --model /shared/workspace/povejmo/models/hf_models/gemma-4-31B
 """
 

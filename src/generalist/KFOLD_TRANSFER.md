@@ -455,7 +455,7 @@ availability.
 5. From-parent adapt legs, per fold, as each trunk lands. `bond_path` and
    `longest_chain` get four each — no trunk trained them, so every fold is a
    valid parent (§6a).
-6. Score, with `tools/kfold_score.py`. It fixes the owed thresholds off the
+6. Score, with `tools/kfold/score.py`. It fixes the owed thresholds off the
    landed anneals, reads the crossing off each stored curve under the same
    persistence rule the fork applies, and prints the parent/base ratio and the
    area beside it. It reports what is missing instead of failing, so it is worth
@@ -468,9 +468,9 @@ got to:
 
 | tool | stage |
 |---|---|
-| `tools/kfold_adapt_all.py` | submits all twenty-two legs, held behind their trunks |
-| `tools/anneal_all.py --queue-behind-trunk` | one anneal per trunk, same mechanism |
-| `tools/kfold_score.py` | fixes the thresholds and reads the crossings |
+| `tools/kfold/adapt_all.py` | submits all twenty-two legs, held behind their trunks |
+| `tools/campaign/anneal_all.py --queue-behind-trunk` | one anneal per trunk, same mechanism |
+| `tools/kfold/score.py` | fixes the thresholds and reads the crossings |
 
 **The anchor is read off the annealed model, not the trunk.** A trunk stops
 mid-stable-phase by construction and is not the model any comparison should use;
@@ -638,7 +638,7 @@ the clustering buys most of the design for a third of the price.
   leg sets land (§7). Those four tasks × three seeds are the only error bar in
   the study, and what they say settles whether B, C and D need replication.
 
-  **They landed, and `kfold_score.py` was reading one of the three.** The row
+  **They landed, and `kfold/score.py` was reading one of the three.** The row
   loop took `sorted(cells)[0]` per fold, so fold A reported s0 and discarded s1
   and s2 without a word — the replicated fold printed a single number in the same
   shape as the unreplicated ones, which is the failure mode a spread column
@@ -724,5 +724,5 @@ the clustering buys most of the design for a third of the price.
   lose the first leg's finished curve entirely — and `continue_leg` cannot
   rebuild it, since resuming a leg that already reached `max_steps` trains
   nothing and so evaluates nothing. `_run_leg` now appends each evaluation to
-  `<leg>/history.jsonl` (rank 0, append-only), and `kfold_score.py` reads those
+  `<leg>/history.jsonl` (rank 0, append-only), and `kfold/score.py` reads those
   back when `result.json` is absent, tolerating a half-written final line.

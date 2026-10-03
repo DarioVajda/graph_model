@@ -1234,7 +1234,7 @@ def _graphs_for(config, task, arm, draws, pass_id, answer_kind: str = ""):
 #: (128009) whether the checkpoint is a base or an Instruct one, so the vocabulary
 #: cannot tell you which to use — the checkpoint's own ``eos_token_id`` can, and
 #: it is 128001 on the base weights every config here names and 128009 on
-#: Instruct. Three things have to agree, and `tools/stop_token_check.py` asserts
+#: Instruct. Three things have to agree, and `tools/checks/stop_token_check.py` asserts
 #: all three:
 #:
 #:   * it is the token ``generation_config.eos_token_id`` stops on (128001 for
