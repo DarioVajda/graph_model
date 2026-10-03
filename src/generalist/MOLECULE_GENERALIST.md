@@ -133,3 +133,7 @@ add-a-task fork mechanism exist and are tested; missing is the TaskSpec naming w
 and its cost per example.
 
 Also owed: the `bias: none` control, the g2s-only ceiling, the `val` role shrink at the next rebuild.
+
+**Next:** this campaign's mixture enters `GRAPH_GENERALIST.md` as one block of a trunk over every
+graph domain, and its assistant pipeline becomes the task-agnostic core there (§6). The molecule
+assistant set is ported onto that core.

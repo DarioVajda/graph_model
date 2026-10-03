@@ -2,16 +2,18 @@
 
 **Status:** planning. Written 2026-08-01; revised the same day with scale, trainable
 surface (D4) and the compute budget (§8); revised 2026-08-02 with D5–D7, the measurement
-protocol (§3.4), the status table below and the RL postscript (§11). Nothing here is
-implemented yet — see the table for where each decision stands.
+protocol (§3.4), the status table below and the RL postscript (§11); revised 2026-10-03
+with the multi-domain campaign, which now carries Phase 1 and the trunk and has its own plan of
+record in `GRAPH_GENERALIST.md`. See the table for where each decision stands.
 
 **Goal:** transition from one-model-per-task GTLM to a single, continuously-trained,
 graph-aware LLM that (a) serves every task we already solve, (b) learns *new* graph
 tasks it has never seen, and (c) does not lose the base model's text-only ability.
 
-**Scale:** the trunk targets a **7–12B instruction-tuned backbone**, not the 1B used
-for every published result. That single choice propagates into D2 (§3.1), D4 (§3.1),
-the memory arithmetic and the whole compute budget — read those together.
+**Scale:** every decision is made at **1B** (Llama-3.2-1B-Instruct) and the trunk then
+scales to **Llama-3.1-8B-Instruct**, with 3B as a conditional middle point
+(`GRAPH_GENERALIST.md` §8). The 8B step propagates into D2 (§3.1), D4 (§3.1), the memory
+arithmetic and the whole compute budget — read those together.
 
 ---
 
@@ -107,17 +109,17 @@ as decisions land.
 | **D1** | Edge encoding — node-pair extrapolation vs Levi | ✅ Decision: **Levi** | schema, relbench, molecules |
 | **D2** | Magnetic sharing granularity | ✅ Decision: **`G=4`** at 1B (`bias_experiments/bias_sharing` §4.4); re-profile on D4's backbone still owed | trunk cost for its whole life |
 | **D3** | Remaining constants | **decided**, evidence in `CLAUDE_CONTEXT.md` | — |
-| **D4** | Backbone + trainable surface | leaning Llama-3.1-8B-Instruct, arm B; arms A/B/C settled in Phase 1 | D2, §6, everything at scale |
-| **D5** | Context budget + graph-size policy | not started | schema, mixture, §8 |
+| **D4** | Backbone + trainable surface | ✅ Decision: Llama-3.2-1B-Instruct → Llama-3.1-8B-Instruct; **LoRA**, full fine-tuning only behind the written trigger of `GRAPH_GENERALIST.md` §5; arm B dropped | D2, §6, everything at scale |
+| **D5** | Context budget + graph-size policy | caps not started; batching by shape decided (`GRAPH_GENERALIST.md` §3) | schema, mixture, §8 |
 | **D6** | Bias-path numerics under bf16 | not started | every invariant claim at trunk scale |
-| **D7** | Batch and loss accounting | (a) ✅ **two-level, per-example default**; (b)(c) open | whether Phase 1 is interpretable at all |
-| §3.2 | Unified schema + `registry.py` + adapters | not started | Phase 1 |
-| §3.3 | Held-out task set declared | not started | every generality claim |
+| **D7** | Batch and loss accounting | (a) ✅ **two-level, per-example default**; (b) ✅ `tokens_per_step` 16384 (`DESIGN.md` §10); (c) ✅ mixed steps, shape-keyed rank-synchronised micro-batches (`GRAPH_GENERALIST.md` §3), not built | whether Phase 1 is interpretable at all |
+| §3.2 | Unified schema + `registry.py` + adapters | schema, registry, `molecules` and `text` adapters built; six adapters owed (`GRAPH_GENERALIST.md` §2) | Phase 1 |
+| §3.3 | Held-out task set declared | ✅ declared below; `longest_chain` added with the molecule generalist | every generality claim |
 | §3.4 | Measurement protocol frozen | not started | every longitudinal number |
-| §4 | **Phase 1** feasibility at 1B | not started | go/no-go for 7–12B |
+| §4 | **Phase 1** feasibility at 1B | runs as stage 1 of `GRAPH_GENERALIST.md` | go/no-go for 8B |
 | §5 | Trunk chain harness proven on a throwaway run | not started | the trunk |
 | §5 | Trunk + flat twin running | not started | — |
-| §7 | relbench / molecules / CLRS admitted | relbench in progress in its own package | — |
+| §7 | relbench / molecules / CLRS admitted | molecules ✅ (`MOLECULE_GENERALIST.md`); relbench out of the first release; CLRS not started | — |
 | §11 | RL | explicitly deferred, no work before all of the above | — |
 
 ---
@@ -237,8 +239,9 @@ delta recorded next to it — **measured on the chosen backbone, at trunk sequen
 * Bias arm `spd+magnetic` (subject to D2's sharing decision). The probes show the channels
   are *not* redundant across tasks — magnetic is the only carrier of edge direction, SPD is
   non-trivial on node degree — and the trunk has to serve all of them.
-* `lora_dropout = 0.15` (the only regularisation winner in the 32-run campaign); LoRA rank
-  `64–128` rather than per-task `8–16`, to be bracketed once in Phase 1.
+* `lora_dropout = 0.15` (the only regularisation winner in the 32-run campaign). LoRA rank
+  and `lr` come from one shared screen at 1B, `r ∈ {16, 64}` × `lr ∈ {5e-5, 1e-4}`
+  (`GRAPH_GENERALIST.md` §4).
 * Chat formatting in `schema.py`, non-negotiably paired with instruct weights — the
   measured +0.5 F1 / +1.0 Hits@1 required **both together**, neither alone.
 * *(What is trainable is no longer a constant — see D4.)*
@@ -246,6 +249,12 @@ delta recorded next to it — **measured on the chosen backbone, at trunk sequen
 ---
 
 #### D4 — Backbone choice and trainable surface
+
+**Decided 2026-10-03:** Llama-3.2-1B-Instruct for every decision, then Llama-3.1-8B-Instruct
+(3B conditional); **LoRA only**, with full fine-tuning (arm C) as the last resort behind the
+trigger in `GRAPH_GENERALIST.md` §5. Arm B is dropped — a third arm and its own optimizer-group
+plumbing for an effect unlikely to be large. The analysis below is what the decision rests on;
+where it argues for arm B it is superseded.
 
 **Backbone.** A 7–12B instruction-tuned model. Selection criteria, in order:
 
@@ -280,8 +289,10 @@ also settles the RoPE-shock question as a side effect, which is worth doing rega
 
 **What escalating past arm A costs, beyond memory:**
 
-* **Property 2 is voided.** Exact backward compatibility is a *published theoretical
-  claim* and depends on the backbone being untouched. Arms B and C both break it.
+* *Not* Property 2. Backward compatibility is a statement about the architecture — a
+  single-node graph reduces to the base LLM's computation under the same weights — and no
+  training choice touches it. LoRA does not switch off on text-only input either, so a trained
+  model is not the base model under any arm.
 * **The free teacher disappears.** §6's KL-to-base self-distillation works because
   adapters-off *is* the base model. Once any backbone weight moves, the teacher must be a
   separate frozen copy resident in memory (+16 GB at 8B) or precomputed logits.
@@ -394,6 +405,10 @@ this. Homogeneous batches make bucketing trivial but raise per-task gradient noi
 batches do the reverse and pay in padding. It also interacts with D5 — bucketing is what
 makes a large `max_nodes` affordable on average rather than always.
 
+**(c) decided 2026-10-03:** optimizer steps stay mixed; micro-batches are keyed by shape and
+synchronised across ranks, on a bucket ladder fitted to the whole mixture, with a test that
+batching leaves each step's per-task counts unchanged (`GRAPH_GENERALIST.md` §3).
+
 **Decision output:** normalization rule, tokens-per-step, and batching policy in
 `TrunkConfig`, fixed for the trunk's life.
 
@@ -436,7 +451,8 @@ costs nothing now and is impossible to make later.
   different enough that failure there would say nothing.
 * Molecules: **ClinTox** (a whole Tier-B dataset) and **`bond_path`** (a whole Tier-A structural
   family, with a provable structural discriminator the way `direction` has one) — declared
-  2026-08-28 in `src/experiments/molecules/PLAN.md` §4.1, before any molecule run existed
+  2026-08-28 in `src/experiments/molecules/PLAN.md` §4.1, before any molecule run existed;
+  **`longest_chain`** joined them 2026-09-02, before the molecule generalist ran
 * Later: one held-out CLRS algorithm family
 
 **Two metrics on them, not one:**
@@ -475,6 +491,10 @@ after seeing results.
 
 ## 4. Phase 1 — multi-task feasibility (go/no-go)
 
+**Runs as stage 1 of `GRAPH_GENERALIST.md`**, which owns its mixture (§2 there: this table
+plus the molecule mixture as one block, Reddit kept, relbench and `context` out) and its
+recipe. The text below is the original framing.
+
 One model, one adapter, one bias set, on data that **already exists**. No new data
 pipelines. The mixture, held-outs of §3.3 removed:
 
@@ -498,13 +518,11 @@ Two questions:
    of these, so this is directly measurable.)
 2. **Transfer** — does it move at all on the held-out set, zero-shot or in adaptation
    efficiency?
-3. **Trainable surface** — D4 arms A vs B vs C, run here because 1B makes them cheap. This
-   is also the long-owed test of the RoPE-shock hypothesis, so it has standalone value even
-   if the generalist programme stalls.
+3. **Trainable surface** — whether LoRA is enough, read off the trigger in
+   `GRAPH_GENERALIST.md` §5 at 1B, where a full-fine-tuning comparison is cheap if it fires.
 
-This is the experiment that converts the current guess into a measurement, and it runs
-before relbench / molecules / CLRS data work, so a negative result is cheap. **Nothing at
-7–12B starts until Phase 1 passes** — months of trunk training on an architecture that is
+This is the experiment that converts the current guess into a measurement, and a negative
+result at 1B is cheap. **Nothing at 8B starts until Phase 1 passes** — months of trunk training on an architecture that is
 then revised is the single worst outcome available here.
 
 ---
@@ -527,10 +545,10 @@ Specifics:
 * **Save and restore Adam moments.** Resuming with fresh optimizer state runs the first
   few hundred steps at an effectively huge LR; this is the most common way a long run dies.
 * `GraphTrainerV2.create_optimizer`'s two LR groups keep their ratio through all three
-  phases. The ~150× `bias_lr`/LoRA differential exists because the biases start random —
-  on the trunk they don't. Re-bracket `bias_lr` once at trunk start (3e-2 is known to
-  destabilise the bias MLP; 5e-3 is the current default) and consider decaying the *ratio*
-  toward 1.
+  phases. `bias_lr` stays at its 5e-3 default (3e-2 is known to destabilise the bias MLP).
+  Decaying the ratio toward 1 over the trunk was considered and **not adopted** (2026-10-03):
+  the distinct-rate setup has worked in every campaign, and the ratio is partly a permanent
+  scale correction between the two parameter groups rather than only a cold-start effect.
 
 **Operational shape is dictated by the scheduler, not by preference.** `frida` caps
 walltime at **7 days**, so the trunk *cannot* be one job — it must be a chained,
@@ -577,18 +595,20 @@ Write the criterion into the config *before* the fork runs.
 
 ## 6. Forgetting control
 
-**This section assumes D4 arm A (LoRA only). Arms B and C weaken it — see the caveat
-below.** Under arm A, the frozen backbone plus Property 2 means text-domain damage is
-bounded by what LoRA can express: this is **not** full-parameter continual pretraining and
+**This section assumes D4 arm A (LoRA only), which is the decision. Full fine-tuning (arm C)
+weakens it — see the caveat below.** Measured on molecules: text replay spent in the anneal's
+decay removes the off-topic-caption failure at almost no cost, while the same replay in the
+mixture costs task accuracy (`MOLECULE_GENERALIST.md` §2). Under arm A, the frozen backbone
+means text-domain damage is bounded by what LoRA can express: this is **not** full-parameter continual pretraining and
 the usual replay ratios don't transfer directly.
 
 * **Primary mechanism: KL-to-base self-distillation on text-only batches**
   (`forgetting.py`). Adapter off = exact base model = a free teacher, same weights, no
   second checkpoint. This optimises "don't change text behaviour" directly instead of
   proxying it through a corpus we'd have to guess at, and it works with *any* text.
-  **Caveat: this is a LoRA-only benefit.** Under arm B or C the backbone has moved, so the
-  teacher must be a separate frozen copy resident in memory (+16 GB at 8B) or precomputed
-  logits over a fixed text set. Budget for it if Phase 1 selects B or C.
+  **Caveat: this is a LoRA-only benefit.** Under full fine-tuning the backbone has moved, so
+  the teacher must be a separate frozen copy resident in memory (+16 GB at 8B) or precomputed
+  logits over a fixed text set. Budget for it if the trigger fires.
 * **Replay ratio: start ~15–25%**, weighted toward general instruction data rather than
   raw text — what we're protecting is instruction-*following* more than knowledge, since
   the trunk must answer arbitrary natural-language questions about graphs.
@@ -596,7 +616,7 @@ the usual replay ratios don't transfer directly.
   perplexity) every N steps, plus an adapters-off run asserting the base is still
   bit-exact. Then tune the ratio *down* until the suite moves. Expect to go lower than the
   literature suggests, because of the frozen backbone — but that's a measurement.
-  Under arm B or C the adapters-off assertion is meaningless (there is no recoverable base)
+  Under full fine-tuning the adapters-off assertion is meaningless (there is no recoverable base)
   and the ratio should be expected to go **up**, toward the continual-pretraining norms —
   forgetting changes from bounded-by-construction to a live risk this section must contain.
 
@@ -606,8 +626,9 @@ the usual replay ratios don't transfer directly.
 
 Each develops as an isolated experiment package, then enters through the admission gate.
 
-* **relbench** — `src/experiments/relbench/PLAN.md` is already in progress. Typed foreign
-  keys make it the natural first consumer of D1. **Admit it last, and score it on its own
+* **relbench** — `src/experiments/relbench/PLAN.md`. **Out of the first generalist release**
+  (`GRAPH_GENERALIST.md` §2). Typed foreign keys make it the natural first consumer of D1.
+  **Admit it last, and score it on its own
   terms:** it asks for uncertain predictive estimates rather than graph retrieval or
   reasoning, which is not what GTLM is for. On rel-trial the graph arm is −7.7 pp (11.8σ)
   under flat with the bias channel inert; write into the admission criterion that this
@@ -655,8 +676,8 @@ blended ≈ 4× → **~2–4k tok/s per GPU**, i.e.
 |---|---|
 | D2 sharing sweep (1B, `G ∈ {1,2,4,8,16}` × seeds) + re-profile at target scale | ~50–150 GPU-h |
 | D1 edge encoding: build + KGQA Levi head-to-head + invariant tests | ~200–400 GPU-h |
-| Phase 1 multi-task feasibility **at 1B**, incl. D4 arms A/B/C | ~300–500 GPU-h |
-| Trunk, 5B tokens @ 8B (arm A/B; ×1.3–1.6 for arm C) | ~600 GPU-h ≈ **3–4 days on one 8-GPU node** |
+| Phase 1 multi-task feasibility **at 1B**, incl. the recipe screen | ~300–500 GPU-h |
+| Trunk, 5B tokens @ 8B (LoRA; ×1.3–1.6 under full fine-tuning) | ~600 GPU-h ≈ **3–4 days on one 8-GPU node** |
 | Flat twin control (no bias, ~0.4×) | ~250 GPU-h |
 | Anneal forks (~15% of steps-so-far × ~5 milestones) | ~400–700 GPU-h |
 | Admission forks (3 domains × ~2 attempts) | ~500–800 GPU-h |
@@ -684,15 +705,15 @@ are small, correct published numbers, and are time-sensitive in a way the trunk 
 ## 9. Risks
 
 * **D1, D2, D4 or the backbone changing after the trunk starts** → trunk invalidated.
-  Hence Phase 0, and hence Phase 1 running at 1B before anything at 7–12B.
+  Hence Phase 0, and hence Phase 1 running at 1B before anything at 8B.
 * **Compute.** 3× overhead, `O(N²·m)` bias, overhead scaling as nodes-per-token (7.9× at
   2048 nodes × 2 tokens vs 1.45× at 512 × 32). Relbench subgraphs and long molecule sets
   sit in the bad corner. Budget the trunk against measured s/it on the *largest* mixture
   component, on the flex backend. Full budget in §8.
-* **Hardware dependency if Phase 1 selects D4 arm C.** Unsharded full fine-tuning across
-  7–12B requires **B300 specifically** (12B needs 192 GB of optimizer state; B200 has 180).
-  That turns a contended resource into a hard dependency. Mitigations, in order: prefer arm
-  B; use a reduced-state optimizer (8-bit Adam / Adafactor); accept ZeRO-2, which costs
+* **Hardware dependency if the full-fine-tuning trigger fires.** Unsharded full fine-tuning
+  at 8B is at the edge of a B200 and comfortable only on **B300** (8B AdamW ~178 GB of
+  state). That turns a contended resource into a hard dependency. Mitigations, in order: use
+  a reduced-state optimizer (8-bit Adam / Adafactor); accept ZeRO-2, which costs
   essentially nothing in communication and removes the dependency entirely.
 * **Eval hygiene.** Three protocol defects have already bitten this project (test-set
   selection on TAG, loss-vs-metric selection, the bias-reload bug). A long trunk with a
@@ -712,7 +733,8 @@ Definition of *done* per row; current status lives in the table at the top, not 
 - [ ] **D2** magnetic sharing profiled and locked (`G` sweep, head-grouping prediction
       tested) — **re-profiled on the chosen backbone, not only at 1B**
 - [ ] **D3** remaining constants written into a frozen architecture config
-- [ ] **D4** backbone selected (layer count + adapter maturity) and validated end-to-end
+- [ ] **D4** backbone selected (layer count + adapter maturity) and validated end-to-end;
+      the full-fine-tuning trigger evaluated at 1B
 - [ ] **D5** `(max_nodes, max_edges, max_tokens)` chosen against measured s/it on the
       largest mixture component; a named, versioned sampler per oversized task
 - [ ] **D6** invariant tests re-run under the trunk's autocast config at trunk graph sizes;
@@ -727,7 +749,7 @@ Definition of *done* per row; current status lives in the table at the top, not 
       the schema validator, and no task silently contributing zero — *before* Phase 1
       spends 300–500 GPU-h on a result the `--magnetic-groups` class of silent wiring bug
       would make uninterpretable
-- [ ] **Phase 1** at 1B: multi-task feasibility **+ D4 arms A/B/C** → go/no-go
+- [ ] **Phase 1** at 1B: multi-task feasibility **+ the D4 trigger** → go/no-go
 - [ ] Trunk chain harness (resumable ≤7-day jobs, optimizer state persisted) proven on a
       throwaway run *before* the real trunk starts
 - [ ] Trunk started (WSD), flat twin started
@@ -757,11 +779,11 @@ Three things worth remembering, none of which cost anything today:
   generation, which against §8 is comparable to the trunk itself. Before any commitment,
   the one cheap measurement is batched `generate()` throughput on the chosen backbone at
   realistic graph sizes.
-* **It interacts with D4.** §6's guarantees assume arm A. If Phase 1 forces arm B or C,
-  Property 2 is gone and forgetting stops being bounded by construction; RL with a KL
-  penalty to a reference policy is the other known way to add capability while moving the
-  policy far less than SFT does. That is a reason to *reconsider* this section later under
-  arm B/C — not a reason to start now.
+* **It interacts with D4.** §6's guarantees assume LoRA. If the full-fine-tuning trigger
+  fires, forgetting stops being bounded by construction; RL with a KL penalty to a
+  reference policy is the other known way to add capability while moving the policy far
+  less than SFT does. That is a reason to *reconsider* this section later under full
+  fine-tuning — not a reason to start now.
 
 Keep the door open at zero cost: the held-out set of §3.3 stays unspent (RL that trains on
 triangle counting destroys the only clean read on whether it generalises past its own

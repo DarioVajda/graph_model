@@ -48,6 +48,7 @@ src/generalist/
 ├── PLAN.md                    # the programme
 ├── DESIGN.md                  # this document
 ├── MOLECULE_GENERALIST.md     # first consumer
+├── GRAPH_GENERALIST.md        # every graph domain; the release campaign
 ├── __main__.py                # argparse: modes train | resume | fork | eval | data_prep | validate
 ├── config.py                  # RunConfig (one knob = one place) + ForkConfig
 ├── schema.py                  # D1: Example, validator, answer kinds
@@ -285,6 +286,14 @@ divided by its own loss-span length (per-example), and the batch loss is the *me
 so a task's gradient share equals its example share in expectation. Under gradient accumulation
 and DDP the example count is taken across the whole optimizer step, not per micro-batch — the
 known accumulation-normalisation footgun — and §T3 pins it.
+
+**Planned for the multi-domain mixture (`GRAPH_GENERALIST.md` §3), not built.** Steps stay mixed,
+but a step's micro-batches are emitted in groups of `world_size` from one bucket with one row count,
+so every rank runs the same shape at the same micro-step — replacing today's `[r::world_size]`
+split, under which ranks run different buckets side by side. The bucket ladder is fitted to the
+mixture's measured `(N, L)` distribution instead of the fixed powers of two. A bucket too small to
+fill a rank group is promoted into the next larger bucket, never dropped or deferred, and a test
+asserts that batching leaves every step's per-task counts unchanged at 1 and 4 ranks.
 
 `per_token` tasks (none in the first build) contribute their span-summed loss divided by the
 mean span length of the batch, so that the *task-level* share still matches the example share.
@@ -616,7 +625,7 @@ cell were **96 % of the anneal's wall clock**, which made four ranks slower than
 cache. The stalls saturate and land in the shared inductor cache, so the cost is bounded and paid
 once, but bucketing `B` on the same ladder as `L` and `N` for *training* batches — as
 `evaluate/scorers.py` already does for evaluation — would make the shape set independent of the rank
-count. Owed; carried into the next campaign.
+count. Owed; it is part of the shape-keyed batching planned in §D4.3.
 
 ---
 
@@ -673,7 +682,7 @@ Estimated at roughly a week of building before T10, on the strength of how much 
 | `forgetting.py` (KL-to-base on text batches) | a `text` domain adapter emitting single-node graphs is just another task, and `text_behaviour` already builds and scores exactly those items — its `kl_mean` is the loss this would minimise, measured before it is optimised |
 | the admission regression gate | `admit` mode exists; the four suites are validators registered by name |
 | adapters for graphqa / kgqa / tag / relbench / clrs | the `Adapter` protocol; each is a `build / load / partition` triple |
-| D4 arm B/C (unfrozen `W_q`/`W_k`, full fine-tune) | `active_params` and the optimizer groups; `base_exact` reports itself meaningless when the backbone moves |
+| full fine-tuning, the last resort behind `GRAPH_GENERALIST.md` §5's trigger (the `W_q`/`W_k` arm is dropped) | `active_params` and the optimizer groups; `base_exact` reports itself meaningless when the backbone moves |
 | ZeRO / sharded optimizer state | `checkpoint.py` owns the optimizer file; sharding changes its writer, not its contract |
 | DDP mixed batches with cross-rank example counts | T3 already runs at 2 ranks on CPU |
 
