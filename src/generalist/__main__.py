@@ -61,7 +61,7 @@ MODES = ("validate", "data_prep", "train", "resume", "fork", "eval")
 #: Fields no flag is generated for. ``selection`` is a dict (D7.4 refuses it on a
 #: training run anyway, so there is nothing to type); the rest are paths and
 #: bookkeeping that the runner passes under its own names.
-NO_FLAG_FIELDS = ("selection",)
+NO_FLAG_FIELDS = ("selection", "adapter_options")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,6 +308,13 @@ def mode_validate(config: RunConfig, args) -> int:
         text_config = config.text_adapter_config()
         print(f"text build    {text_config.build_version()}  (replay "
               f"{text_config.replay_version}, max_length {text_config.max_length})")
+    from .adapters import get_adapter
+
+    for domain in config.graph_domains():
+        domain_config = config.domain_adapter_config(domain)
+        version = get_adapter(domain).DOMAIN_SPEC.build_version(domain_config)
+        print(f"{domain + ' build':<13} {version}  (max_length "
+              f"{domain_config.max_length}, limit {domain_config.limit or 'none'})")
     print(f"registry      {len(registry)} tasks, hash {registry.hash()[:16]}")
     print()
     _print_partition(config, adapter_config)
@@ -331,6 +338,9 @@ def mode_validate(config: RunConfig, args) -> int:
               f"({', '.join(f'{k}={v}' for k, v in sorted(passes.items()))})")
         if config.has_text_tasks():
             print(f"  replay passes to build: {wiring.text_passes(mixture, registry)}")
+        for domain in config.graph_domains():
+            print(f"  {domain} passes to build: "
+                  f"{wiring.domain_passes(domain, mixture, registry)}")
     print()
 
     from .evaluate import build_validators
@@ -350,7 +360,7 @@ def mode_validate(config: RunConfig, args) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def mode_data_prep(config: RunConfig, args) -> int:
-    from .adapters import molecules
+    from .adapters import GRAPH_DOMAINS, adapter_for, get_adapter, molecules
     from .registry import MOLECULE_PREFIX, TEXT_PREFIX, is_held_out
 
     registry, adapter_config = wiring.build_registry(config)
@@ -360,21 +370,57 @@ def mode_data_prep(config: RunConfig, args) -> int:
         names = _names(args.only)
     else:
         names = [e["name"] for e in config.mixture_entries()]
-        names += [spec.name for spec in registry if is_held_out(spec)]
+        # Held-out tasks of the adapters this mixture draws from only: the
+        # molecule tasks are registered for every run, and a graph-domain
+        # mixture has no use for a ClinTox build.
+        drawn = {adapter_for(n) for n in names}
+        names += [spec.name for spec in registry
+                  if is_held_out(spec) and adapter_for(spec.name) in drawn]
     names = tuple(dict.fromkeys(names))
     text_names = tuple(n for n in names if n.startswith(TEXT_PREFIX))
+    domain_names = {}
+    for name in names:
+        owner = adapter_for(name)
+        if owner in GRAPH_DOMAINS:
+            domain_names.setdefault(owner, []).append(name)
+    grouped = {n for group in domain_names.values() for n in group}
     bare = tuple(
         n[len(MOLECULE_PREFIX):] if n.startswith(MOLECULE_PREFIX) else n
-        for n in names if n not in text_names)
+        for n in names if n not in text_names and n not in grouped)
     text_config = config.text_adapter_config() if text_names else None
+    # `molecules.build` reads an empty task list as "every task", so a prep that
+    # names only other domains must not reach it.
+    build_molecules = bool(bare) or not (text_names or domain_names)
 
-    print(f"data_prep: {len(bare)} molecule tasks x {len(arms)} arms -> "
-          f"{adapter_config.build_dir()}")
+    if build_molecules:
+        print(f"data_prep: {len(bare)} molecule tasks x {len(arms)} arms -> "
+              f"{adapter_config.build_dir()}")
     if text_names:
         print(f"data_prep: {len(text_names)} text tasks x {len(arms)} arms -> "
               f"{text_config.build_dir()}")
-    part = molecules.partition(adapter_config)
-    print(part.summary())
+    for domain, group in sorted(domain_names.items()):
+        build_dir = get_adapter(domain).DOMAIN_SPEC.build_dir(
+            config.domain_adapter_config(domain))
+        print(f"data_prep: {len(group)} {domain} tasks (graph arm) -> {build_dir}")
+    part = molecules.partition(adapter_config) if build_molecules else None
+    if part is not None:
+        print(part.summary())
+
+    def build_domains(passes_for):
+        # Graph arm only (`adapters/_graph.py`): a molecule campaign that builds
+        # both arms still gets the graph build of these domains and nothing else.
+        if domain_names and "graph" not in arms:
+            print(f"data_prep: skipping {sorted(domain_names)}: they build the graph "
+                  f"arm only and this prep asked for {arms}")
+            return
+        for domain, group in sorted(domain_names.items()):
+            module = get_adapter(domain)
+            manifest = module.build(config.domain_adapter_config(domain),
+                                    tasks=tuple(group), arms=("graph",),
+                                    passes=passes_for(domain), rebuild=args.rebuild)
+            for name in group:
+                print(f"data_prep: {name} "
+                      f"{json.dumps(manifest['tasks'][name]['splits'])}")
 
     def build_text(passes):
         if not text_names:
@@ -395,16 +441,18 @@ def mode_data_prep(config: RunConfig, args) -> int:
     # Generators never bound the budget (D4.2), so the second resolve would give
     # the same answer and a third round is never needed.
     passes = wiring.generator_passes(config)
-    molecules.build(adapter_config, roles=part, tasks=bare, arms=tuple(arms),
-                    passes=passes, rebuild=args.rebuild)
+    if build_molecules:
+        molecules.build(adapter_config, roles=part, tasks=bare, arms=tuple(arms),
+                        passes=passes, rebuild=args.rebuild)
     text_built = 1
     build_text(text_built)
+    build_domains(lambda domain: 1)
 
     registry, _ = wiring.build_registry(config, adapter_config)
     if not wiring.unbuilt_tasks(registry, config):
         mixture = wiring.resolve_mixture(config, registry)
         needed = wiring.generator_passes(config, mixture, registry)
-        if needed > passes:
+        if build_molecules and needed > passes:
             print(f"data_prep: the mixture consumes {needed} generator passes; "
                   f"building the {needed - passes} missing ones")
             molecules.build(adapter_config, roles=part, tasks=bare,
@@ -415,6 +463,12 @@ def mode_data_prep(config: RunConfig, args) -> int:
             print(f"data_prep: the mixture consumes {needed_text - 1} replay "
                   f"passes; building {needed_text} (one past the last)")
             build_text(needed_text)
+        domain_needed = {d: wiring.domain_passes(d, mixture, registry)
+                         for d in domain_names}
+        if any(n > 1 for n in domain_needed.values()):
+            print(f"data_prep: graph-domain generator passes to build "
+                  f"{json.dumps(domain_needed)}")
+            build_domains(lambda domain: domain_needed[domain])
         print()
         print(wiring.resolve_mixture(config, registry).table())
     return 0

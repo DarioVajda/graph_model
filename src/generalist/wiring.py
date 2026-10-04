@@ -130,15 +130,26 @@ def build_registry(config: RunConfig, adapter_config=None, extra_tasks=()):
         if text_config.generated():
             text_config.validate()
         text.register_text_tasks(registry, text_config, arm=config.arm)
+    # The graph domains follow the text rule, for the same reason: registering
+    # them everywhere would move every existing run's registry hash.
+    from .adapters import get_adapter
+
+    for domain in config.graph_domains(extra_tasks):
+        get_adapter(domain).register(registry, config.domain_adapter_config(domain),
+                                     arm=config.arm)
     return registry, adapter_config
 
 
 def load_source(config: RunConfig, task: str, split: str, pass_id: int = 0,
                 adapter_config=None):
     """The built source for ``task``, from whichever adapter owns its prefix."""
-    from .adapters import adapter_for
+    from .adapters import GRAPH_DOMAINS, adapter_for, get_adapter
 
-    if adapter_for(task) == "text":
+    owner = adapter_for(task)
+    if owner in GRAPH_DOMAINS:
+        return get_adapter(owner).load(task, split, config.arm, pass_id=pass_id,
+                                       config=config.domain_adapter_config(owner))
+    if owner == "text":
         from .adapters import text
 
         return text.load(task, split, config.arm, pass_id=pass_id,
@@ -210,12 +221,29 @@ def generator_passes(config: RunConfig, mixture=None, registry: Registry = None)
         return int(config.generator_passes)
     if mixture is None or registry is None:
         return 1
-    from .registry import TEXT_PREFIX
+    from .registry import MOLECULE_PREFIX
 
     needed = [n for name, n in passes_needed(mixture, registry).items()
               if registry.get(name).kind == "generator"
-              and not name.startswith(TEXT_PREFIX)]
+              and name.startswith(MOLECULE_PREFIX)]
     return max(needed) if needed else 1
+
+
+def domain_passes(domain: str, mixture=None, registry: Registry = None) -> int:
+    """Train passes ``data_prep`` should build for one graph domain's generators.
+
+    Sized per domain for the reason `text_passes` is sized apart: a probe pass is
+    4,000 small graphs and an expressiveness pass is 1,000 graphs of up to 2,400
+    nodes, and building the larger domain to the smaller one's pass count would
+    be most of the build. Plus one, as for replay: the sampler opens the next
+    pass the moment the current one is spent.
+    """
+    if mixture is None or registry is None:
+        return 1
+    prefix = f"{domain}/"
+    needed = [n for name, n in passes_needed(mixture, registry).items()
+              if name.startswith(prefix) and registry.get(name).kind == "generator"]
+    return (max(needed) + 1) if needed else 1
 
 
 def text_passes(mixture=None, registry: Registry = None) -> int:
@@ -306,8 +334,15 @@ def build_eval_sets(config: RunConfig, registry: Registry, mixture, splits,
                 add(name, split)
 
     if "held_out" in splits:
+        # Held-out tasks of the adapters this run draws from only, as in
+        # `data_prep`: the molecule tasks are registered for every run, and a
+        # graph-domain run that found a molecule build in the shared cache would
+        # otherwise score ClinTox as one of its own held-out numbers.
+        from .adapters import adapter_for
+
+        drawn = {adapter_for(n) for n in names}
         for spec in registry:
-            if is_held_out(spec):
+            if is_held_out(spec) and adapter_for(spec.name) in drawn:
                 add(spec.name, "held_out")
     return out
 

@@ -117,6 +117,9 @@ KIND_CASES = {
     "yesno": (" Yes", "mol/bace"),
     "text": (" The molecule is a phenol found in coal tar.", "mol/chebi20"),
     "smiles": ("Oc1ccccc1", "mol/g2s"),
+    # The graph domains' kinds (`adapters/_graph.py`): stored clean, like smiles.
+    "span": ("8.", "graphqa/node_count"),
+    "entities": ("Paris\nLyon", "kgqa/webqsp"),
 }
 
 

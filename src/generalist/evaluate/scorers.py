@@ -93,9 +93,15 @@ def scoring_cost(spec, n: int) -> float:
     this gets wrong can move a metric — a mis-costed target is scored on the same
     rows in the same batches, just possibly on a busier rank.
     """
-    if getattr(spec, "answer_kind", None) in ("text", "smiles"):
+    if getattr(spec, "answer_kind", None) in GENERATED_KINDS:
         return float(n) * float(getattr(spec, "max_new_tokens", None) or 64)
     return float(n)
+
+
+#: The answer kinds scored by generating rather than by a teacher-forced read.
+#: ``span`` is multi-token too, but it is read teacher-forced (exact match over
+#: the supervised span), so it costs one forward like ``token``.
+GENERATED_KINDS = ("text", "smiles", "entities")
 
 
 def eval_indices(n_total: int, max_samples):
@@ -461,6 +467,8 @@ METRIC_KEYS = {
     "text": ("bleu2", "bleu4", "rouge_l", "meteor", "n"),
     "smiles": ("validity", "roundtrip_match", "exact_match",
                "stereo_marks_emitted", "n"),
+    "span": ("em_accuracy", "em_f1", "n"),
+    "entities": ("f1", "precision", "recall", "hit1", "hit", "n"),
 }
 
 #: Sub-key an endpoint breakdown lands under: ``endpoint:NR-AR/roc_auc``.
@@ -484,9 +492,9 @@ def score_source(model, tokenizer, collator, source, spec, device=None,
     n_total = len(source)
     indices = eval_indices(n_total, max_samples) if n_total else []
 
-    if kind == "token":
+    if kind in ("token", "span"):
         return _score_token(model, collator, source, indices, device, batch_size,
-                            batch_tokens)
+                            batch_tokens, include_f1=(kind == "span"))
     if kind == "yesno":
         return _score_yesno(model, tokenizer, collator, source, indices, device,
                             batch_size, per_endpoint, batch_tokens)
@@ -498,22 +506,77 @@ def score_source(model, tokenizer, collator, source, spec, device=None,
         from ..adapters.molecules import smiles_scores
 
         return dict(smiles_scores(predictions, targets))
+    if kind == "entities":
+        return entity_scores(predictions, [_gold_of(source, i) for i in indices])
     from .captions import caption_metrics
 
     return dict(caption_metrics(predictions, targets))
 
 
+def _gold_of(source, i) -> list:
+    """The full gold list an ``entities`` row is scored against.
+
+    ``meta["gold"]``, not the stored answer: the answer is the graph-present
+    subset the model can be supervised on, and scoring against it would drop
+    every question the retrieval missed from the denominator, which is the
+    comparison to GNN-RAG this kind exists to keep honest.
+    """
+    meta = _sidecar(source[i]).get("meta") or {}
+    gold = meta.get("gold")
+    if not gold:
+        raise ValueError(
+            f"entities row {i} carries no meta['gold']; the adapter that built it "
+            "did not record the benchmark's gold list")
+    return list(gold)
+
+
+def entity_scores(predictions, golds, sep: str = "\n") -> dict:
+    """GNN-RAG's F1 / precision / recall / Hits@1 and our Hit*, means over rows.
+
+    `experiments/kgqa/evaluate.py`'s functions, called rather than restated, on
+    the generation split at ``sep`` exactly as the kgqa specialist's evaluator
+    splits it. An empty generation scores zero everywhere.
+    """
+    from ...experiments.kgqa.evaluate import (eval_f1, eval_hit, eval_hit1,
+                                              parse_answer_list)
+
+    n = len(predictions)
+    if not n:
+        return {k: (0 if k == "n" else float("nan")) for k in METRIC_KEYS["entities"]}
+    sums = {"f1": 0.0, "precision": 0.0, "recall": 0.0, "hit1": 0.0, "hit": 0.0}
+    for text, gold in zip(predictions, golds):
+        parsed = parse_answer_list(text, sep)
+        if not parsed:
+            continue
+        f1, precision, recall = eval_f1(parsed, gold)
+        sums["f1"] += f1
+        sums["precision"] += precision
+        sums["recall"] += recall
+        sums["hit1"] += eval_hit1(parsed, gold)
+        sums["hit"] += eval_hit(parsed, gold)
+    out = {k: v / n for k, v in sums.items()}
+    out["n"] = n
+    return out
+
+
 def _score_token(model, collator, source, indices, device, batch_size,
-                 batch_tokens=DEFAULT_BATCH_TOKENS) -> dict:
+                 batch_tokens=DEFAULT_BATCH_TOKENS, include_f1: bool = False) -> dict:
     from ...utils import make_compute_metrics, shift_logits_for_metrics
 
     if not len(indices):
-        return {"em_accuracy": 0.0, "n": 0}
+        out = {"em_accuracy": 0.0, "n": 0}
+        if include_f1:
+            out["em_f1"] = 0.0
+        return out
     preds, labels = teacher_forced(
         model, collator, source, indices, device=device, batch_size=batch_size,
         preprocess=shift_logits_for_metrics, batch_tokens=batch_tokens)
-    out = make_compute_metrics()((preds.astype("int64"), labels.astype("int64")))
-    return {"em_accuracy": float(out["em_accuracy"]), "n": len(indices)}
+    out = make_compute_metrics(include_f1=include_f1)(
+        (preds.astype("int64"), labels.astype("int64")))
+    result = {"em_accuracy": float(out["em_accuracy"]), "n": len(indices)}
+    if include_f1:
+        result["em_f1"] = float(out.get("em_f1", 0.0))
+    return result
 
 
 def _score_yesno(model, tokenizer, collator, source, indices, device, batch_size,

@@ -69,7 +69,19 @@ SCHEMA_VERSION = "1"
 
 #: D1.1. The kind decides the loss span, the scorer and whether generation runs.
 #: A task has exactly one kind.
-ANSWER_KINDS = ("token", "yesno", "text", "smiles")
+#:
+#: The trunk's domains added two (`adapters/_graph.py`):
+#:
+#: * ``span`` — a multi-token answer scored **teacher-forced**, by exact match
+#:   over every supervised token including the stop token. GraphQA's "8." and
+#:   "Yes, there is a cycle.", a TAG class name, a Family Tree attribute. It is
+#:   the protocol the GraphQA and TAG specialists measured with, which a ``text``
+#:   kind would replace with generation and caption metrics.
+#: * ``entities`` — a newline-separated entity list, **generated** and scored
+#:   with GNN-RAG's F1 / Hits@1 against the full gold list carried in
+#:   ``meta["gold"]`` (`experiments/kgqa/evaluate.py`), not against the
+#:   graph-present subset the target holds.
+ANSWER_KINDS = ("token", "yesno", "text", "smiles", "span", "entities")
 
 #: The kinds whose answer is a single token by construction, so the supervised
 #: span is the prompt node's last token (`tasks.py`: every Tier-A answer is

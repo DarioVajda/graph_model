@@ -47,7 +47,7 @@ clarifying question (`render.can_clarify`), so the second turn stays verifiable.
 |---|---|---|---|
 | `graphqa` | the reported tasks minus the held-out pair; `disconnected_nodes`, `node_classification` train-only | corpus | `baharef/GraphQA` |
 | `probes` | `substructure`, `local_hop`, `text_path` | generator | |
-| `expressiveness` | HARD, large-N | generator | the only large-graph source (1,600–2,400 nodes) |
+| `expressiveness` | HARD, sizes log-uniform 10–1,000 nodes | generator | the widest size range in the mixture; the specialist's 1,600–2,400 ran an 80 GB card out of memory on the dense pair bias |
 | `our_tests` | `kg_qa` (synthetic KG-QA) | generator | Family Tree is held out |
 | `kgqa` | WebQSP, CWQ — Levi, never triplet | corpus | |
 | `tag_benchmarks` | cora, ogbn-arxiv, reddit | corpus | Pubmed held out; the test-selection re-run is owed before TAG numbers anchor anything |
@@ -86,6 +86,14 @@ Mixing tiny molecules with 2,000-node graphs makes shape variety the throughput 
   boundaries fitted to the measured `(N, L)` distribution of the whole mixture: minimum padding for
   a given bucket count, with the shape set — `B` included — well inside the compile cache
   (`wiring.FLEX_CACHE_SIZE_LIMIT`, 512), since evaluation shares it. One measurement pass over the built data.
+* **A row cap that counts what the collator builds.** `batches_for_step` caps a micro-batch at
+  `micro_batch_tokens // token bucket` on the 32-token ladder, but the flex collator pads every row
+  to a multiple of 512 tokens and a power of two of nodes (floor 32). Molecule rows (~200+ tokens)
+  hid the gap at about 2x. The graph domains do not: a 33-token GraphQA row admits 64 rows a
+  4,096-token micro-batch, which pad to 32,768 positions, and the logits alone ran an 80 GB card out
+  of memory in the 2026-10-04 smoke (`configs/probes/014_graph_smoke.jsonc` runs at 1,024 tokens a
+  micro-batch until this lands). The cap has to be computed on the padded `(L, N)`; the dense pair
+  bias makes N² the second budget beside B·L.
 
 **The draw distribution must not move.** Per-task counts are drawn before batching, from the
 mixture weights, and batching only regroups them. The one way shape-keying could bias the draw is a

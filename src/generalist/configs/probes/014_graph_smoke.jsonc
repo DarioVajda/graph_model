@@ -1,0 +1,93 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The graph-domain smoke: the six adapters of `GRAPH_GENERALIST.md` §2 through
+  // the real `validate` -> `data_prep` -> `train` path, one task from each.
+  //
+  //   python3 -m src.generalist validate  --config src/generalist/configs/probes/014_graph_smoke.jsonc
+  //   python3 -m src.generalist data_prep --config src/generalist/configs/probes/014_graph_smoke.jsonc
+  //   python3 -m src.generalist train     --config src/generalist/configs/probes/014_graph_smoke.jsonc
+  //
+  // It is a plumbing check and never a result. `adapter_options.*.limit` caps
+  // every split, which is inside each domain's build version, so a limited
+  // build can never be read as the real one.
+  //
+  // The mixture covers both task kinds and the three answer kinds the graph
+  // domains add — `span` (GraphQA, TAG), `yesno` (probes, expressiveness,
+  // `our_tests`) and `entities` (KGQA, generated) — and `data_prep` also builds
+  // the held-out tasks of every domain it touches.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "graph_smoke",
+  "results_dir": "src/generalist/results",
+
+  "execution": {
+    "mode": "sbatch",
+    "sbatch": {
+      "granularity": "per_config",
+      "max_concurrent": 1,
+      "partition": "frida",
+      "account": "povejmo",
+      "gpus": "B200",
+      "gpus_per_config": 1,
+      "cpus": 16,
+      "mem": "128G",
+      "time": "02:00:00",
+      "container": "/shared/workspace/povejmo/containers/transformers_deepspeed_latest.sqsh"
+    }
+  },
+
+  "arm": "graph",
+  "mixture": "graph_smoke",
+  "validators": "smoke",
+
+  "adapter_options": {
+    "graphqa": {"limit": 64},
+    "probes": {"limit": 64},
+    "expressiveness": {"limit": 64},
+    "our_tests": {"limit": 64},
+    "kgqa": {"limit": 64},
+    "tag": {"limit": 64}
+  },
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+  "impl": "v2-flex",
+  "bias": "spd+magnetic",
+  "max_spd": 32,
+  "magnetic_dim": 32,
+  "magnetic_q": 0.25,
+  "lora": true,
+  "lora_r": 16,
+  "lora_dropout": 0.05,
+  "question_node": "on",
+  "data_seed": 0,
+
+  "tokens_per_step": 16384,
+  // 16, not 4: `mixture.batches_for_step` caps a micro-batch at
+  // `micro_batch_tokens // token bucket` on a ladder floored at 32 tokens, but the
+  // flex collator pads every row to a multiple of 512. A 33-token GraphQA row
+  // then admits 64 rows a micro-batch at 4,096 tokens, which pad to 32,768
+  // positions; the logits alone ran an 80 GB card out of memory. 1,024 tokens a
+  // micro-batch bounds that at 16 x 512. The fix belongs in the sampler (budget
+  // by the padded length) and is part of shape-keyed batching.
+  "accumulation_steps": 16,
+  // A step count, not the budget rule, and no D2.2 floor: 64-row sources would
+  // trip both, and neither is what this checks.
+  "max_steps": 60,
+  "min_examples_per": 0,
+
+  "lr": 3e-4,
+  "bias_lr": 1e-2,
+  "lr_min": 3e-5,
+  "warmup_steps": 10,
+  "rewarm_steps": 10,
+  "weight_decay": 0.1,
+
+  "save_steps": 30,
+  "save_total_limit": 2,
+  "logging_steps": 1,
+  "milestone_steps": 30,
+
+  "seed": 0,
+  "wandb_project": null
+}

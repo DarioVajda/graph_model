@@ -409,6 +409,22 @@ SMOKE_PROBE_MIXTURE = SMOKE_MIXTURE + (
     {"name": "mol/chebi20", "weight": 0.2, "passes": CORPUS_PASSES},
 )
 
+#: The graph-domain smoke: one task from each of the six graph domains
+#: (`GRAPH_GENERALIST.md` §2), which between them cover both task kinds and the
+#: three answer kinds those domains add to the trunk — ``span`` (GraphQA, TAG),
+#: ``yesno`` (probes, expressiveness, ``our_tests``) and ``entities`` (KGQA). It
+#: is the mixture the adapters are verified on and is never a result: build it
+#: with a small ``adapter_options[...]["limit"]`` so the build takes minutes.
+#: `data_prep` also builds each domain's held-out tasks, as it does for molecules.
+GRAPH_SMOKE_MIXTURE = (
+    {"name": "graphqa/node_count", "weight": 0.2, "passes": CORPUS_PASSES},
+    {"name": "probes/local_hop", "weight": 0.2},
+    {"name": "expressiveness/hard", "weight": 0.1},
+    {"name": "our_tests/kg_qa", "weight": 0.2},
+    {"name": "kgqa/webqsp", "weight": 0.15, "passes": CORPUS_PASSES},
+    {"name": "tag/cora", "weight": 0.15, "passes": CORPUS_PASSES},
+)
+
 MIXTURES = {
     "molecule_generalist": molecule_generalist_mixture(),
     # `KFOLD_TRANSFER.md` — one trunk mixture per fold, each missing that fold's
@@ -424,6 +440,7 @@ MIXTURES = {
     "cross_check": CROSS_CHECK_MIXTURE,
     "g2s_specialist": G2S_SPECIALIST_MIXTURE,
     "chebi_specialist": CHEBI_SPECIALIST_MIXTURE,
+    "graph_smoke": GRAPH_SMOKE_MIXTURE,
 }
 
 
@@ -699,6 +716,14 @@ class RunConfig:
     text_max_length: int = 1024
     #: The versioned prompts-and-answers directory under ``results/replay``.
     replay_version: str = "v1"
+
+    # ── data: the graph domains (`adapters/_graph.py`) ───────────────────────
+    #: ``{domain: {field: value}}`` overrides on a graph domain's adapter config —
+    #: ``{"kgqa": {"strict_cross_dataset": true}, "probes": {"limit": 64}}``. Each
+    #: domain carries its own node length and sizes (`adapters/<domain>.py`), so
+    #: an empty dict is that domain's specialist settings. Hashed only for the
+    #: domains the mixture names, so a molecules-only config keeps its hash.
+    adapter_options: dict = None
 
     # ── mixture (D2, D4) ─────────────────────────────────────────────────────
     mixture: str = "molecule_generalist"
@@ -990,6 +1015,44 @@ class RunConfig:
             magnetic_m=self.magnetic_m, replay_version=self.replay_version,
             cache_root=self.cache_root or DEFAULT_CACHE_ROOT)
 
+    def graph_domains(self, extra_tasks=()) -> tuple:
+        """The graph domains the mixture (or ``extra_tasks``) names, sorted."""
+        from .adapters import GRAPH_DOMAINS
+
+        names = [e["name"] for e in self.mixture_entries()] + list(extra_tasks)
+        return tuple(sorted(d for d in GRAPH_DOMAINS
+                            if any(n.startswith(f"{d}/") for n in names)))
+
+    def domain_adapter_config(self, domain: str):
+        """The adapter config for one graph domain.
+
+        The run's backbone, format, magnetic settings, ordering, stop-token rule
+        and seed, over the domain's own defaults, then ``adapter_options[domain]``.
+        ``max_length`` is not taken from the run: it is the molecule node length,
+        and each domain carries the one its specialist used.
+        """
+        from dataclasses import fields as dc_fields
+
+        from .adapters import get_adapter
+        from .adapters._graph import DEFAULT_CACHE_ROOT
+
+        module = get_adapter(domain)
+        cls = module.DOMAIN_SPEC.config_class
+        options = dict((self.adapter_options or {}).get(domain) or {})
+        known = {f.name for f in dc_fields(cls)}
+        unknown = sorted(set(options) - known)
+        if unknown:
+            raise ConfigError(
+                f"adapter_options[{domain!r}]: {unknown} are not fields of "
+                f"{cls.__name__} (have {sorted(known)})")
+        values = dict(model_name=self.model_name, prompt_style=self.prompt_style,
+                      magnetic_q=self.magnetic_q, magnetic_m=self.magnetic_m,
+                      ordering=self.ordering, answer_eos=self.answer_eos,
+                      data_seed=self.data_seed,
+                      cache_root=self.cache_root or DEFAULT_CACHE_ROOT)
+        values.update(options)
+        return cls(**values)
+
     # ── derived: the schedule ────────────────────────────────────────────────
 
     def decay_min_factor(self) -> float:
@@ -1045,6 +1108,13 @@ class RunConfig:
         if not self.has_text_tasks():
             payload.pop("text_max_length", None)
             payload.pop("replay_version", None)
+        # Same rule for the graph domains: only the options of a domain this
+        # mixture draws from change what it draws.
+        domains = self.graph_domains()
+        options = {d: o for d, o in (payload.pop("adapter_options", None) or {}).items()
+                   if d in domains and o}
+        if options:
+            payload["adapter_options"] = options
         # Same rule as `MoleculeAdapterConfig.build_version`: hash the *resolved*
         # prompt style, and only when it is not the plain one every run before
         # this field existed used.

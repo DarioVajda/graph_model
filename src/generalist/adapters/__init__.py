@@ -42,13 +42,17 @@ class AdapterError(ValueError):
     """An adapter that cannot be resolved, or one asked for a task it does not own."""
 
 
-#: Adapter module names, resolved under this package. One entry per domain; the
-#: trunk's graphqa / kgqa / relbench adapters join it as they land (DESIGN.md §9).
-ADAPTERS = ("molecules", "text")
+#: The trunk's graph domains (`GRAPH_GENERALIST.md` §2). Each is a thin
+#: declaration over `_graph.GraphDomain`, which owns their shared build path.
+GRAPH_DOMAINS = ("graphqa", "probes", "expressiveness", "our_tests", "kgqa", "tag")
+
+#: Adapter module names, resolved under this package. One entry per domain.
+ADAPTERS = ("molecules", "text") + GRAPH_DOMAINS
 
 #: Task-name prefix -> the adapter that owns it. A task's name is the only thing
 #: every caller holds, so dispatch reads it rather than a spec lookup.
-PREFIXES = {"mol/": "molecules", "text/": "text"}
+PREFIXES = {"mol/": "molecules", "text/": "text",
+            **{f"{name}/": name for name in GRAPH_DOMAINS}}
 
 
 def adapter_for(task: str) -> str:

@@ -149,7 +149,7 @@ def test_prefix_dispatch():
     assert adapter_for("mol/bace") == "molecules"
     assert adapter_for(f"{TEXT_PREFIX}replay") == "text"
     with pytest.raises(AdapterError):
-        adapter_for("graphqa/edge_count")
+        adapter_for("relbench/rel-trial")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

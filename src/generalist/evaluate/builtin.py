@@ -600,6 +600,11 @@ class PermSpread(BaseValidator):
             spec = _spec(ctx, task)
             if spec.answer_kind != "yesno":
                 continue                    # the spread is a spread *of AUROC*
+            if spec.domain != "molecules":
+                # The strata are atom symmetry classes read off the key as a
+                # SMILES; a graph domain's key is a content hash, which RDKit
+                # would either reject or misread as a molecule.
+                continue
             source = ctx.sources(task).get(self.option("split", "test"))
             if source is not None and len(source):
                 out.append((task, source, spec))
