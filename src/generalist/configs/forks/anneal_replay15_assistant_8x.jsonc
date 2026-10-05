@@ -1,0 +1,45 @@
+{
+  // `anneal_replay15_assistant.jsonc` at an 8x decay (8,912 steps), with the
+  // pass caps raised so that no corpus is retired before the decay ends. Every
+  // other key is that file's, and the reasons for them are written there.
+  //
+  //   GPU=2 src/generalist/tools/launch/run_cli.sh fork \
+  //     --from .../runs/molecule_generalist_instruct_graph_s0/checkpoint-11140 \
+  //     --mode anneal --fork-config src/generalist/configs/forks/anneal_replay15_assistant_8x.jsonc \
+  //     --config src/generalist/configs/probes/008_molecule_generalist_instruct.jsonc \
+  //     --cell molecule_generalist_instruct_graph_s0 --decay-steps 8912 \
+  //     --run-dir src/generalist/results/runs/assistant_v7_anneal8x_graph_s0
+  //
+  // WHY IT EXISTS. The swap probe (same question, a molecule with the opposite
+  // answer) found the assistant's reply follows the molecule 32 % of the time at
+  // 1x, 35 % at 2x and 46 % at 4x. 8x asks whether that keeps climbing with
+  // training alone, before any change to the data.
+  //
+  // WHY 10 PASSES. The trunk ends BACE, BBBP and ChEBI-20 at 5.93 epochs. The 4x
+  // leg at a cap of 7 retired BACE and BBBP for its last 1,900 steps and ChEBI-20
+  // for its last 1,000, which puts the leg's draw at about 4.2e-4 epochs a step
+  // for BACE and BBBP and 3.1e-4 for ChEBI-20. Over 8,912 steps that is 3.7 and
+  // 2.8 epochs, ending them at 9.7 and 8.7 — under 10, so the shares hold to the
+  // last step. At 8 they would retire for the last ~40 % of the decay, and every
+  // other task, the assistant included, would take up their share there.
+  //
+  // The 4x reading this is compared against did retire those three for its last
+  // 1,000-1,900 steps, so the comparison is not perfectly clean; the retirement
+  // raised the assistant's share at the end of 4x, which, if anything, flatters
+  // 4x against 8x.
+  //
+  // The assistant itself draws about 0.82 of a pass per 1,115 steps, so 6.5
+  // passes over this decay: inside its cap of 14.
+
+  "add": [
+    {"name": "text/replay", "share": 0.15, "block": "replay"},
+    {"name": "mol/assistant", "share": 0.15, "block": "assistant"}
+  ],
+  "budget_scale": 1.5,
+  "passes": {
+    "mol/bbbp": 10, "mol/bace": 10, "mol/chebi20": 10,
+    "mol/sider": 10, "mol/hiv": 10, "mol/tox21": 10,
+    "mol/assistant": 14
+  },
+  "eval_steps": 280
+}
