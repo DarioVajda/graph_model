@@ -16,9 +16,11 @@ questions with at least one present answer and writes ``versions`` rows per
 question (8 for WebQSP, 1 for CWQ), each a fresh answer order; the rows share the
 question's key. Dev and test keep every question with a gold answer, because
 GNN-RAG's denominators do: an unanswerable row (no gold entity in the subgraph)
-carries the full gold list as its target so the schema has a span to hold, and
-``meta["unanswerable"]`` says so. That row's target is never trained on (it is
-an eval split) and is not what it is scored against.
+carries the first ``n_max`` gold names as its target so the schema has a span to
+hold, and ``meta["unanswerable"]`` says so. That row's target is never trained
+on (it is an eval split) and is not what it is scored against. It is capped like
+every other target because some WebQSP test questions list hundreds of gold
+entities, and the uncapped list ran the prompt node past the 1,024-token cap.
 
 **Scoring is ``entities``**: generated, split on ``"\\n"``, and scored against
 ``meta["gold"]`` — the full gold list, `full_gold_texts` — with GNN-RAG's F1 and
@@ -53,7 +55,7 @@ from ._partition import Claim
 
 DOMAIN = "kgqa"
 PREFIX = "kgqa/"
-ADAPTER_VERSION = "1"
+ADAPTER_VERSION = "2"
 
 DATASETS = ("webqsp", "cwq")
 #: The SR files' split names.
@@ -167,7 +169,8 @@ def _draws(config, info: TaskInfo, split: str, pass_id: int):
             if split == "train":
                 continue
             yield Draw(graph=base, question=record["question"],
-                       answer=ANSWER_SEP.join(gold), targets=targets, key=key,
+                       answer=ANSWER_SEP.join(gold[: config.n_max]),
+                       targets=targets, key=key,
                        meta=meta)
             continue
         for version in range(versions):

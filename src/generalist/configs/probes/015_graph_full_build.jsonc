@@ -1,0 +1,29 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // The full graph-domain build: every task of the six domains of
+  // `GRAPH_GENERALIST.md` §2 at specialist size, no `adapter_options` limit. It
+  // is a data_prep config only — the input to the (N, L) measurement and the D5
+  // caps of §3 — and is never trained. One job per domain, since each domain
+  // writes its own build directory:
+  //
+  //   python3 -m src.generalist data_prep --config src/generalist/configs/probes/015_graph_full_build.jsonc \
+  //       --only kgqa/webqsp,kgqa/cwq
+  //
+  // The build version carries the adapter config and not the mixture, so the
+  // trunk reads these builds as they are. The mixture is only here because a
+  // config needs one; the second data_prep round sizes generator passes from it
+  // and the trunk will rebuild the passes its own mixture consumes.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  "name": "graph_full_build",
+  "results_dir": "src/generalist/results",
+
+  "arm": "graph",
+  "mixture": "graph_smoke",
+
+  "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_style": "chat",
+  "magnetic_q": 0.25,
+  "question_node": "on",
+  "data_seed": 0
+}
