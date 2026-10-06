@@ -81,7 +81,13 @@ Mixing tiny molecules with 2,000-node graphs makes shape variety the throughput 
   shape. The key is shape, not task family: a family is a poor proxy for size (CWQ subgraphs and
   expressiveness graphs span wide ranges, GraphQA and the probes overlap), and one family per step
   would hit the shared bias parameters in one lump every ~50 steps for a family at 2 % weight. The
-  optimizer step stays mixed.
+  optimizer step stays mixed. *Built 2026-10-05.* The bucket key is the collator's own padded shape
+  (`wiring.collator_shape_fn`), the sampler reshapes the step to exactly `accumulation_steps` groups
+  itself (a per-rank reshape could pick different merges on different ranks), and each micro-batch
+  carries its group's shape to `wrap_collator`, which pads to it — a merged group holds rows of
+  several sizes, and padding each rank's batch to its own widest row would desynchronise them again.
+  When a step's total is not a multiple of the rank count, one group per step is a row short on
+  some ranks; the shape still matches.
 * **A fitted bucket ladder.** The fixed power-of-two ladder (floors 8 nodes, 32 tokens) is replaced by
   boundaries fitted to the measured `(N, L)` distribution of the whole mixture: minimum padding for
   a given bucket count, with the shape set — `B` included — well inside the compile cache
@@ -91,9 +97,21 @@ Mixing tiny molecules with 2,000-node graphs makes shape variety the throughput 
   to a multiple of 512 tokens and a power of two of nodes (floor 32). Molecule rows (~200+ tokens)
   hid the gap at about 2x. The graph domains do not: a 33-token GraphQA row admits 64 rows a
   4,096-token micro-batch, which pad to 32,768 positions, and the logits alone ran an 80 GB card out
-  of memory in the 2026-10-04 smoke (`configs/probes/014_graph_smoke.jsonc` runs at 1,024 tokens a
-  micro-batch until this lands). The cap has to be computed on the padded `(L, N)`; the dense pair
-  bias makes N² the second budget beside B·L.
+  of memory in the 2026-10-04 smoke. The cap has to be computed on the padded `(L, N)`; the dense pair
+  bias makes N² the second budget beside B·L. *Built 2026-10-05, and a cap alone was not the fix:*
+  `tokens_per_step` fixes a step's example count from raw lengths and HF fixes how many micro-batches
+  a step is cut into, so with a configured accumulation a short-row step still lands on the card at
+  many times its raw tokens however it is grouped. `micro_batch_tokens` (padded tokens per micro-batch
+  per rank) and `micro_batch_node_pairs` (rows × N²) are now memory budgets, and the accumulation is
+  derived from them: the most groups any of the next 500 steps is cut into
+  (`MixtureSampler.derive_accumulation_steps`), so a step is only ever split and never merged past
+  the budget. The first version divided the mean padded volume by the budget. That is a lower bound,
+  because groups of different shapes do not pack, and on 2 ranks it gave 2 micro-batches where the
+  bucketing made more; the merged groups ran an 80 GB card out of memory. The accumulation is now
+  long on the 512-step ladder, about one micro-batch per shape bucket: 13 a step on the smoke
+  mixture at 1 rank, 12 a rank at 2. That costs nothing measurable. The 60-step H100 smoke ran in
+  2,868 s at a 21.8 GB peak on 1 rank, against 4,684 s and 50.9 GB with the volume rule's 4, and in
+  2,129 s at 24.1 GB on 2 ranks. Unset, a run keeps its configured accumulation.
 
 **The draw distribution must not move.** Per-task counts are drawn before batching, from the
 mixture weights, and batching only regroups them. The one way shape-keying could bias the draw is a
@@ -103,8 +121,38 @@ under-sample whatever is unusually sized. A test pins it: a step's per-task coun
 before and after batching, at 1 and at 4 ranks. The `grad_share` readout checks the same thing in
 training.
 
+**A run never silently runs out of data.** A corpus past its `passes` cap used to retire with an
+info line and a generator asked for an unbuilt pass hours in; the molecule forks lost runs to both.
+`MixtureSampler.check_supply` now replays the draw plan to the end of the job before the first step
+— the per-step counts are a pure function of the step, so the replay is exact — and refuses either.
+A smoke run whose 64-row sources are meant to run dry sets `allow_exhaustion`.
+
 D5's caps (`max_nodes`, `max_edges`, `max_tokens`, sampler per oversized task) are still owed and
 are chosen against measured s/it on the largest components (expressiveness, CWQ, TAG).
+
+*Measured 2026-10-06* on the full build (config 015), train splits. Two tools, both in `tools/reports/`: `shapes.py` reads each split's recorded node and
+token counts and fits ladders; `step_cost.py` times one micro-batch per padded shape (the smoke's
+1B model and LoRA, `micro_batch_tokens` 8,192, forward + the trainer's loss + backward, on a B200).
+
+* **Step cost follows padded tokens, plus an N² term from N = 512 up.** A full 8,192-token
+  micro-batch takes ~230 ms at N ≤ 128, 330 ms at N = 256, 630 ms at N = 512 and ~1 s at N = 1,024.
+  Steady-state ms per row: GraphQA 15, WebQSP 25, cora 32, expressiveness 41, arxiv 56, text_path
+  76, CWQ 106. Peak memory stays under 38 GB at this budget. Reddit was not built when this ran;
+  its rows (32 nodes, ~1,000 tokens) sit on shapes cora and arxiv already cover.
+* **CWQ is the oversized task.** Its rows above 3,072 tokens are 20 % of the rows and about
+  70 % of its cost; the 1.8 % above 4,608 cost 647 ms a row. Its token p99 is 4,518, but the
+  longest row is 11,149 tokens. A `max_tokens` cap of 4,608 drops 0.85 % of CWQ rows and leaves
+  every other source untouched.
+* **Every new shape costs 20–140 s of compile and autotune** on first touch, per rank, unless
+  the inductor cache is primed: about 14 minutes for the 20 shapes these sources populate.
+* **The ladder.** With every domain weighted equally and the 4,608 cap, the current ladders pad
+  tokens 1.67× and node pairs 1.74× over 32 populated `(N, L)` shapes. A fitted 6 × 6 ladder
+  (tokens 128/384/768/1,280/1,792/4,608; nodes 64/176/304/512/736/1,040) pads 1.38× and 1.45× over
+  28 shapes: better on both counts. At 8 × 8 it pads 1.28× and 1.32× over 43 shapes. GraphQA is
+  most of the gap: its 33–98-token rows pad to 512 on the current ladder.
+
+Pending a decision: the CWQ cap (4,608, or lower with a per-task subgraph sampler), the ladder size
+(6 × 6 or 8 × 8), and whether the budget moves now that 8,192 tokens uses under half an 80 GB card.
 
 ---
 
@@ -253,7 +301,7 @@ per rank (`kgqa` README, base-model scale). Budget: `PLAN.md` §8, ~3–5k GPU-h
 
 ## 11. Build order
 
-- [ ] adapters: graphqa, probes, expressiveness, `our_tests/kg_qa`, kgqa, tag (§2)
+- [x] adapters: graphqa, probes, expressiveness, `our_tests/kg_qa`, kgqa, tag (§2)
 - [ ] D5 caps and per-task samplers, chosen on measured s/it (§3)
 - [ ] shape-keyed rank-synchronised batching, fitted ladder, draw-invariance test (§3)
 - [ ] plumbing smoke on three maximally different tasks across domains (`PLAN.md` §10)
