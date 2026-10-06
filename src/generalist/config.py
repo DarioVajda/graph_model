@@ -770,8 +770,23 @@ class RunConfig:
 
     # ── batching ─────────────────────────────────────────────────────────────
     #: Micro-batches per optimizer step. With ``tokens_per_step`` and the world
-    #: size this fixes the per-micro-batch token budget (D4.4).
+    #: size this fixes the per-micro-batch token budget (D4.4). Ignored when
+    #: ``micro_batch_tokens`` is set, which derives it.
     accumulation_steps: int = 8
+    #: Padded tokens one micro-batch may hold on one rank — a memory budget in
+    #: the units the collator builds (`GRAPH_GENERALIST.md` §3). Set, it replaces
+    #: ``accumulation_steps``: the sampler derives the accumulation that keeps
+    #: the heaviest step inside it (`MixtureSampler.derive_accumulation_steps`).
+    #: 0 keeps the configured accumulation, as every run before it did. Batching
+    #: only regroups a step, so neither budget is hashed unless set.
+    micro_batch_tokens: int = 0
+    #: The second budget, ``rows x padded nodes²`` per micro-batch per rank — what
+    #: the dense pair bias holds. 0 means no pair budget.
+    micro_batch_node_pairs: int = 0
+    #: Let a corpus retire part-way through the run instead of refusing to start
+    #: (`MixtureSampler.check_supply`). A smoke run budgeted by a step count wants
+    #: it; a trunk or a fork that runs out of a corpus is a different experiment.
+    allow_exhaustion: bool = False
 
     # ── checkpointing (D5.3) ─────────────────────────────────────────────────
     save_steps: int = 500
@@ -1103,6 +1118,13 @@ class RunConfig:
         # finished cells and refuse their own resume.
         if payload.get("answer_eos") is False:
             payload.pop("answer_eos")
+        # The padded budgets regroup a step and draw nothing differently; unset,
+        # they are every run before they existed. `allow_exhaustion` only decides
+        # whether a run that would retire a corpus starts at all.
+        for name in ("micro_batch_tokens", "micro_batch_node_pairs"):
+            if not payload.get(name):
+                payload.pop(name, None)
+        payload.pop("allow_exhaustion", None)
         # The text adapter's knobs change nothing a run without a `text/` task
         # draws, so they are hashed only when one is in the mixture.
         if not self.has_text_tasks():
@@ -1195,6 +1217,15 @@ class RunConfig:
         self.pass_overrides()               # parses, or raises here rather than at resolve
         if self.min_examples_per < 0:
             raise ConfigError("min_examples_per: must be >= 0")
+        if self.micro_batch_tokens < 0 or self.micro_batch_node_pairs < 0:
+            raise ConfigError(
+                "micro_batch_tokens and micro_batch_node_pairs: must be >= 0 "
+                "(0 = unset)")
+        if self.micro_batch_node_pairs and not self.micro_batch_tokens:
+            raise ConfigError(
+                "micro_batch_node_pairs needs micro_batch_tokens: the pair budget "
+                "sizes a derived accumulation, and without micro_batch_tokens the "
+                "accumulation is configured")
         if self.generator_passes < 0:
             raise ConfigError("generator_passes: must be >= 0")
 

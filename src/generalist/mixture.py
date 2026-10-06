@@ -15,11 +15,18 @@ goes wrong:
 * **Generators refresh per pass** (D4.2). A generator task's source is re-requested
   at every pass boundary through the trainer-supplied ``get_source``; a corpus task
   gets a fresh permutation per pass and stops at ``passes``.
-* **Batches are mixed** (D4.3). Homogeneous batches would make per-task gradient
-  noise a function of task share, which is exactly the quantity the mixture-weight
-  readout is trying to measure. Examples are bucketed by ``(node count, token
-  length)`` — a task-agnostic key — and dealt round-robin across the micro-batches
-  of their bucket, so a micro-batch is homogeneous only when its bucket is.
+* **Batches are mixed, and keyed by the shape the collator builds** (D4.3,
+  `GRAPH_GENERALIST.md` §3). Homogeneous batches would make per-task gradient
+  noise a function of task share, which is exactly the quantity the
+  mixture-weight readout is trying to measure. Examples are bucketed by their
+  *padded* ``(node count, token length)`` — a task-agnostic key, and the one the
+  compiled kernels guard on — and dealt round-robin within their bucket, so a
+  micro-batch is homogeneous only when its bucket is. Every rank runs the same
+  bucket at the same micro-step, and a step comes out as exactly
+  ``accumulation_steps`` micro-batches per rank.
+* **A run never silently runs out of data.** :meth:`MixtureSampler.check_supply`
+  replays the draw plan to the end of the run before the first step and refuses a
+  corpus that would retire part-way, or a generator pass that was never built.
 * **Two-level normalisation** (D4.3/D7a). Each example's loss is divided by its own
   loss-span length; the batch loss is the mean over the examples of the *optimizer
   step*, not of the micro-batch. Dividing by the micro-batch count instead is the
@@ -56,13 +63,19 @@ logger = logging.getLogger(__name__)
 #: before the base collator sees them. ``GraphCollatorV2`` reads named keys and
 #: ignores everything else, so leaving them on is harmless — but a collator that is
 #: swapped later must not have to know about them, so the side channel is explicit.
-SIDE_KEYS = ("task_id", "example_index", "step", "num_tokens")
+SIDE_KEYS = ("task_id", "example_index", "step", "num_tokens", "pad_shape")
 
-#: Coarse, task-agnostic bucket ladders for D4.3. Powers of two from these floors;
-#: the point is only that the table is a function of size and not of task, so a
+#: Coarse, task-agnostic bucket ladders for D4.3, used when the sampler is not told
+#: the collator's own (:func:`ladder_shape`). Powers of two from these floors; the
+#: point is only that the table is a function of size and not of task, so a
 #: micro-batch's padding waste is bounded without the task ever entering the key.
 NODE_BUCKET_MIN = 8
 TOKEN_BUCKET_MIN = 32
+
+#: Steps :meth:`MixtureSampler.derive_accumulation_steps` replays to find the
+#: heaviest step. The per-step composition is a multinomial, so the heaviest of a
+#: few hundred is within a few percent of the heaviest of a whole run.
+ACCUMULATION_PROBE_STEPS = 500
 
 STATE_VERSION = 1
 
@@ -138,6 +151,18 @@ class MixtureSampler:
             *all* of a step's micro-batches; :class:`MixtureDataset` hands rank *r*
             the slice ``[r::world_size]``, so every rank runs an identical sampler
             and no cross-rank coordination is needed.
+        shape_fn: ``(num_nodes, num_tokens) -> (padded nodes, padded tokens)``,
+            the shape the collator will build for one row. The bucket key and
+            every cost below are in these units, because they are what the GPU
+            holds. ``None`` uses :func:`ladder_shape`, the coarse power-of-two
+            ladder, for a caller (a test, a non-flex collator) with no ladder of
+            its own.
+        micro_batch_tokens: the padded-token budget of one micro-batch on one
+            rank. ``None`` derives it from ``tokens_per_step``, as before the
+            budget was padded: a raw-token number, which is only right when rows
+            are long against the collator's length ladder.
+        micro_batch_node_pairs: the second budget, ``rows x padded nodes²`` per
+            micro-batch per rank — what the dense pair bias holds. 0 means none.
 
     The sampler is a cursor: :meth:`batches_for_step` may only be called for the
     step it is currently at, and advances it. Restoring a :meth:`state_dict` is the
@@ -145,12 +170,21 @@ class MixtureSampler:
     """
 
     def __init__(self, mixture, seed: int, get_source: Callable,
-                 accumulation_steps: int = 1, world_size: int = 1):
+                 accumulation_steps: int = 1, world_size: int = 1,
+                 shape_fn: Callable | None = None,
+                 micro_batch_tokens: float | None = None,
+                 micro_batch_node_pairs: float = 0):
         if accumulation_steps < 1:
             raise MixtureError(
                 f"accumulation_steps must be >= 1, got {accumulation_steps}")
         if world_size < 1:
             raise MixtureError(f"world_size must be >= 1, got {world_size}")
+        if micro_batch_tokens is not None and micro_batch_tokens <= 0:
+            raise MixtureError(
+                f"micro_batch_tokens must be > 0, got {micro_batch_tokens}")
+        if micro_batch_node_pairs < 0:
+            raise MixtureError(
+                f"micro_batch_node_pairs must be >= 0, got {micro_batch_node_pairs}")
 
         self.mixture = mixture
         self.seed = int(seed)
@@ -163,11 +197,18 @@ class MixtureSampler:
         self.tasks = sorted(self.entries)
         self.task_ids = task_ids_for(mixture)
         self.examples_per_step = float(mixture.examples_per_step)
-        #: Padded tokens one micro-batch may hold. The whole step's budget is
-        #: ``tokens_per_step``; it is split across the accumulation micro-batches
-        #: and the ranks, which is what makes ``batch_size`` derived (D4.4).
-        self.micro_batch_tokens = (float(mixture.tokens_per_step)
-                                   / (self.accumulation_steps * self.world_size))
+        self.shape_fn = shape_fn or ladder_shape
+        #: Padded tokens one micro-batch may hold on one rank. Given, it is a
+        #: memory budget and `derive_accumulation_steps` sizes the accumulation
+        #: to it. Otherwise the step's budget is ``tokens_per_step`` split across
+        #: the accumulation micro-batches and the ranks, which is what makes
+        #: ``batch_size`` derived (D4.4).
+        self.padded_budget = micro_batch_tokens is not None
+        self.micro_batch_tokens = (
+            float(micro_batch_tokens) if micro_batch_tokens is not None
+            else float(mixture.tokens_per_step)
+            / (self.accumulation_steps * self.world_size))
+        self.micro_batch_node_pairs = float(micro_batch_node_pairs)
 
         # Draw probabilities, in `self.tasks` order, renormalised so numpy's
         # multinomial never trips its sum > 1 check on float error.
@@ -181,6 +222,7 @@ class MixtureSampler:
 
         self._sources: dict = {}
         self._perms: dict = {}
+        self._warned_over_budget = False
 
     # ── the pure part ────────────────────────────────────────────────────────
 
@@ -267,10 +309,12 @@ class MixtureSampler:
         return int(entry.passes) if entry.kind == "corpus" else None
 
     def _retire(self, task: str, reason: str) -> None:
+        # A warning, not info: a task leaving the mixture changes the experiment,
+        # and `check_supply` has already refused it unless the run allowed it.
         if task not in self.exhausted:
             self.exhausted.add(task)
-            logger.info("mixture: %s is exhausted at step %d (%s); its slots are "
-                        "dropped from here on", task, self.step, reason)
+            logger.warning("mixture: %s is exhausted at step %d (%s); its slots "
+                           "are dropped from here on", task, self.step, reason)
 
     def _take(self, task: str, count: int) -> list:
         """``count`` rows of ``task``, walking the cursor and rolling passes."""
@@ -319,51 +363,377 @@ class MixtureSampler:
         self.step = k + 1
         return draws
 
+    # ── supply: will the run have the data it plans to draw? ─────────────────
+
+    def plan_supply(self, end_step: int) -> dict:
+        """Replay the draw plan from the current step to ``end_step``, moving nothing.
+
+        Returns ``{task: {"draws", "last_pass", "retires_at"}}``: how many rows the
+        task will hand over, the highest pass it will open, and the step at which
+        a corpus will hit its pass cap (``None`` if it does not). The plan is the
+        same pure per-step multinomial :meth:`draw_step` uses, and the cursor walk
+        is :meth:`_take`'s, so this is what the run *will* do, not an estimate.
+        A generator's later passes are taken to be the size of its current one —
+        every builder here draws a fixed count per pass.
+        """
+        cursor = dict(self.cursor)
+        pass_id = dict(self.pass_id)
+        exhausted = set(self.exhausted)
+        size = {t: len(self.source(t, pass_id[t])) for t in self.tasks
+                if t not in exhausted}
+        out = {t: {"draws": 0, "last_pass": pass_id[t], "retires_at": None}
+               for t in self.tasks}
+        for k in range(self.step, int(end_step)):
+            for task, count in self.counts_for_step(k).items():
+                while count > 0 and task not in exhausted:
+                    n = size[task]
+                    if n == 0:
+                        exhausted.add(task)
+                        out[task]["retires_at"] = k
+                        break
+                    take = min(count, n - cursor[task])
+                    cursor[task] += take
+                    count -= take
+                    out[task]["draws"] += take
+                    if cursor[task] >= n:
+                        cap = self._max_passes(task)
+                        if cap is not None and pass_id[task] + 1 >= cap:
+                            exhausted.add(task)
+                            out[task]["retires_at"] = k
+                            break
+                        pass_id[task] += 1
+                        cursor[task] = 0
+                        out[task]["last_pass"] = pass_id[task]
+        return out
+
+    def check_supply(self, end_step: int, allow_exhaustion: bool = False) -> dict:
+        """Refuse a run that would run out of data before ``end_step``.
+
+        Two ways a run quietly stops being the experiment it was configured as,
+        both measured on the molecule forks before this existed:
+
+        * **a corpus past its ``passes`` cap retires** and its share is dropped
+          for the rest of the run. A 4,456-step decay over a fork config sized
+          for 1,114 retired BACE, BBBP and ChEBI-20 mid-run, and nothing said so.
+          Refused unless ``allow_exhaustion`` — a smoke run budgeted by a step
+          count wants it — and logged as a warning when allowed.
+        * **a generator asks for a pass ``data_prep`` never built**, and the run
+          dies with a build error at that pass boundary, hours in. Always refused:
+          no setting makes a missing file loadable. Only the last pass the run
+          will open is loaded here, through ``get_source`` directly so the
+          sampler's two-pass cache is not disturbed.
+
+        Tasks already exhausted when this runs (a resume past a retirement that
+        was allowed then) are logged and not refused again. Returns the plan.
+        """
+        plan = self.plan_supply(end_step)
+        problems = []
+        if self.exhausted:
+            logger.warning("mixture: already exhausted at step %d: %s",
+                           self.step, sorted(self.exhausted))
+        for task in self.tasks:
+            row = plan[task]
+            if task in self.exhausted:
+                continue
+            if row["retires_at"] is not None:
+                n = len(self.source(task, self.pass_id[task]))
+                message = (
+                    f"{task} runs out at step {row['retires_at']} of {end_step}: "
+                    f"its cap is {self._max_passes(task)} pass(es) of {n} rows. "
+                    f"Raise its passes, shorten the run, or set allow_exhaustion "
+                    f"if a task leaving the mixture part-way is what this run is for")
+                if allow_exhaustion:
+                    logger.warning("mixture: %s", message)
+                else:
+                    problems.append(message)
+            last = row["last_pass"]
+            if (self.entries[task].kind == "generator"
+                    and last > self.pass_id[task]):
+                try:
+                    self.get_source(task, last)
+                except Exception as exc:                 # noqa: BLE001 - reported
+                    problems.append(
+                        f"{task} needs pass {last} by step {end_step} and it does "
+                        f"not load ({type(exc).__name__}: {exc}). Build the passes "
+                        f"this run consumes with data_prep before starting it")
+        if problems:
+            raise MixtureError(
+                f"the mixture cannot supply steps {self.step}..{end_step}:\n  "
+                + "\n  ".join(problems))
+        return plan
+
     # ── D4.3/D4.4 batching ───────────────────────────────────────────────────
 
     def batches_for_step(self, k: int) -> list:
-        """Step *k*'s examples grouped into micro-batches; advances to *k+1*.
+        """Step *k*'s examples as ``accumulation_steps x world_size`` micro-batches;
+        advances to *k+1*.
 
-        Bucketed by ``(node count, token length)`` on the coarse, task-agnostic
-        ladder, then *dealt* round-robin across the micro-batches of each bucket
-        from a task-ordered list. Dealing rather than slicing is what makes the
-        batches mixed: contiguous slices of a length-sorted list would be
-        task-homogeneous exactly when a task has a distinctive size, which is the
-        common case (a captioning task's items are all long).
+        **Shape-keyed and rank-synchronised** (`GRAPH_GENERALIST.md` §3). Each
+        example is keyed by the padded ``(nodes, tokens)`` the collator will build
+        for it (``shape_fn``). A step is cut into *groups*; a group is one shape
+        and ``world_size`` micro-batches of it, one per rank, and the batches are
+        returned group by group, so :class:`MixtureDataset`'s ``[r::world_size]``
+        hands every rank the same shape at the same micro-step. Before this, rank
+        *r* took every ``world_size``-th batch of a size-sorted list, so the ranks
+        ran different buckets side by side, waited on the slowest, and each
+        compiled shapes the others did not.
 
-        The padded token total of a micro-batch is
-        ``len(batch) x max tokens in batch``, and the bucket bounds the second
-        factor, so capping the count at ``micro_batch_tokens // token bucket``
-        keeps every batch under budget. One example longer than the whole budget
-        still gets its own batch — refusing it here would fail a run at step
-        *n* over data that was fine to build.
+        **Within a group the batches are dealt** round-robin from a task-ordered
+        list. Dealing rather than slicing is what keeps them mixed: contiguous
+        slices would be task-homogeneous exactly when a task has a distinctive
+        size, which is the common case.
+
+        **Every rank gets the same row count**, so a bucket's count is cut to a
+        multiple of ``world_size``. The few left over from each bucket are pooled
+        and grouped with each other by size, each group padded to its largest
+        member — promoted, never dropped or deferred: deferring would
+        under-sample whatever is unusually sized. Only the last of those, when the
+        step's total is not a multiple of ``world_size``, leaves some ranks one
+        row short.
+
+        **Costs are what the collator builds**: ``rows x padded tokens`` against
+        ``micro_batch_tokens``, and ``rows x padded nodes²`` against
+        ``micro_batch_node_pairs`` when it is set. A bucket is split into as many
+        groups as those budgets ask for, and the step is then reshaped to
+        exactly ``accumulation_steps`` groups — merging the cheapest *pair* or
+        splitting the dearest group — here rather than per rank in the trainer,
+        because a reshape each rank did on its own rows could pick different
+        merges and break the shape sync it exists to keep. HF needs the fixed
+        count; `derive_accumulation_steps` chooses one that keeps the reshaped
+        groups inside the budget.
+
+        Batching only regroups: a step's per-task counts are the draw plan's
+        whatever the ranks and the budgets, and the loss is normalised over the
+        step (D4.3), so none of this moves the gradient.
         """
         draws = self.draw_step(k)
         if not draws:
             return []
+        ws = self.world_size
+        if len(draws) < ws * self.accumulation_steps:
+            raise MixtureError(
+                f"step {k} drew {len(draws)} example(s), fewer than "
+                f"accumulation_steps x world_size = "
+                f"{self.accumulation_steps} x {ws}: some micro-batch would be "
+                f"empty. Lower accumulation_steps or raise tokens_per_step.")
 
-        lengths = {}
-        for task in {d.task for d in draws}:
-            for pass_id in {d.pass_id for d in draws if d.task == task}:
-                nodes, tokens = self.source(task, pass_id).lengths()
-                lengths[(task, pass_id)] = (nodes, tokens)
+        groups = self._reshape(self._natural_groups(draws, self._shapes(draws)))
+        groups.sort(key=lambda g: (_shape_order(g.shape), _draw_order(g.items[0])))
+        return [MicroBatch(g.items[r::ws], g.shape) for g in groups for r in range(ws)]
 
+    def _natural_groups(self, draws, shapes) -> list:
+        """A step's groups as the budgets cut them, before `_reshape`."""
+        ws = self.world_size
         buckets = defaultdict(list)
         for d in draws:
-            nodes, tokens = lengths[(d.task, d.pass_id)]
-            buckets[(_bucket_up(nodes[d.index], NODE_BUCKET_MIN),
-                     _bucket_up(tokens[d.index], TOKEN_BUCKET_MIN))].append(d)
+            buckets[shapes[d]].append(d)
 
-        batches = []
-        for key in sorted(buckets):
-            items = sorted(buckets[key], key=lambda d: (d.task, d.index))
-            cap = max(1, int(self.micro_batch_tokens // key[1]))
-            n_batches = max(1, math.ceil(len(items) / cap))
-            groups = [[] for _ in range(n_batches)]
-            for i, d in enumerate(items):
-                groups[i % n_batches].append(d)
-            batches.extend(groups)
-        return batches
+        groups, pool = [], []
+        for shape in sorted(buckets, key=_shape_order):
+            items = sorted(buckets[shape], key=_draw_order)
+            keep = len(items) - len(items) % ws
+            pool.extend(items[keep:])
+            if keep:
+                groups.extend(self._split_bucket(shape, items[:keep]))
+        if pool:
+            pool.sort(key=lambda d: (_shape_order(shapes[d]), _draw_order(d)))
+            chunks = [pool[i:i + ws] for i in range(0, len(pool), ws)]
+            short = chunks.pop() if len(chunks[-1]) < ws else []
+            if short and chunks:
+                chunks[-1].extend(short)
+            elif short:
+                # Fewer leftovers than ranks and no chunk to join: they go into
+                # the bucket group they cost least in once it is padded to cover
+                # them, so a full group is not pushed over the budget.
+                def joined(g):
+                    return _cover([g.shape] + [shapes[d] for d in short])
+                host = min(range(len(groups)), key=lambda n: (
+                    self._cost(joined(groups[n]), len(groups[n].items) + len(short)),
+                    _draw_order(groups[n].items[0])))
+                g = groups[host]
+                groups[host] = _Group(joined(g),
+                                      sorted(g.items + short, key=_draw_order))
+            for chunk in chunks:
+                groups.append(_Group(_cover(shapes[d] for d in chunk),
+                                     sorted(chunk, key=_draw_order)))
+        return groups
+
+    def _shapes(self, draws) -> dict:
+        """``{draw: padded (nodes, tokens)}`` through ``shape_fn``."""
+        lengths = {}
+        for key in {(d.task, d.pass_id) for d in draws}:
+            lengths[key] = self.source(*key).lengths()
+        out = {}
+        for d in draws:
+            nodes, tokens = lengths[(d.task, d.pass_id)]
+            out[d] = tuple(int(v) for v in
+                           self.shape_fn(int(nodes[d.index]), int(tokens[d.index])))
+        return out
+
+    def _row_cap(self, shape) -> int:
+        """Rows per rank one micro-batch of ``shape`` may hold under the budgets."""
+        nodes, tokens = shape
+        cap = self.micro_batch_tokens // tokens
+        if self.micro_batch_node_pairs:
+            cap = min(cap, self.micro_batch_node_pairs // (nodes * nodes))
+        return max(1, int(cap))
+
+    def _cost(self, shape, n_items: int) -> float:
+        """A group's load on one rank, as a fraction of the tighter budget."""
+        nodes, tokens = shape
+        rows = math.ceil(n_items / self.world_size)
+        cost = rows * tokens / self.micro_batch_tokens
+        if self.micro_batch_node_pairs:
+            cost = max(cost, rows * nodes * nodes / self.micro_batch_node_pairs)
+        return cost
+
+    def _split_bucket(self, shape, items: list) -> list:
+        """One bucket's rows (a multiple of ``world_size``) as budget-sized groups."""
+        ws = self.world_size
+        rows = len(items) // ws
+        n_groups = max(1, math.ceil(rows / self._row_cap(shape)))
+        sizes = [ws * (rows // n_groups + (g < rows % n_groups))
+                 for g in range(n_groups)]
+        members = [[] for _ in range(n_groups)]
+        g = 0
+        for d in items:
+            while len(members[g]) >= sizes[g]:
+                g = (g + 1) % n_groups
+            members[g].append(d)
+            g = (g + 1) % n_groups
+        return [_Group(shape, m) for m in members]
+
+    def _reshape(self, groups: list) -> list:
+        """Exactly ``accumulation_steps`` groups, by padded cost.
+
+        `trainer.align_to_accumulation`'s rule lifted to whole groups: merge the
+        pair whose *merged* cost is lowest (a merge pads both to the larger
+        shape), split the dearest group that has two rows a rank to split. The
+        ties break on each group's first draw, so every rank, and every resume,
+        makes the same choice.
+        """
+        target = self.accumulation_steps
+        ws = self.world_size
+        while len(groups) > target:
+            best = None
+            for i in range(len(groups)):
+                for j in range(i + 1, len(groups)):
+                    shape = _cover((groups[i].shape, groups[j].shape))
+                    n = len(groups[i].items) + len(groups[j].items)
+                    key = (self._cost(shape, n), _draw_order(groups[i].items[0]),
+                           _draw_order(groups[j].items[0]))
+                    if best is None or key < best[0]:
+                        best = (key, i, j, shape)
+            key, i, j, shape = best
+            if (self.padded_budget and key[0] > 1.0
+                    and not self._warned_over_budget):
+                # A step past the probe `derive_accumulation_steps` sized the
+                # accumulation on cut more groups than it; said once, not per step.
+                self._warned_over_budget = True
+                logger.warning(
+                    "mixture: step %d needs more than %d micro-batches; a merged "
+                    "one is %.2fx micro_batch_tokens and may not fit in memory",
+                    self.step - 1, target, key[0])
+            merged = _Group(shape, sorted(groups[i].items + groups[j].items,
+                                          key=_draw_order))
+            groups = [g for n, g in enumerate(groups) if n not in (i, j)] + [merged]
+        while len(groups) < target:
+            splittable = [g for g in groups if len(g.items) >= 2 * ws]
+            if not splittable:                           # guarded in the caller
+                raise MixtureError("cannot reach accumulation_steps micro-batches")
+            dearest = max(splittable, key=lambda g: (
+                self._cost(g.shape, len(g.items)), _draw_order(g.items[0])))
+            groups.remove(dearest)
+            # Half the rows a rank, taken as every second item of the task-ordered
+            # list so both halves stay mixed. Both keep the group's shape.
+            head = ws * ((len(dearest.items) // ws) // 2)
+            picked = set(range(0, len(dearest.items), 2)[:head])
+            first = [d for n, d in enumerate(dearest.items) if n in picked]
+            rest = [d for n, d in enumerate(dearest.items) if n not in picked]
+            groups.extend([_Group(dearest.shape, first),
+                           _Group(dearest.shape, rest)])
+        return groups
+
+    # ── accumulation sized to a padded budget ────────────────────────────────
+
+    def derive_accumulation_steps(self, probe_steps: int = ACCUMULATION_PROBE_STEPS
+                                  ) -> int:
+        """The accumulation that keeps the heaviest step's micro-batches in budget.
+
+        ``tokens_per_step`` fixes a step's example count from *raw* lengths
+        (D4.4), and HF fixes the number of micro-batches a step is cut into. With
+        a fixed accumulation, a mixture whose rows are short against the
+        collator's 512-token length ladder then puts many times its raw tokens on
+        the card: in the 2026-10-04 graph smoke a step of 33-token GraphQA rows
+        came out as micro-batches of 64 rows padded to 512, and the logits alone
+        ran an 80 GB card out of memory. So when ``micro_batch_tokens`` is a
+        padded budget, the accumulation is derived from it instead of configured:
+        the heaviest padded step over the next ``probe_steps``, divided by the
+        budget, rounded up. Sets and returns ``accumulation_steps``.
+
+        "Heaviest" is the step's group count as `batches_for_step` cuts it
+        before reshaping (`_natural_groups`), not its mean padded volume over
+        the budget. The volume is a lower bound only: groups of different
+        shapes do not pack, and when the accumulation is below the natural
+        count `_reshape` merges groups and pads both to the larger shape. On the
+        2026-10-05 2-rank smoke the volume rule gave 2 micro-batches a rank
+        where the bucketing made more, and the merged ones ran an 80 GB card out
+        of memory. With the accumulation at the natural maximum a step is only
+        ever split, never merged, so every micro-batch stays within budget.
+
+        The replay draws nothing: it walks the cursors as `plan_supply` does,
+        on each task's current pass, and past that pass's end it wraps round
+        the same permutation. That stands in for the next pass's rows; a
+        corpus repeats its rows, and a generator's passes are draws from one
+        distribution. No pass is loaded.
+        """
+        if not self.padded_budget:
+            raise MixtureError(
+                "derive_accumulation_steps needs micro_batch_tokens: without a "
+                "padded budget there is nothing to size the accumulation against")
+        steps = range(self.step, self.step + int(probe_steps))
+        live = [t for t in self.tasks if t not in self.exhausted]
+        size = {t: len(self.source(t, self.pass_id[t])) for t in live}
+        perm = {t: self._permutation(t, self.pass_id[t], size[t])
+                for t in live if size[t]}
+        cursor = {t: self.cursor[t] for t in perm}
+        lengths = {t: self.source(t, self.pass_id[t]).lengths() for t in perm}
+        shape_of = {}
+
+        heaviest = 1
+        for k in steps:
+            draws, shapes = [], {}
+            for task, count in self.counts_for_step(k).items():
+                if task not in perm:
+                    continue
+                n, pass_id = size[task], self.pass_id[task]
+                for i in range(count):
+                    index = int(perm[task][(cursor[task] + i) % n])
+                    d = Draw(task, index, pass_id)
+                    if d not in shape_of:
+                        nodes, tokens = lengths[task]
+                        shape_of[d] = tuple(int(v) for v in self.shape_fn(
+                            int(nodes[index]), int(tokens[index])))
+                    draws.append(d)
+                    shapes[d] = shape_of[d]
+                cursor[task] = (cursor[task] + count) % n
+            if len(set(draws)) < len(draws):
+                # A step wider than a pass repeats a row; the draws must stay
+                # distinct to key the buckets, and the count is what matters.
+                draws = [Draw(d.task, d.index, -1 - i) for i, d in enumerate(draws)]
+                shapes = {d: shape_of[Draw(d.task, d.index, self.pass_id[d.task])]
+                          for d in draws}
+            if draws:
+                heaviest = max(heaviest, len(self._natural_groups(draws, shapes)))
+        smallest = min(self.examples_in_step(k) for k in steps)
+        if heaviest * self.world_size > smallest:
+            raise MixtureError(
+                f"the padded budget asks for {heaviest} micro-batches a rank, but a "
+                f"step can draw as few as {smallest} examples over "
+                f"{self.world_size} rank(s): raise micro_batch_tokens or "
+                f"tokens_per_step")
+        self.accumulation_steps = int(heaviest)
+        return self.accumulation_steps
 
     # ── D4.1 state ───────────────────────────────────────────────────────────
 
@@ -410,6 +780,48 @@ def _bucket_up(value, minimum: int) -> int:
     while v < int(value):
         v *= 2
     return v
+
+
+def ladder_shape(nodes: int, tokens: int) -> tuple:
+    """The default ``shape_fn``: the coarse power-of-two ladder of D4.3."""
+    return _bucket_up(nodes, NODE_BUCKET_MIN), _bucket_up(tokens, TOKEN_BUCKET_MIN)
+
+
+class MicroBatch(list):
+    """A micro-batch's draws, and the padded ``(nodes, tokens)`` of its group.
+
+    The shape has to travel: a merged group holds rows of several sizes, and the
+    collator pads a batch to its *own* widest row, so two ranks holding
+    different rows of one group would build different shapes. `MixtureDataset`
+    stamps it on each item as ``pad_shape`` and `wrap_collator` pads to it.
+    """
+
+    def __init__(self, draws=(), shape=None):
+        super().__init__(draws)
+        self.shape = tuple(shape) if shape is not None else None
+
+
+class _Group(NamedTuple):
+    """One micro-step of a step: a padded shape and its rows across all ranks."""
+
+    shape: tuple
+    items: list
+
+
+def _cover(shapes) -> tuple:
+    """The smallest shape every one of ``shapes`` pads into."""
+    shapes = list(shapes)
+    return max(s[0] for s in shapes), max(s[1] for s in shapes)
+
+
+def _shape_order(shape) -> tuple:
+    # Tokens first: they set the logits and the attention, so a step's buckets
+    # run from cheapest to dearest in the dimension that dominates the memory.
+    return shape[1], shape[0]
+
+
+def _draw_order(d: Draw) -> tuple:
+    return d.task, d.pass_id, d.index
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -476,6 +888,10 @@ class MixtureDataset(torch.utils.data.IterableDataset):
                 return
             for batch in batches[self.rank::self.world_size]:
                 items = [self._item(d, step) for d in batch]
+                shape = getattr(batch, "shape", None)
+                if shape is not None:
+                    for item in items:
+                        item["pad_shape"] = shape
                 if self.yield_batches:
                     yield items
                 else:
@@ -520,7 +936,7 @@ def wrap_collator(base_collator: Callable, task_ids_key: str = "task_ids") -> Ca
     def collate(items):
         stripped = [{k: v for k, v in item.items() if k not in SIDE_KEYS}
                     for item in items]
-        batch = base_collator(stripped)
+        batch = _padded_to(base_collator, items)(stripped)
         batch[task_ids_key] = torch.tensor(
             [int(item.get("task_id", -1)) for item in items], dtype=torch.long)
         batch["example_index"] = torch.tensor(
@@ -530,6 +946,30 @@ def wrap_collator(base_collator: Callable, task_ids_key: str = "task_ids") -> Ca
         return batch
 
     return collate
+
+
+def _padded_to(base_collator: Callable, items) -> Callable:
+    """``base_collator``, padding at least to the items' ``pad_shape``.
+
+    A collator with ladders (``pad_to_block``) is shallow-copied with each ladder
+    floored at the group's shape, so a rank whose rows happen to be short still
+    builds the shape every other rank builds at this micro-step. The copy shares
+    everything else; the base collator is not touched. Without a stamped shape,
+    or a collator that has no ladder to floor, this is the base collator.
+    """
+    import copy
+
+    from ..models.flex_kernel import bucketize
+
+    shapes = [item.get("pad_shape") for item in items if item.get("pad_shape")]
+    if not shapes or not getattr(base_collator, "pad_to_block", False):
+        return base_collator
+    nodes, tokens = _cover(shapes)
+    floored = copy.copy(base_collator)
+    len_ladder, node_ladder = base_collator.len_buckets, base_collator.node_buckets
+    floored.len_buckets = lambda value: bucketize(max(int(value), tokens), len_ladder)
+    floored.node_buckets = lambda value: bucketize(max(int(value), nodes), node_ladder)
+    return floored
 
 
 # ─────────────────────────────────────────────────────────────────────────────

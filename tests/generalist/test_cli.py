@@ -482,6 +482,23 @@ def test_config_hash_moves_with_what_makes_a_different_run(field, value):
         "would share a lineage and a resume would not notice the change")
 
 
+def test_the_batching_budgets_leave_an_unset_config_hash_alone():
+    """`micro_batch_tokens`, `micro_batch_node_pairs` and `allow_exhaustion`
+    arrived after runs were made; unset, they hash as those runs did, and
+    `allow_exhaustion` never hashes since it only decides whether a run starts."""
+    base = _config()
+    payload = base.hash_payload()
+    for name in ("micro_batch_tokens", "micro_batch_node_pairs", "allow_exhaustion"):
+        assert name not in payload
+    assert _config(allow_exhaustion=True).config_hash() == base.config_hash()
+    assert _config(micro_batch_tokens=8192).config_hash() != base.config_hash()
+
+
+def test_a_pair_budget_needs_a_token_budget():
+    with pytest.raises(ConfigError, match="micro_batch_node_pairs needs"):
+        _config(micro_batch_node_pairs=1 << 20).validate()
+
+
 def test_config_hash_sees_the_resolved_weights_not_the_preset_name():
     """An override that changes nothing does not move the hash; a real one does."""
     base = _config()

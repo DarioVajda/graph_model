@@ -237,6 +237,56 @@ def test_a_corpus_stops_after_its_passes():
     assert seen["t/gen"] > 50
 
 
+def test_the_supply_plan_is_what_the_run_does():
+    """`plan_supply` replays the draw plan without moving the cursor, and the
+    replay matches the real walk: same draws, same retirement step."""
+    sampler, _ = small_mixture(passes=2, train_size=5)
+    for k in range(3):
+        sampler.draw_step(k)
+    before = sampler.state_dict()
+    plan = sampler.plan_supply(100)
+    assert sampler.state_dict() == before
+
+    seen, retired_at = Counter(), None
+    for k in range(3, 100):
+        for d in sampler.draw_step(k):
+            seen[d.task] += 1
+        if retired_at is None and "t/corpus" in sampler.exhausted:
+            retired_at = k
+    assert plan["t/corpus"]["retires_at"] == retired_at
+    assert plan["t/corpus"]["draws"] == seen["t/corpus"]
+    assert plan["t/gen"]["draws"] == seen["t/gen"]
+    assert plan["t/gen"]["retires_at"] is None
+    assert plan["t/gen"]["last_pass"] == sampler.pass_id["t/gen"]
+
+
+def test_a_corpus_that_would_retire_is_refused_before_the_first_step():
+    sampler, _ = small_mixture(passes=2, train_size=5)
+    with pytest.raises(MixtureError, match="t/corpus runs out at step"):
+        sampler.check_supply(100)
+    # Allowed, it is the smoke-run behaviour: warned and returned.
+    plan = sampler.check_supply(100, allow_exhaustion=True)
+    assert plan["t/corpus"]["retires_at"] is not None
+    # A horizon inside the cap is fine either way.
+    assert sampler.check_supply(3)["t/corpus"]["retires_at"] is None
+
+
+def test_an_unbuilt_generator_pass_is_refused_before_the_first_step():
+    """`mol/g2s`'s failure: no cap, so it asks for a pass nothing built."""
+    sampler, loader = small_mixture(passes=100, train_size=5, gen_size=4)
+    built = loader.__call__
+
+    def only_two_passes(task, pass_id):
+        if task == "t/gen" and pass_id >= 2:
+            raise FileNotFoundError(f"{task} pass {pass_id} has not been built")
+        return built(task, pass_id)
+
+    sampler.get_source = only_two_passes
+    with pytest.raises(MixtureError, match="t/gen needs pass"):
+        sampler.check_supply(50)
+    assert sampler.check_supply(3)["t/gen"]["last_pass"] <= 1
+
+
 def test_a_generator_advances_its_pass_and_is_reloaded_each_time():
     """D4.2: a generator has no pass cap and its source is re-requested per pass."""
     sampler, loader = small_mixture(gen_size=4)
@@ -348,33 +398,192 @@ def test_the_sampler_refuses_to_rewind_without_a_state():
 # D4.3 / D4.4 — batching
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_micro_batches_stay_under_the_token_budget():
-    """Padded total is ``len(batch) x max tokens``; the budget is per micro-batch."""
+def mixed_size_sampler(world_size=1, accumulation_steps=4, **kwargs):
+    """Three corpora with four token lengths and three node counts each, so a
+    step spans several buckets."""
     specs = tuple(
         dict(name=f"t/{n}", domain="fake", adapter="fake", kind="corpus",
              mean_tokens=80.0, train_size=5000, passes=1)
         for n in ("a", "b", "c"))
     mixture = make_mixture(specs, {"t/a": 2.0, "t/b": 1.5, "t/c": 1.0},
                            tokens_per_step=4000, steps=200)
-    # Four distinct lengths per source, so several buckets are live in one step.
     lengths = {name: dict(tokens=lambda i: 32 * (1 + i % 4),
                           nodes=lambda i: 4 * (1 + i % 3))
                for name in ("t/a", "t/b", "t/c")}
     loader = Loader({"t/a": 5000, "t/b": 5000, "t/c": 5000}, **lengths)
-    sampler = MixtureSampler(mixture, seed=11, get_source=loader,
-                             accumulation_steps=4)
-    budget = sampler.micro_batch_tokens
-    assert budget == 1000.0
+    return MixtureSampler(mixture, seed=11, get_source=loader,
+                          accumulation_steps=accumulation_steps,
+                          world_size=world_size, **kwargs)
 
-    n_batches = 0
+
+def own_shape(sampler, d):
+    nodes, tokens = sampler.source(d.task, d.pass_id).lengths()
+    return sampler.shape_fn(nodes[d.index], tokens[d.index])
+
+
+@pytest.mark.parametrize("world_size", [1, 4])
+@pytest.mark.parametrize("accumulation_steps", [1, 4])
+def test_batching_only_regroups_the_step(world_size, accumulation_steps):
+    """`GRAPH_GENERALIST.md` §3: a step's per-task counts are the draw plan's,
+    at 1 and at 4 ranks — exactly ``accumulation_steps`` micro-batches a rank,
+    none empty, no row dropped, deferred or duplicated."""
+    sampler = mixed_size_sampler(world_size, accumulation_steps)
+    for k in range(40):
+        plan = sampler.counts_for_step(k)
+        batches = sampler.batches_for_step(k)
+        assert len(batches) == accumulation_steps * world_size
+        assert all(batches)
+        drawn = [d for batch in batches for d in batch]
+        assert len(drawn) == len(set(drawn))
+        assert Counter(d.task for d in drawn) == +Counter(plan)
+
+
+def test_every_rank_runs_one_shape_and_one_row_count_per_micro_step():
+    """Rank *r* takes ``batches[r::world_size]``, so the batches come in groups
+    of ``world_size`` that share a padded shape; within a group the row counts
+    differ by at most one, and only when a step's total is not a multiple of the
+    rank count. Every row fits the shape it is padded to."""
+    ws = 4
+    sampler = mixed_size_sampler(world_size=ws, accumulation_steps=3)
+    for k in range(60):
+        batches = sampler.batches_for_step(k)
+        uneven = 0
+        for g in range(0, len(batches), ws):
+            group = batches[g:g + ws]
+            assert len({b.shape for b in group}) == 1
+            rows = {len(b) for b in group}
+            assert max(rows) - min(rows) <= 1
+            uneven += len(rows) > 1
+            for b in group:
+                for d in b:
+                    n, t = own_shape(sampler, d)
+                    assert n <= b.shape[0] and t <= b.shape[1]
+        # 50 examples a step over 4 ranks: one group carries the remainder.
+        total = sum(len(b) for b in batches)
+        assert uneven == (0 if total % ws == 0 else 1)
+
+
+def test_the_rank_streams_see_the_same_shapes_at_each_micro_step():
+    """Through `MixtureDataset`, which is what each rank's trainer reads."""
+    ws = 4
+
+    def shapes(rank):
+        sampler = mixed_size_sampler(world_size=ws, accumulation_steps=2)
+        ds = MixtureDataset(sampler, end_step=8, rank=rank, world_size=ws)
+        return [batch[0]["pad_shape"] for batch in ds]
+
+    reference = shapes(0)
+    assert len(reference) == 8 * 2
+    for rank in range(1, ws):
+        assert shapes(rank) == reference
+
+
+def test_a_padded_budget_bounds_the_micro_batch():
+    """The 2026-10-04 smoke: short rows against a 512-token length ladder.
+
+    Every row is 33 raw tokens and pads to 512, so a step of 16,384 raw tokens is
+    ~500 rows and ~250k padded positions. A configured accumulation of 4 put 64
+    rows a micro-batch on the card; a padded budget of 8,192 derives the
+    accumulation that keeps every micro-batch at 16 rows x 512."""
+    specs = (dict(name="t/short", domain="fake", adapter="fake", kind="corpus",
+                  mean_tokens=33.0, train_size=200_000, passes=1),)
+    mixture = make_mixture(specs, {"t/short": 1.0}, tokens_per_step=16384,
+                           steps=50)
+    loader = Loader({"t/short": 200_000}, **{"t/short": dict(tokens=33, nodes=12)})
+
+    def ladder_512(nodes, tokens):
+        return max(32, 1 << (nodes - 1).bit_length()), 512 * math.ceil(tokens / 512)
+
+    sampler = MixtureSampler(mixture, seed=2, get_source=loader,
+                             shape_fn=ladder_512, micro_batch_tokens=8192)
+    accumulation = sampler.derive_accumulation_steps(probe_steps=50)
+    assert accumulation == math.ceil(max(
+        sampler.examples_in_step(k) for k in range(50)) * 512 / 8192)
     for k in range(50):
+        batches = sampler.batches_for_step(k)
+        assert len(batches) == accumulation
+        for batch in batches:
+            assert len(batch) * batch.shape[1] <= 8192
+
+
+@pytest.mark.parametrize("world_size", [1, 2, 4])
+def test_a_derived_accumulation_never_merges_past_the_budget(world_size):
+    """The 2026-10-05 2-rank smoke: rows of many shapes on a tight budget.
+
+    Sizing the accumulation from the mean padded volume gave 2 micro-batches a
+    rank where the bucketing cut more. `_reshape` then merged groups of
+    different shapes, padded both to the larger one, and the card ran out of
+    memory. Derived from the natural group count, every micro-batch of every
+    probed step holds within budget, whatever the rank count."""
+    sampler = mixed_size_sampler(world_size, micro_batch_tokens=512)
+    accumulation = sampler.derive_accumulation_steps(probe_steps=30)
+    cursor, step = dict(sampler.cursor), sampler.step
+    for k in range(30):
+        batches = sampler.batches_for_step(k)
+        assert len(batches) == accumulation * world_size
+        for batch in batches:
+            assert len(batch) * batch.shape[1] <= 512
+    # The replay moved nothing.
+    sampler = mixed_size_sampler(world_size, micro_batch_tokens=512)
+    sampler.derive_accumulation_steps(probe_steps=30)
+    assert (sampler.cursor, sampler.step) == (cursor, step)
+
+
+def test_a_pair_budget_caps_rows_of_large_graphs():
+    specs = (dict(name="t/big", domain="fake", adapter="fake", kind="corpus",
+                  mean_tokens=64.0, train_size=10_000, passes=1),)
+    mixture = make_mixture(specs, {"t/big": 1.0}, tokens_per_step=64 * 32,
+                           steps=20)
+    loader = Loader({"t/big": 10_000}, **{"t/big": dict(tokens=64, nodes=1000)})
+    sampler = MixtureSampler(mixture, seed=4, get_source=loader,
+                             micro_batch_tokens=1 << 20,
+                             micro_batch_node_pairs=4 * 1024 * 1024)
+    accumulation = sampler.derive_accumulation_steps(probe_steps=20)
+    assert accumulation == 8                       # 32 rows of 1,024² at 4 a batch
+    for k in range(20):
         for batch in sampler.batches_for_step(k):
-            assert batch
-            n_batches += 1
-            tokens = [sampler.source(d.task, d.pass_id).lengths()[1][d.index]
-                      for d in batch]
-            assert len(batch) * max(tokens) <= budget or len(batch) == 1
-    assert n_batches > 100
+            assert len(batch) * batch.shape[0] ** 2 <= 4 * 1024 * 1024
+
+
+def test_derive_accumulation_needs_a_padded_budget():
+    sampler = mixed_size_sampler()
+    with pytest.raises(MixtureError, match="micro_batch_tokens"):
+        sampler.derive_accumulation_steps()
+
+
+def test_a_step_smaller_than_the_micro_batches_is_refused():
+    sampler = mixed_size_sampler(world_size=4, accumulation_steps=100)
+    with pytest.raises(MixtureError, match="fewer than"):
+        sampler.batches_for_step(0)
+
+
+def test_the_collator_pads_to_the_group_shape():
+    """A rank whose rows are all short still builds its group's shape."""
+    from src.generalist.mixture import _padded_to
+    from src.models.flex_kernel import (bucketize, default_len_buckets,
+                                        default_node_buckets)
+
+    class Collator:
+        pad_to_block = True
+        len_buckets = staticmethod(default_len_buckets)
+        node_buckets = staticmethod(default_node_buckets)
+
+        def __call__(self, items):
+            return (bucketize(max(i["n"] for i in items), self.node_buckets),
+                    bucketize(max(i["t"] for i in items), self.len_buckets))
+
+    base = Collator()
+    short = [{"n": 10, "t": 40}]
+    assert _padded_to(base, short)(short) == (32, 512)
+    stamped = [{"n": 10, "t": 40, "pad_shape": (256, 1536)}]
+    assert _padded_to(base, stamped)(stamped) == (256, 1536)
+    assert base(short) == (32, 512)              # the base collator is untouched
+
+    class Ragged:
+        pad_to_block = False
+
+    ragged = Ragged()                    # pads to the batch maximum: no ladder
+    assert _padded_to(ragged, stamped) is ragged
 
 
 def test_micro_batches_are_mixed():

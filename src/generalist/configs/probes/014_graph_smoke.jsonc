@@ -63,18 +63,18 @@
   "data_seed": 0,
 
   "tokens_per_step": 16384,
-  // 16, not 4: `mixture.batches_for_step` caps a micro-batch at
-  // `micro_batch_tokens // token bucket` on a ladder floored at 32 tokens, but the
-  // flex collator pads every row to a multiple of 512. A 33-token GraphQA row
-  // then admits 64 rows a micro-batch at 4,096 tokens, which pad to 32,768
-  // positions; the logits alone ran an 80 GB card out of memory. 1,024 tokens a
-  // micro-batch bounds that at 16 x 512. The fix belongs in the sampler (budget
-  // by the padded length) and is part of shape-keyed batching.
-  "accumulation_steps": 16,
+  // A padded budget, from which the sampler derives the accumulation. The
+  // configured accumulation of 4 put 64 GraphQA rows of 33 tokens in a
+  // micro-batch, which the flex collator padded to 64 x 512 positions, and the
+  // logits alone ran an 80 GB card out of memory (2026-10-04). 8,192 padded
+  // tokens is what then ran clean at a hand-set accumulation of 16.
+  "micro_batch_tokens": 8192,
   // A step count, not the budget rule, and no D2.2 floor: 64-row sources would
-  // trip both, and neither is what this checks.
+  // trip both, and neither is what this checks. The same 64-row sources run out
+  // inside 60 steps (GraphQA at about step 45), which is fine for a smoke.
   "max_steps": 60,
   "min_examples_per": 0,
+  "allow_exhaustion": true,
 
   "lr": 3e-4,
   "bias_lr": 1e-2,

@@ -413,6 +413,27 @@ def make_get_source(config: RunConfig, registry: Registry, adapter_config):
     return get_source
 
 
+def collator_shape_fn(collator):
+    """``(nodes, tokens) -> (padded nodes, padded tokens)`` as ``collator`` pads.
+
+    The flex collator pads a batch to its length and node ladders (multiples of
+    512 tokens with midpoints, powers of two of nodes floored at 32), and those
+    are the shapes on the card and the shapes the kernels compile for, so the
+    sampler buckets and budgets in them. A collator that pads to the batch's own
+    maximum has no ladder; the sampler's coarse default stands in for it.
+    """
+    from ..models.flex_kernel import bucketize
+
+    if not getattr(collator, "pad_to_block", False):
+        return None
+
+    def shape(nodes: int, tokens: int) -> tuple:
+        return (bucketize(nodes, collator.node_buckets),
+                bucketize(tokens, collator.len_buckets))
+
+    return shape
+
+
 def build_run(config: RunConfig, *, output_dir=None, mixture=None, schedule=None,
               seed=None, max_steps=None, registry=None, adapter_config=None,
               validators=None, eval_sets=None, lineage=None,
@@ -483,7 +504,18 @@ def build_run(config: RunConfig, *, output_dir=None, mixture=None, schedule=None
     sampler = MixtureSampler(
         mixture, seed=seed, get_source=make_get_source(config, registry,
                                                        adapter_config),
-        accumulation_steps=config.accumulation_steps, world_size=world_size)
+        accumulation_steps=config.accumulation_steps, world_size=world_size,
+        shape_fn=collator_shape_fn(collator),
+        micro_batch_tokens=config.micro_batch_tokens or None,
+        micro_batch_node_pairs=config.micro_batch_node_pairs)
+    accumulation_steps = config.accumulation_steps
+    if config.micro_batch_tokens:
+        accumulation_steps = sampler.derive_accumulation_steps()
+        log(f"[batching] accumulation_steps {accumulation_steps} (derived from "
+            f"micro_batch_tokens {config.micro_batch_tokens}"
+            + (f", micro_batch_node_pairs {config.micro_batch_node_pairs}"
+               if config.micro_batch_node_pairs else "")
+            + f", {world_size} rank(s))")
     schedule = schedule or Schedule.training(warmup_steps=config.warmup_steps)
 
     if validators is None:
@@ -503,7 +535,7 @@ def build_run(config: RunConfig, *, output_dir=None, mixture=None, schedule=None
         # only what HF divides its own throughput counters by. One keeps those
         # counters in examples-per-micro-batch units, which is the honest reading.
         per_device_train_batch_size=1,
-        gradient_accumulation_steps=config.accumulation_steps,
+        gradient_accumulation_steps=accumulation_steps,
         gradient_checkpointing=config.gradient_checkpointing,
         learning_rate=config.lr,
         weight_decay=config.weight_decay,
@@ -545,6 +577,7 @@ def build_run(config: RunConfig, *, output_dir=None, mixture=None, schedule=None
         config_hash=config.config_hash(),
         lineage_hook=lineage.hook(child=output_dir),
         save_total_limit=config.save_total_limit,
+        allow_exhaustion=config.allow_exhaustion,
         callbacks=trainer_callbacks,
     )
 

@@ -364,6 +364,7 @@ class GeneralistTrainer(GraphTrainerV2):
                  config_hash: Optional[str] = None,
                  lineage_hook: Optional[Callable] = None,
                  save_total_limit: Optional[int] = None,
+                 allow_exhaustion: bool = False,
                  **kwargs):
         if sampler is None:
             raise TrainerError("sampler: GeneralistTrainer needs a MixtureSampler")
@@ -399,6 +400,7 @@ class GeneralistTrainer(GraphTrainerV2):
         self.config_hash = config_hash
         self.lineage_hook = lineage_hook
         self.save_total_limit = save_total_limit
+        self.allow_exhaustion = bool(allow_exhaustion)
 
         self.task_names = {i: name for name, i in sampler.task_ids.items()}
         if loss_norm is None and registry is not None:
@@ -432,9 +434,9 @@ class GeneralistTrainer(GraphTrainerV2):
                 f"the sampler was built with accumulation_steps="
                 f"{sampler.accumulation_steps} but the run uses "
                 f"gradient_accumulation_steps="
-                f"{self.args.gradient_accumulation_steps}. The sampler divides "
-                f"tokens_per_step by that number to size a micro-batch (D4.4), so "
-                f"a mismatch silently changes the realised batch.")
+                f"{self.args.gradient_accumulation_steps}. The sampler cuts every "
+                f"step into exactly that many micro-batches a rank, so a mismatch "
+                f"puts HF's optimizer steps out of phase with the sampler's.")
         if sampler.world_size != max(int(self.args.world_size), 1):
             raise TrainerError(
                 f"the sampler was built with world_size={sampler.world_size} but "
@@ -474,6 +476,12 @@ class GeneralistTrainer(GraphTrainerV2):
                 "sampler cursor that the checkpoint writes is the one that drew the "
                 "batches", self.args.dataloader_num_workers)
 
+        # Before the first step, not at the step where it would bite: a corpus
+        # that retires or a generator pass that was never built is refused here,
+        # over the steps this job will run (a chunk of a chained trunk checks its
+        # own chunk). The sampler state is already restored on a resume.
+        self.sampler.check_supply(self.args.max_steps,
+                                  allow_exhaustion=self.allow_exhaustion)
         rank = max(int(self.args.process_index), 0)
         world = max(int(self.args.world_size), 1)
         stream = MixtureDataset(self.sampler, start_step=self.sampler.step,
